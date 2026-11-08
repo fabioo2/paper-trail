@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
-      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: crazy-max/ghaction-github-runtime@v4
       - name: Lint, type-check and test (python-dev image)
         run: make lint typecheck test
         env:
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
-      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: crazy-max/ghaction-github-runtime@v4
       - name: Install, lint, type-check, test and build (frontend-dev image)
         run: make fe-install fe-lint fe-typecheck fe-test fe-build
 
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
-      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: crazy-max/ghaction-github-runtime@v4
       - name: OpenAPI spec and generated TS client match the backend
         run: make api-check
 
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
-      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: crazy-max/ghaction-github-runtime@v4
       - name: Build the runtime and dev images
         run: make build
       - name: Smoke-test the running stack
