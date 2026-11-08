@@ -9,7 +9,7 @@ network. Work is queued, so the GPU PC does not have to be on when you scan.
 
 > Status: agent core slice D. Receipts can be imported from JSON, or read from photos by the
 > agents from the command line (OCR, extraction by the local model, code-checked arithmetic with
-> a feedback loop, a re-read of the photo by the vision model, review by a person), and browsed
+> a feedback loop, the photo read by the vision model, review by a person), and browsed
 > in the Receipts tab. Every agent calls its tools through a per-role allowlist, in-process or
 > over MCP. Each line is matched to a product across stores (a person's correction, an exact
 > alias, then embeddings, with the model confirming close calls), new products are described
@@ -293,20 +293,24 @@ make pt ARGS="review resolve 3 --accept --run e1-feedback"
 make graph                                         # the agents' graph as Mermaid
 ```
 
-Each receipt goes through `read` (Tesseract, card numbers masked at once), `extract_text` (the
-text model fills a JSON schema), `validate` (the arithmetic is checked in code) and the
-`supervisor`, which retries the extraction with the validation issues as feedback, then has the
-vision model re-read the photo (`extract_vision`, `PAPER_TRAIL_OLLAMA__VISION_MODEL`, with the
-same prompt, feedback and OCR text; `PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`, default 1, never
-for a `--text-file` input), sends the receipt to a person (`review`), or saves it (`persist`).
-Then `match` finds each line's product and `commit_matches` (the supervisor) links them, with a
-price observation per line, and completes the receipt. Finally `enrich` asks the text model to
-describe each product this receipt created (`enrichment/v1`: full name, brand, size, one
-category of the fixed list, tags) and `commit_enrichment` saves the answers and re-embeds the
-products (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal shows one block per
-receipt: every tool call, model call and routing decision, with times; the same trace, with the
-prompts and answers, is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`, and a
-batch summary to `/data/runs/<run>/summary.json`.
+Each photo goes through `read` (Tesseract, card numbers masked at once; a sideways photo is
+retried at 90°, 180° and 270° and the most confident reading is kept), then straight to
+`extract_vision`: the vision model (`PAPER_TRAIL_OLLAMA__VISION_MODEL`) reads the upright photo.
+The model only transcribes: it copies every amount, date and tax line as printed, as text, and
+Python converts and adds them up (ADR-0017). `validate` checks the arithmetic, the store and the
+date in code, and the `supervisor` saves the receipt (`persist`), retries with the list of
+problems as feedback (`PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`, default 2), or sends it to a
+person (`review`). OCR text without a photo (`--text-file`, `--reprocess`) goes to the text model
+instead (`extract_text`, `PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`); setting
+`PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW` below 1.0 sends only photos with a poor OCR read straight
+to vision. Then `match` finds each line's product and `commit_matches` (the supervisor) links
+them, with a price observation per line, and completes the receipt. Finally `enrich` asks the
+text model to describe each product this receipt created (`enrichment/v1`: full name, brand,
+size, one category of the fixed list, tags) and `commit_enrichment` saves the answers and
+re-embeds the products (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal shows one
+block per receipt: every tool call, model call and routing decision, with times; the same trace,
+with the prompts and answers, is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`,
+and a batch summary to `/data/runs/<run>/summary.json`.
 
 - `RUN_NAME=<name>` gives the run its own database and traces under `/data/runs/<name>/`
   (created and migrated on first use), so experiment arms never mix. Without it the main
@@ -377,6 +381,80 @@ make pt ARGS="process --run e2 --resume 3"          # continues after extract_te
 - `--reprocess` runs an already stored photo's receipt again, from its stored OCR text, on a new
   thread (a pending review is dismissed). Without it the same photo is reported as a duplicate.
   It does not apply to `--text-file` (a text is never stored).
+
+### What gets saved: a product and its price history
+
+Every purchase line ends up linked to one product, and every product keeps one price
+observation per time it was bought, so the price history of anything is one query away. A real
+example, Costco's gold kiwis bought on two receipts (three lines):
+
+```json
+{
+  "product": {
+    "id": 24,
+    "canonical_name": "Gold Kiwi",
+    "brand": null,
+    "size_value": null,
+    "size_unit": null,
+    "category": "produce",
+    "tags": ["kiwi", "gold kiwi"],
+    "aliases": [{ "alias": "gold kiwi", "store_key": "costco", "source": "matched" }]
+  },
+  "price_history": [
+    {
+      "observed_on": "2026-09-24", "store_name": "Costco Wholesale", "receipt_id": 4,
+      "line_item_id": 53, "raw_text": "3139415 GOLD KIWI", "match_source": "alias",
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+    },
+    {
+      "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
+      "line_item_id": 34, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+    },
+    {
+      "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
+      "line_item_id": 36, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+    }
+  ]
+}
+```
+
+The second receipt's line was linked by the alias the first one left (`match_source` `alias`),
+without a model call. The tables behind it:
+
+```mermaid
+erDiagram
+    receipts ||--o{ line_items : "has"
+    products ||--o{ line_items : "names"
+    products ||--o{ product_aliases : "is called"
+    products ||--o{ price_observations : "costs"
+    receipts ||--o{ price_observations : "on"
+    line_items ||--o| price_observations : "priced by"
+    receipts ||--o{ review_items : "waits for"
+    receipts ||--o{ corrections : "corrected by"
+```
+
+- `receipts`: store, date, subtotal, tax, total (integer cents), status, the masked OCR text
+  and the stored photo.
+- `line_items`: each printed line in order: raw text, kind (`item`, `discount`, `deposit`,
+  `fee`), quantity, unit price, line total, and the product it was matched to, with how
+  (`memory`, `alias`, `vector`, `llm`, `new`).
+- `products`: the enriched product: name, brand, size, category and tags; its embedding lives
+  in the `product_vectors` (sqlite-vec) table and its names in `product_aliases`.
+- `price_observations`: one row per purchased item line on a dated receipt: product, receipt,
+  line, store, date, quantity, unit price and total. This is the price history.
+- `corrections` (a person's fixes, the long-term memory matching reads first), `review_items`
+  and `jobs`.
+
+Until the item page arrives (a product with its price history chart, `GET /api/products/{id}`
+and `GET /api/products/{id}/prices`, PLAN stage 6), the history can be read with SQL:
+
+```sql
+SELECT o.observed_on, r.store_name, o.quantity, o.unit_price_cents, o.line_total_cents
+FROM price_observations o JOIN receipts r ON r.id = o.receipt_id
+WHERE o.product_id = 24 ORDER BY o.observed_on;
+```
 
 ### Tools, allowlists and MCP
 
