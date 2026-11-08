@@ -1,0 +1,21 @@
+# gitleaks configuration (`make secrets`, `make pre-commit`). The default rule set applies
+# unchanged; paths are relative to the repository root.
+title = "Paper Trail"
+
+[extend]
+useDefault = true
+
+# The working-tree scan (`gitleaks dir`) would otherwise read generated, vendored and
+# local-only files. All of these are gitignored, so the history and staged scans never see them.
+[[allowlists]]
+description = "Gitignored build output, caches, dependencies and local data"
+paths = [
+    '''(^|/)node_modules/''',
+    '''^frontend/(dist|coverage)/''',
+    '''^\.venv/''',
+    '''(^|/)\.[a-z_]+_cache/''',
+    '''(^|/)__pycache__/''',
+    '''^(\.coverage(\..*)?|coverage\.xml)$''',
+    '''^htmlcov/''',
+    '''^(data|backups)/''',
+]

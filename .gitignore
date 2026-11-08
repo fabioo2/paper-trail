@@ -1,0 +1,28 @@
+# Local configuration and data never leave the owner's hardware (ADR-0015).
+.env
+/data/
+/backups/
+# The default receipts folder (PAPER_TRAIL_RECEIPTS_DIR): photos stay local.
+/receipts/
+# Per-host compose changes, e.g. a copy of deploy/single-host/compose.override.yaml.
+/compose.override.yaml
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.*_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store

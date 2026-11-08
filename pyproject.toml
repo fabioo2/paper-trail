@@ -1,0 +1,258 @@
+[project]
+name = "paper-trail"
+version = "0.1.0"
+description = "A multi-agent receipt scanner and price tracker that runs on your own hardware."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20",
+    "fastapi>=0.162",
+    "httpx>=0.28",
+    "langgraph>=1.2",
+    "langgraph-checkpoint-sqlite>=3.1",
+    # MCP server and client (agent core slice B). 2.x renamed FastMCP; the next major is fenced off.
+    "mcp>=2.3,<3",
+    "pillow>=13.0",
+    "pillow-heif>=1.8",
+    "pydantic>=2.14",
+    "pydantic-settings>=2.16",
+    "sqlalchemy>=2.1",
+    "sqlite-vec>=0.1.9",
+    "structlog>=26.1",
+    "typer>=0.28",
+    "uvicorn[standard]>=0.54",
+]
+
+[project.scripts]
+paper-trail = "paper_trail.interfaces.cli.main:app"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    # Starlette's TestClient uses httpx2 (plain httpx is deprecated there).
+    "httpx2>=2.16",
+    "hypothesis>=6.170",
+    "import-linter>=2.16",
+    "mypy>=2.4",
+    "pre-commit>=4.7",
+    "pre-commit-hooks>=6.0",
+    "pytest>=9.2",
+    "pytest-cov>=7.1",
+    # Runs the suites in parallel (`make test`, `make test-fast`).
+    "pytest-xdist>=3.8",
+    "pyyaml>=6.0.3",
+    "respx>=0.23",
+    "ruff>=0.17",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["hatchling>=1.33"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paper_trail"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# The runtime image installs a wheel, so the migration scripts travel inside the package.
+"migrations" = "paper_trail/migrations"
+
+# --- ruff ---------------------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "N", "S", "C4", "RET", "PTH", "PL", "RUF", "ANN",
+    "DTZ", "T20", "ERA",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN"]
+"migrations/versions/*.py" = ["N999"]
+# The CLI imports each command's heavy dependencies inside the command, for start-up time
+# (see the module docstring; tests/e2e/test_cli_startup.py guards it).
+"src/paper_trail/interfaces/cli/main.py" = ["PLC0415"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["paper_trail", "tests"]
+
+# --- mypy ---------------------------------------------------------------------------------------
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests", "migrations"]
+mypy_path = "src"
+explicit_package_bases = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# sqlite-vec ships no type information (no py.typed); only `load()` is used.
+module = ["sqlite_vec"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --- pytest and coverage ------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["paper_trail"]
+parallel = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "\\.\\.\\.$"]
+
+# --- import-linter (PLAN 1.6) -------------------------------------------------------------------
+
+[tool.importlinter]
+root_package = "paper_trail"
+include_external_packages = true
+
+# Contracts 1 and 2 forbid the known infrastructure packages so `make lint` names them early;
+# "standard library only" for domain and ports is enforced generically, for every third-party
+# package, by tests/repo/test_import_contracts.py (an AST scan against sys.stdlib_module_names).
+[[tool.importlinter.contracts]]
+name = "1. domain imports only domain (no other layer, no infrastructure package)"
+type = "forbidden"
+source_modules = ["paper_trail.domain"]
+forbidden_modules = [
+    "paper_trail.ports",
+    "paper_trail.application",
+    "paper_trail.adapters",
+    "paper_trail.interfaces",
+    "paper_trail.bootstrap",
+    "paper_trail.config",
+    "paper_trail.observability",
+    "alembic",
+    "fastapi",
+    "pydantic",
+    "pydantic_settings",
+    "sqlalchemy",
+    "sqlite_vec",
+    "starlette",
+    "structlog",
+    "typer",
+    "uvicorn",
+]
+
+[[tool.importlinter.contracts]]
+name = "2. ports import only domain (no other layer, no infrastructure package)"
+type = "forbidden"
+source_modules = ["paper_trail.ports"]
+forbidden_modules = [
+    "paper_trail.application",
+    "paper_trail.adapters",
+    "paper_trail.interfaces",
+    "paper_trail.bootstrap",
+    "paper_trail.config",
+    "paper_trail.observability",
+    "alembic",
+    "fastapi",
+    "pydantic",
+    "pydantic_settings",
+    "sqlalchemy",
+    "sqlite_vec",
+    "starlette",
+    "structlog",
+    "typer",
+    "uvicorn",
+]
+
+[[tool.importlinter.contracts]]
+name = "3. application imports domain and ports, not infrastructure or entry points"
+type = "forbidden"
+source_modules = ["paper_trail.application"]
+forbidden_modules = [
+    "paper_trail.adapters",
+    "paper_trail.interfaces",
+    "paper_trail.bootstrap",
+]
+
+[[tool.importlinter.contracts]]
+name = "4. agents and tools sit on the application core, below adapters and interfaces"
+type = "layers"
+layers = [
+    "paper_trail.interfaces : paper_trail.adapters",
+    "(paper_trail.agents) : (paper_trail.tools)",
+    "paper_trail.application",
+    "paper_trail.ports",
+    "paper_trail.domain",
+]
+
+[[tool.importlinter.contracts]]
+# S5-AC-06 (ADR-0013): agents reach storage only through their tools, so a role's allowlist
+# is the whole of what it can read or write.
+name = "4b. agents do not import the storage ports"
+type = "forbidden"
+source_modules = ["paper_trail.agents"]
+forbidden_modules = [
+    "paper_trail.ports.repositories",
+    "paper_trail.ports.unit_of_work",
+    "paper_trail.ports.queues",
+    "paper_trail.ports.search",
+]
+
+[[tool.importlinter.contracts]]
+name = "5a. adapters do not import entry points or use cases"
+type = "forbidden"
+source_modules = ["paper_trail.adapters"]
+forbidden_modules = ["paper_trail.interfaces", "paper_trail.application"]
+
+[[tool.importlinter.contracts]]
+# A layer of independent siblings; agents is optional until Stage 3 creates it.
+name = "5b. adapters and agents do not import each other"
+type = "layers"
+layers = ["paper_trail.adapters | (paper_trail.agents)"]
+
+[[tool.importlinter.contracts]]
+name = "6. interfaces reach adapters only through the composition root"
+type = "forbidden"
+source_modules = ["paper_trail.interfaces"]
+forbidden_modules = ["paper_trail.adapters"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "7a. only the composition root imports adapters"
+type = "forbidden"
+source_modules = [
+    "paper_trail.domain",
+    "paper_trail.ports",
+    "paper_trail.application",
+    "paper_trail.interfaces",
+    "paper_trail.config",
+    "paper_trail.observability",
+]
+forbidden_modules = ["paper_trail.adapters"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "7b. only interfaces import the composition root"
+type = "forbidden"
+source_modules = [
+    "paper_trail.domain",
+    "paper_trail.ports",
+    "paper_trail.application",
+    "paper_trail.adapters",
+    "paper_trail.config",
+    "paper_trail.observability",
+]
+forbidden_modules = ["paper_trail.bootstrap"]

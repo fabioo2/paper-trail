@@ -1,0 +1,51 @@
+# Run by `make pre-commit` inside the dev container (nothing is installed on the host).
+# All hooks are local `system` hooks whose tools come from the locked dev dependency group.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format --check
+        entry: ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: import-linter
+        name: lint-imports (layering contracts)
+        entry: lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: check-yaml
+        name: check-yaml
+        entry: check-yaml
+        language: system
+        types: [yaml]
+      - id: check-toml
+        name: check-toml
+        entry: check-toml
+        language: system
+        types: [toml]
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        entry: end-of-file-fixer
+        language: system
+        types: [text]
+        exclude: ^frontend/(openapi\.json|src/api/schema\.d\.ts)$
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        entry: trailing-whitespace-fixer
+        language: system
+        types: [text]
+      - id: check-added-large-files
+        name: check-added-large-files
+        entry: check-added-large-files --maxkb=500
+        language: system
+      - id: detect-private-key
+        name: detect-private-key
+        entry: detect-private-key
+        language: system
+        types: [text]
