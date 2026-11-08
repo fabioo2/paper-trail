@@ -1,0 +1,81 @@
+# Every step is a Make target, so CI runs exactly what `make ci` runs locally (ADR-0003).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - name: Lint, type-check and test (python-dev image)
+        run: make lint typecheck test
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - name: Install, lint, type-check, test and build (frontend-dev image)
+        run: make fe-install fe-lint fe-typecheck fe-test fe-build
+
+  contract:
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - name: OpenAPI spec and generated TS client match the backend
+        run: make api-check
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Scan the full history for secrets
+        run: make secrets
+
+  image:
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    env:
+      PAPER_TRAIL_BIND_ADDR: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Exposes the cache credentials compose.ci.yaml's type=gha build cache needs.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - name: Build the runtime and dev images
+        run: make build
+      - name: Smoke-test the running stack
+        run: make smoke
+      - name: Image budget, user, contents and container hardening
+        run: make container-checks
+      - name: Stop the stack
+        if: always()
+        run: make down
