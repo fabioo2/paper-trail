@@ -1,0 +1,77 @@
+# Development tooling, merged with compose.yaml: `docker compose -f compose.yaml -f compose.dev.yaml`.
+# Every service is in the `dev` profile, so `make up` never starts one. Tooling runs as the
+# host user so generated files are owned by the developer.
+x-dev-user: &dev-user
+  user: "${PAPER_TRAIL_UID:-1000}:${PAPER_TRAIL_GID:-1000}"
+
+x-frontend: &frontend
+  <<: *dev-user
+  profiles: [dev]
+  build:
+    context: .
+    target: frontend-dev
+    args:
+      APP_UID: ${PAPER_TRAIL_UID:-1000}
+      APP_GID: ${PAPER_TRAIL_GID:-1000}
+  environment:
+    HOME: /tmp
+  volumes:
+    - ./frontend:/app/frontend
+    # Keeps the image's node_modules from being shadowed by the bind mount.
+    - frontend_node_modules:/app/frontend/node_modules
+  working_dir: /app/frontend
+
+services:
+  dev:
+    <<: *dev-user
+    profiles: [dev]
+    build:
+      context: .
+      target: python-dev
+    environment:
+      HOME: /tmp
+    volumes:
+      - .:/app
+    working_dir: /app
+
+  frontend:
+    <<: *frontend
+
+  vite:
+    <<: *frontend
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    ports:
+      - "${PAPER_TRAIL_BIND_ADDR:-127.0.0.1}:5173:5173"
+    depends_on:
+      - web
+
+  gitleaks:
+    <<: *dev-user
+    profiles: [dev]
+    image: zricethezav/gitleaks:v8.30.1
+    volumes:
+      - .:/repo:ro
+    # scripts/secrets-scan.sh all|staged: history + working tree, or staged changes only.
+    entrypoint: ["/bin/sh", "/repo/scripts/secrets-scan.sh"]
+    command: ["all"]
+
+  smoke:
+    profiles: [dev]
+    image: curlimages/curl:8.23.0
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/smoke.sh"]
+
+  container-checks:
+    profiles: [dev]
+    image: docker:29.9.3-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mounted at its host path, so compose files resolve bind paths on the host daemon.
+      - ${PWD}:${PWD}:ro
+    working_dir: ${PWD}
+    entrypoint: ["/bin/sh"]
+    command: ["tests/container/run.sh"]
+
+volumes:
+  frontend_node_modules:

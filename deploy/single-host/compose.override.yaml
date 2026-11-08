@@ -1,0 +1,21 @@
+# Single-machine deployment (PLAN 2.4a, ADR-0016): the app and the LLM stack on one host.
+#
+# Copy this file to compose.override.yaml in the repository root; the Makefile adds that file
+# to every compose command when it exists (it is git-ignored, like .env). Start the LLM stack
+# first (`make llm-up`), because it creates the `paper-trail-llm` network, then `make up`.
+#
+# The worker joins that network and reaches Ollama by service name, so set
+# PAPER_TRAIL_OLLAMA__BASE_URL=http://ollama:11434 in .env and leave OLLAMA_BIND_ADDR at
+# 127.0.0.1: no Ollama port needs to be reachable from outside the machine. (Pointing the worker
+# at host.docker.internal does not work on Linux: it resolves to the bridge gateway, where a
+# port published on 127.0.0.1 is unreachable.)
+services:
+  worker:
+    networks:
+      - default
+      - llm
+
+networks:
+  llm:
+    name: ${PAPER_TRAIL_LLM_NETWORK:-paper-trail-llm}
+    external: true

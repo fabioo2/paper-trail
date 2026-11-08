@@ -1,0 +1,22 @@
+# Only what the image build needs; never local data or secrets.
+.git
+.github
+.githooks
+.env
+.env.*
+!.env.example
+data
+backups
+receipts
+**/node_modules
+frontend/dist
+frontend/coverage
+.venv
+**/__pycache__
+**/*.py[cod]
+.*_cache
+.coverage*
+coverage.xml
+htmlcov
+docs
+tests

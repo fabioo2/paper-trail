@@ -1,0 +1,105 @@
+# Runtime stack for the app host (ADR-0003, ADR-0016): one image, three services.
+# `make up` starts it; dev tooling lives in compose.dev.yaml under the `dev` profile.
+name: paper-trail
+
+x-app: &app
+  image: paper-trail:${PAPER_TRAIL_IMAGE_TAG:-latest}
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    TZ: America/Toronto
+    PAPER_TRAIL_DATA_DIR: /data
+  volumes:
+    # Named volume by default (initialised from the image's /data, owned by `app`); may be set
+    # to an absolute host directory owned by UID 1000.
+    - ${PAPER_TRAIL_DATA_VOLUME:-paper-trail-data}:/data
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  migrate:
+    <<: *app
+    build:
+      context: .
+      target: runtime
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        APP_VERSION: ${APP_VERSION:-unknown}
+    command: ["db", "upgrade"]
+    restart: "no"
+    healthcheck:
+      disable: true
+
+  web:
+    <<: *app
+    command: ["serve"]
+    ports:
+      - "${PAPER_TRAIL_BIND_ADDR:-127.0.0.1}:${PAPER_TRAIL_PORT:-8420}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    cpus: 1.0
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "paper-trail", "worker", "--check-heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+      start_interval: 2s
+    mem_limit: 1g
+    cpus: 2.0
+    # Longer than PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S (8 s) + 1 s, so a step can finish.
+    stop_grace_period: 15s
+
+  # On demand only (`make process`, `make pt`): the agent CLI, with the receipts folder
+  # read-only. The folder's path may contain spaces, so it is set only through the variable.
+  cli:
+    <<: *app
+    profiles: [cli]
+    restart: "no"
+    volumes:
+      - ${PAPER_TRAIL_DATA_VOLUME:-paper-trail-data}:/data
+      - ${PAPER_TRAIL_RECEIPTS_DIR:-./receipts}:/receipts:ro
+    healthcheck:
+      disable: true
+
+  # On demand only (`make mcp-up`): the agents' tools over MCP, one endpoint per role at
+  # /mcp/<role>/ (PLAN 7). It has no authentication and its supervisor tools write, so it is
+  # published on loopback only, whatever PAPER_TRAIL_BIND_ADDR says, and it serves only the Host
+  # names 127.0.0.1, localhost and mcp (DNS-rebinding protection).
+  mcp:
+    <<: *app
+    profiles: [mcp]
+    command: ["mcp"]
+    ports:
+      - "127.0.0.1:8421:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    mem_limit: 512m
+    cpus: 1.0
+
+volumes:
+  paper-trail-data:

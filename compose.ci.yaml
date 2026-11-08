@@ -1,0 +1,19 @@
+# CI-only overlay (PLAN 2.6): the Makefile adds it when GITHUB_ACTIONS is set. Build layers are
+# read from and written to the GitHub Actions cache, one scope per image, so unchanged stages
+# are not rebuilt by every job. Needs the docker-container builder from setup-buildx-action and
+# the cache credentials exposed by ghaction-github-runtime (see .github/workflows/ci.yml).
+services:
+  migrate:
+    build:
+      cache_from: ["type=gha,scope=runtime"]
+      cache_to: ["type=gha,scope=runtime,mode=max"]
+
+  dev:
+    build:
+      cache_from: ["type=gha,scope=python-dev"]
+      cache_to: ["type=gha,scope=python-dev,mode=max"]
+
+  frontend:
+    build:
+      cache_from: ["type=gha,scope=frontend-dev"]
+      cache_to: ["type=gha,scope=frontend-dev,mode=max"]
