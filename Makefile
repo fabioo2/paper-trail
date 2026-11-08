@@ -133,11 +133,15 @@ fe-dev: fe-deps ## Start the Vite dev server on :5173 (proxies /api to web)
 
 # --- API contract (ADR-0007) ------------------------------------------------------------------
 
+# Both build their images in a step of their own first: on a fresh machine `compose run` would
+# build them itself, and in api-check its build log would flow into the piped OpenAPI document.
 api-client: fe-deps ## Regenerate frontend/openapi.json and src/api/schema.d.ts from the backend
+	$(DC) build dev frontend
 	$(RUN) dev $(UVRUN) paper-trail openapi --output frontend/openapi.json
 	$(RUN) frontend npx openapi-typescript openapi.json --output src/api/schema.d.ts
 
 api-check: fe-deps ## Fail if the committed OpenAPI spec or TS schema drifted from the backend
+	$(DC) build dev frontend
 	$(RUN) -T dev $(UVRUN) paper-trail openapi \
 		| $(RUN) -T frontend sh -ec '\
 			cat > /tmp/openapi.json; \

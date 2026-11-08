@@ -301,3 +301,23 @@ def test_s0_ac_32_api_check_diffs_against_committed_files(makefile: Makefile) ->
 
     assert "openapi-typescript" in recipe
     assert "diff" in recipe
+
+
+@pytest.mark.parametrize("target", ["api-check", "api-client"])
+def test_s0_ac_32_api_targets_build_their_images_before_any_pipe(
+    makefile: Makefile, target: str
+) -> None:
+    """On a fresh CI runner `compose run` built the images itself, and the build log went into
+    the piped OpenAPI document (first public CI run): the images are built in a step of their
+    own, never inside a pipe."""
+    commands = makefile.rule(target).commands
+    builds = [
+        index
+        for index, command in enumerate(commands)
+        if re.search(r"\$\(DC\) build\b", command) and "dev" in command and "frontend" in command
+    ]
+    runs = [index for index, command in enumerate(commands) if "$(RUN)" in command]
+
+    assert builds, commands
+    assert all("|" not in commands[index] for index in builds)
+    assert builds[0] < min(runs)
