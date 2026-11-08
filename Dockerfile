@@ -15,7 +15,7 @@ FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 
 # --- frontend -----------------------------------------------------------------------------------
 
-FROM node:24-trixie-slim AS frontend-dev
+FROM node:26-trixie-slim AS frontend-dev
 ARG APP_UID
 ARG APP_GID
 ENV npm_config_cache=/tmp/.npm \
