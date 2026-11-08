@@ -72,6 +72,7 @@ class FakeTesseract:
     confidences: Sequence[float | None]
     corners: list[str] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
+    commands: list[list[str]] = field(default_factory=list)
 
     def __call__(
         self, command: Sequence[str], **kwargs: object
@@ -83,6 +84,8 @@ class FakeTesseract:
         self.corners.append(_marked_corner(image))
         timeout = kwargs.get("timeout")
         self.timeouts.append(timeout if isinstance(timeout, float | int) else None)
+        self.commands.append(list(command))
+        assert "env" not in kwargs  # the environment is inherited, not rebuilt
         base = Path(command[list(command).index("stdin") + 1])
         confidence = self.confidences[run]
         text = f"CANDIDATE {run}\n" if confidence is not None else "\n"
@@ -229,3 +232,17 @@ def test_every_rotation_run_keeps_the_per_run_timeout(monkeypatch: pytest.Monkey
     fake, _ = _read(monkeypatch, [0.1, 0.2, 0.3, 0.4], OcrSettings(timeout_s=7.5))
 
     assert fake.timeouts == [7.5, 7.5, 7.5, 7.5]
+
+
+def test_tesseract_runs_single_threaded_with_the_rest_of_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OMP_THREAD_LIMIT=1: parallel Tesseract runs (the test workers, the worker and the CLI)
+    must not each start a thread per CPU; on a 2-vCPU CI runner that made a run time out. It is
+    set through ``env`` on the command line, so the rest of the environment is inherited (no
+    module but the CLI reads the environment, S0-AC-14)."""
+    fake, _ = _read(monkeypatch, [0.4, 0.3, 0.2, 0.1])
+
+    assert len(fake.commands) == 4
+    for command in fake.commands:
+        assert command[:3] == ["env", "OMP_THREAD_LIMIT=1", "tesseract"]

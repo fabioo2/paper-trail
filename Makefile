@@ -83,9 +83,10 @@ typecheck: ## Type-check Python (mypy --strict)
 	$(RUN) dev $(UVRUN) mypy
 
 # Both run the tests in parallel with pytest-xdist; pytest-cov combines the workers' coverage
-# (and their child processes') into one report. At most 6 workers, never one per CPU (`-n auto`):
-# the host's 8 cores also serve the owner's media services, which must stay responsive.
-PYTEST_WORKERS := 6
+# (and their child processes') into one report. At most 6 workers by default, never one per CPU:
+# the host's 8 cores also serve other self-hosted services, which must stay responsive. CI sets
+# PYTEST_WORKERS=auto: its 2-vCPU runner was oversubscribed by 6 workers (a Tesseract timeout).
+PYTEST_WORKERS ?= 6
 
 test: ## Run every Python suite in parallel with branch coverage (fails under 90 %)
 	$(RUN) dev $(UVRUN) pytest -n $(PYTEST_WORKERS) --cov --cov-report=term --cov-report=xml --cov-fail-under=90

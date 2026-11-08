@@ -31,3 +31,7 @@ Phone photos are often stored landscape with the receipt lying sideways (EXIF or
 ## Amendment (2026-11-08): psm 6 and vision first (ADR-0017)
 
 On the two real crumpled photos, `--psm 4` (one column of variable-size text) dropped the right-hand price column; `--psm 6` (one uniform block of text) recovered it, so `PAPER_TRAIL_OCR__PSM` now defaults to 6. When the OCR read of a photo stays poor (mean confidence below `PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW`, default 0.65, between the measured good read 0.79 and the bad reads 0.41-0.49), the vision model reads the photo first and no text attempt is made: the fallback is no longer only "after validation fails twice". See ADR-0017.
+
+## Amendment (2026-11-08): single-threaded Tesseract
+
+The first CI run of the public repository failed one Tesseract integration test: "tesseract timed out after 30.0 s". The GitHub runner has 2 vCPUs, the tests ran with 6 xdist workers, and each Tesseract process starts an OpenMP thread per CPU, so the CPU was heavily oversubscribed. Tesseract's documentation recommends `OMP_THREAD_LIMIT=1` when several instances run in parallel, which is how Paper Trail runs it (the worker, the CLI and the test workers). The adapter therefore runs every `tesseract` as `env OMP_THREAD_LIMIT=1 tesseract ...`, so it applies in every image and on any host. The rest of the environment is inherited, and only the CLI module reads it (S0-AC-14). CI also runs the tests with one worker per CPU (`PYTEST_WORKERS=auto`), while the Makefile keeps its default cap of 6 for the shared host.

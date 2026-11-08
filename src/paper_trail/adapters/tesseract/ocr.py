@@ -8,6 +8,12 @@ Rotation fallback (ADR-0010 amendment 2026-11-08): a phone photo can be stored w
 lying sideways, which Tesseract's own orientation detection refuses. When the upright read's mean
 confidence is below ``ocr.rotation_min_confidence`` (or it found no words), the prepared image is
 also read turned 90, 180 and 270 degrees counter-clockwise, and the most confident read wins.
+
+Each run is single-threaded (``OMP_THREAD_LIMIT=1``, as Tesseract's documentation recommends
+when several run in parallel), set through ``env`` on the command line so that the rest of the
+environment is inherited without this module reading it (S0-AC-14). The worker, the CLI and
+parallel test workers each run their own Tesseract, and an OpenMP thread per CPU in every one
+oversubscribed a 2-vCPU CI runner until a run hit its timeout (ADR-0010 amendment).
 """
 
 import csv
@@ -25,6 +31,8 @@ from paper_trail.ports.ocr import OcrError, OcrResult
 register_heif_opener()
 
 TESSERACT = "tesseract"
+# Run through `env` with one OpenMP thread (see the module docstring).
+SINGLE_THREADED = ("env", "OMP_THREAD_LIMIT=1")
 MIN_WIDTH = 1000  # narrower images (small photos, thumbnails) are scaled up to this width
 _PERCENT = 100.0
 
@@ -61,6 +69,7 @@ class TesseractOcr:
         with tempfile.TemporaryDirectory(prefix="paper-trail-ocr-") as workdir:
             base = Path(workdir) / "out"
             command = [
+                *SINGLE_THREADED,
                 TESSERACT,
                 "stdin",
                 str(base),

@@ -23,6 +23,10 @@ jobs:
       - uses: crazy-max/ghaction-github-runtime@v3
       - name: Lint, type-check and test (python-dev image)
         run: make lint typecheck test
+        env:
+          # One test worker per CPU of the runner (2 vCPUs): the Makefile's cap of 6 is for the
+          # owner's shared host and oversubscribed the runner until a Tesseract run timed out.
+          PYTEST_WORKERS: auto
       - uses: actions/upload-artifact@v7
         if: always()
         with:
