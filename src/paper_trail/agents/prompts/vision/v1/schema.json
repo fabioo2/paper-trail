@@ -1,0 +1,166 @@
+{
+  "$defs": {
+    "LineKind": {
+      "description": "What a receipt line is. Only DISCOUNT lines carry negative totals.",
+      "enum": [
+        "item",
+        "discount",
+        "deposit",
+        "fee"
+      ],
+      "title": "LineKind",
+      "type": "string"
+    },
+    "PrintedLine": {
+      "additionalProperties": false,
+      "description": "One printed line, every value copied as printed; signs and cents are computed in code.",
+      "properties": {
+        "raw_text": {
+          "description": "the line's text as printed, without the amount",
+          "title": "Raw Text",
+          "type": "string"
+        },
+        "description": {
+          "description": "a readable product name, without item codes",
+          "title": "Description",
+          "type": "string"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "only from an \"N @ price\" or weight line, e.g. \"2\" or \"0.460 kg\"; else null",
+          "title": "Quantity"
+        },
+        "unit_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "as printed on an \"N @ price\" or weight line, e.g. \"1.29\" or \"$3.31/kg\"",
+          "title": "Unit Price"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the line's amount exactly as printed, e.g. \"1.29\", \"4.00-\", \"17.08 A\"",
+          "title": "Amount"
+        },
+        "kind": {
+          "$ref": "#/$defs/LineKind"
+        }
+      },
+      "required": [
+        "raw_text",
+        "description",
+        "quantity",
+        "unit_price",
+        "amount",
+        "kind"
+      ],
+      "title": "PrintedLine",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The receipt as printed (``extraction/v2``, ``vision/v1``, ADR-0017): the model copies,\n``to_output`` computes.",
+  "properties": {
+    "store_name": {
+      "title": "Store Name",
+      "type": "string"
+    },
+    "purchased_on": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "the date as printed, e.g. \"26/11/02\"",
+      "title": "Purchased On"
+    },
+    "currency": {
+      "pattern": "^[A-Z]{3}$",
+      "title": "Currency",
+      "type": "string"
+    },
+    "subtotal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Subtotal"
+    },
+    "taxes": {
+      "description": "every tax amount as printed",
+      "items": {
+        "type": "string"
+      },
+      "title": "Taxes",
+      "type": "array"
+    },
+    "total": {
+      "title": "Total",
+      "type": "string"
+    },
+    "payment_last4": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9]{4}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Payment Last4"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/PrintedLine"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    }
+  },
+  "required": [
+    "store_name",
+    "purchased_on",
+    "currency",
+    "subtotal",
+    "taxes",
+    "total",
+    "payment_last4",
+    "items",
+    "confidence"
+  ],
+  "title": "PrintedExtraction",
+  "type": "object"
+}

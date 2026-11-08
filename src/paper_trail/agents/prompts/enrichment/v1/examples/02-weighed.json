@@ -1,0 +1,12 @@
+{
+  "ocr_text": "line: BANANAS 1.36 KG @ 1.74/KG\ndescription: Bananas",
+  "output": {
+    "canonical_name": "Bananas",
+    "brand": null,
+    "size_value": null,
+    "size_unit": null,
+    "category": "produce",
+    "tags": ["bananas", "fruit"],
+    "confidence": 0.95
+  }
+}

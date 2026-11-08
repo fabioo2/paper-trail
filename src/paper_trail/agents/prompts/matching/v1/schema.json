@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "description": "Is the receipt line one of the offered products? (the matching model's answer)",
+  "properties": {
+    "line_position": {
+      "minimum": 0,
+      "title": "Line Position",
+      "type": "integer"
+    },
+    "decision": {
+      "enum": [
+        "same",
+        "different"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "product_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Product Id"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    }
+  },
+  "required": [
+    "line_position",
+    "decision",
+    "product_id",
+    "confidence"
+  ],
+  "title": "MatchDecision",
+  "type": "object"
+}

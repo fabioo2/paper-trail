@@ -1,0 +1,55 @@
+{
+  "ocr_text": "SAMPLE GROCER\n26/10/14 09:15\nSAMPLE ITEM F\n  0.460 kg @ $3.31/kg          1.52\nSAMPLE ITEM G  $1.29 lmt 4     1.29\nSAMPLE ITEM H\n  1 @ $2.49 ea                 2.49\nSAMPLE ITEM J\n  3 @ 3/$10.00                10.00\nBOTTLE DEPOSIT                 0.10\nSUBTOTAL                      15.40\nTOTAL                         15.40\nCASH                          20.00\nCHANGE                         4.60\n",
+  "output": {
+    "store_name": "SAMPLE GROCER",
+    "purchased_on": "26/10/14",
+    "currency": "CAD",
+    "subtotal": "15.40",
+    "taxes": [],
+    "total": "15.40",
+    "payment_last4": null,
+    "items": [
+      {
+        "raw_text": "SAMPLE ITEM F",
+        "description": "Sample Item F",
+        "quantity": "0.460 kg",
+        "unit_price": "$3.31/kg",
+        "amount": "1.52",
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM G",
+        "description": "Sample Item G",
+        "quantity": null,
+        "unit_price": null,
+        "amount": "1.29",
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM H",
+        "description": "Sample Item H",
+        "quantity": "1",
+        "unit_price": "$2.49 ea",
+        "amount": "2.49",
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM J",
+        "description": "Sample Item J",
+        "quantity": "3",
+        "unit_price": "3/$10.00",
+        "amount": "10.00",
+        "kind": "item"
+      },
+      {
+        "raw_text": "BOTTLE DEPOSIT",
+        "description": "Bottle deposit",
+        "quantity": null,
+        "unit_price": null,
+        "amount": "0.10",
+        "kind": "deposit"
+      }
+    ],
+    "confidence": 0.9
+  }
+}

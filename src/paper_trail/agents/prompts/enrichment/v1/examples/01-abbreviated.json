@@ -1,0 +1,12 @@
+{
+  "ocr_text": "line: KS ORG BRN EGGS 18CT\ndescription: Kirkland Organic Brown Eggs 18 ct",
+  "output": {
+    "canonical_name": "Kirkland Signature Organic Brown Eggs 18 ct",
+    "brand": "Kirkland Signature",
+    "size_value": "18",
+    "size_unit": "each",
+    "category": "dairy_eggs",
+    "tags": ["eggs", "organic", "brown eggs"],
+    "confidence": 0.9
+  }
+}

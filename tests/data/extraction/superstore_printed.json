@@ -1,0 +1,62 @@
+{
+  "store_name": "SUPERSTORE #9999",
+  "purchased_on": "26/11/02",
+  "currency": "CAD",
+  "subtotal": "21.81",
+  "taxes": [
+    "0.65"
+  ],
+  "total": "22.46",
+  "payment_last4": null,
+  "items": [
+    {
+      "raw_text": "PC BLACK BEANS 540ML",
+      "description": "PC Black Beans 540 mL",
+      "quantity": null,
+      "unit_price": null,
+      "amount": null,
+      "kind": "item"
+    },
+    {
+      "raw_text": "PC CHICKPEAS 540ML",
+      "description": "PC Chickpeas 540 mL",
+      "quantity": "2",
+      "unit_price": "2/$10.00",
+      "amount": "10.00",
+      "kind": "item"
+    },
+    {
+      "raw_text": "BANANAS",
+      "description": "Bananas",
+      "quantity": "0.460 kg",
+      "unit_price": "$3.31/kg",
+      "amount": "1.52",
+      "kind": "item"
+    },
+    {
+      "raw_text": "GREEN ONIONS",
+      "description": "Green Onions",
+      "quantity": null,
+      "unit_price": "$1.29 lmt 4",
+      "amount": "1.29",
+      "kind": "item"
+    },
+    {
+      "raw_text": "PC SPARKLING WATER",
+      "description": "PC Sparkling Water",
+      "quantity": "3",
+      "unit_price": "3/$10.00",
+      "amount": "10.00",
+      "kind": "item"
+    },
+    {
+      "raw_text": "PC OPTIMUM REDEMPTION",
+      "description": "PC Optimum redemption",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "1.00-",
+      "kind": "item"
+    }
+  ],
+  "confidence": 0.85
+}

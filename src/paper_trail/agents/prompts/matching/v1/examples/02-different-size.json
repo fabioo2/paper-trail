@@ -1,0 +1,9 @@
+{
+  "ocr_text": "line 0: GV 2% MILK 2L\ndescription: Great Value 2% Milk 2 L\ncandidates:\n- id 7: Kirkland 2% Milk 4 L\n- id 22: Great Value 1% Milk 2 L",
+  "output": {
+    "line_position": 0,
+    "decision": "different",
+    "product_id": null,
+    "confidence": 0.85
+  }
+}

@@ -1,0 +1,191 @@
+{
+  "store_name": "COSTCO WHOLESALE #9999",
+  "purchased_on": "2026/11/05",
+  "currency": "CAD",
+  "subtotal": "189.16",
+  "taxes": [
+    "5.21",
+    "8.82"
+  ],
+  "total": "203.19",
+  "payment_last4": "0000",
+  "items": [
+    {
+      "raw_text": "1695232 KIMCHI",
+      "description": "Kimchi",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "10.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1556821 PORK RAMEN",
+      "description": "Pork Ramen",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "20.19 A",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1234508 DISH PACS",
+      "description": "Dishwasher Packs",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "18.99 A",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1700334 PJ",
+      "description": "Pyjamas",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "29.99 A",
+      "kind": "item"
+    },
+    {
+      "raw_text": "MULTIPLE",
+      "description": "Multi-buy savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "6.00-",
+      "kind": "discount"
+    },
+    {
+      "raw_text": "1362394 CHOC PISTACH",
+      "description": "Chocolate Pistachio",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "16.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1362394",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1362394 CHOC PISTACH",
+      "description": "Chocolate Pistachio",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "16.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1362394",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1362394 CHOC PISTACH",
+      "description": "Chocolate Pistachio",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "16.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1362394",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1362394 CHOC PISTACH",
+      "description": "Chocolate Pistachio",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "16.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1362394",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1362394 CHOC PISTACH",
+      "description": "Chocolate Pistachio",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "16.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1362394",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1543210 GOLD KIWI",
+      "description": "Gold Kiwi",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "15.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1543210",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1543210 GOLD KIWI",
+      "description": "Gold Kiwi",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "15.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "TPD/1543210",
+      "description": "Instant savings",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "4.00-",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1876543 DOUGHNUTS",
+      "description": "Doughnuts",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "10.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1100231 KS EGGS 24CT",
+      "description": "Kirkland Signature Eggs 24 ct",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "8.99",
+      "kind": "item"
+    },
+    {
+      "raw_text": "1281 1% MILK",
+      "description": "1% Milk",
+      "quantity": null,
+      "unit_price": null,
+      "amount": "6.09",
+      "kind": "item"
+    }
+  ],
+  "confidence": 0.9
+}

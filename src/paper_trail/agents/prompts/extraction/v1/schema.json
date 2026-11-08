@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "ExtractedLine": {
+      "additionalProperties": false,
+      "description": "One printed line as read. Only DISCOUNT lines are negative.",
+      "properties": {
+        "raw_text": {
+          "title": "Raw Text",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "string"
+        },
+        "unit_price_cents": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Unit Price Cents"
+        },
+        "line_total_cents": {
+          "title": "Line Total Cents",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/LineKind"
+        }
+      },
+      "required": [
+        "raw_text",
+        "description",
+        "quantity",
+        "unit_price_cents",
+        "line_total_cents",
+        "kind"
+      ],
+      "title": "ExtractedLine",
+      "type": "object"
+    },
+    "LineKind": {
+      "description": "What a receipt line is. Only DISCOUNT lines carry negative totals.",
+      "enum": [
+        "item",
+        "discount",
+        "deposit",
+        "fee"
+      ],
+      "title": "LineKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The receipt as read, plus how sure the model is of its reading (0..1).",
+  "properties": {
+    "store_name": {
+      "title": "Store Name",
+      "type": "string"
+    },
+    "purchased_on": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Purchased On"
+    },
+    "currency": {
+      "pattern": "^[A-Z]{3}$",
+      "title": "Currency",
+      "type": "string"
+    },
+    "subtotal_cents": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Subtotal Cents"
+    },
+    "tax_cents": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Tax Cents"
+    },
+    "total_cents": {
+      "title": "Total Cents",
+      "type": "integer"
+    },
+    "payment_last4": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9]{4}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Payment Last4"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ExtractedLine"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    }
+  },
+  "required": [
+    "store_name",
+    "purchased_on",
+    "currency",
+    "subtotal_cents",
+    "tax_cents",
+    "total_cents",
+    "payment_last4",
+    "items",
+    "confidence"
+  ],
+  "title": "ExtractionOutput",
+  "type": "object"
+}

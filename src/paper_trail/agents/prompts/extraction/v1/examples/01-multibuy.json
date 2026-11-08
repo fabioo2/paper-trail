@@ -1,0 +1,39 @@
+{
+  "ocr_text": "NO FRILLS #3021\n10/12/26 18:04\nNN BLACK BEANS 540ML\n  2 @ 1.99           3.98\nLIMES\n  3 @ 0.89           2.67\nPC 2% MILK 2L        4.79\nSUBTOTAL            11.44\nHST                  0.00\nTOTAL               11.44\nDEBIT **** **** **** 4821\n",
+  "output": {
+    "store_name": "NO FRILLS #3021",
+    "purchased_on": "2026-10-12",
+    "currency": "CAD",
+    "subtotal_cents": 1144,
+    "tax_cents": 0,
+    "total_cents": 1144,
+    "payment_last4": "4821",
+    "items": [
+      {
+        "raw_text": "NN BLACK BEANS 540ML",
+        "description": "No Name Black Beans 540 ml",
+        "quantity": "2",
+        "unit_price_cents": 199,
+        "line_total_cents": 398,
+        "kind": "item"
+      },
+      {
+        "raw_text": "LIMES",
+        "description": "Limes",
+        "quantity": "3",
+        "unit_price_cents": 89,
+        "line_total_cents": 267,
+        "kind": "item"
+      },
+      {
+        "raw_text": "PC 2% MILK 2L",
+        "description": "President's Choice 2% Milk 2 L",
+        "quantity": "1",
+        "unit_price_cents": 479,
+        "line_total_cents": 479,
+        "kind": "item"
+      }
+    ],
+    "confidence": 0.95
+  }
+}

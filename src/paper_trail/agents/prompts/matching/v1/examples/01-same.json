@@ -1,0 +1,9 @@
+{
+  "ocr_text": "line 2: KIRKLAND ORGANIC EGGS 24\ndescription: Kirkland Organic Eggs 24\ncandidates:\n- id 14: Kirkland Organic Eggs 24 ct\n- id 9: Kirkland Large Eggs 24 ct\n- id 31: Organic Brown Eggs 12",
+  "output": {
+    "line_position": 2,
+    "decision": "same",
+    "product_id": 14,
+    "confidence": 0.9
+  }
+}

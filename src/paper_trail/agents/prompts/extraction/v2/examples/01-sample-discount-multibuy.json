@@ -1,0 +1,65 @@
+{
+  "ocr_text": "SAMPLE MART #0000\n2026/10/18 17:42\n0000101 SAMPLE ITEM A        12.99 A\nTPD/0000101                   3.00-\nSAMPLE ITEM B\nSAMPLE ITEM C\n  2 @ 2/$5.00                 5.00\nSAMPLE ITEM D\n  2 @ $1.49 ea                2.98\nSAMPLE ITEM E  $3.49 ea or 2/$6.00\n                              3.49\nSUBTOTAL                     21.46\nGST 5%                        0.50\nTOTAL                        21.96\nVISA **** **** **** 0000\n",
+  "output": {
+    "store_name": "SAMPLE MART #0000",
+    "purchased_on": "2026/10/18",
+    "currency": "CAD",
+    "subtotal": "21.46",
+    "taxes": [
+      "0.50"
+    ],
+    "total": "21.96",
+    "payment_last4": "0000",
+    "items": [
+      {
+        "raw_text": "0000101 SAMPLE ITEM A",
+        "description": "Sample Item A",
+        "quantity": null,
+        "unit_price": null,
+        "amount": "12.99 A",
+        "kind": "item"
+      },
+      {
+        "raw_text": "TPD/0000101",
+        "description": "Instant savings",
+        "quantity": null,
+        "unit_price": null,
+        "amount": "3.00-",
+        "kind": "discount"
+      },
+      {
+        "raw_text": "SAMPLE ITEM B",
+        "description": "Sample Item B",
+        "quantity": null,
+        "unit_price": null,
+        "amount": null,
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM C",
+        "description": "Sample Item C",
+        "quantity": "2",
+        "unit_price": "2/$5.00",
+        "amount": "5.00",
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM D",
+        "description": "Sample Item D",
+        "quantity": "2",
+        "unit_price": "$1.49 ea",
+        "amount": "2.98",
+        "kind": "item"
+      },
+      {
+        "raw_text": "SAMPLE ITEM E",
+        "description": "Sample Item E",
+        "quantity": null,
+        "unit_price": null,
+        "amount": "3.49",
+        "kind": "item"
+      }
+    ],
+    "confidence": 0.93
+  }
+}

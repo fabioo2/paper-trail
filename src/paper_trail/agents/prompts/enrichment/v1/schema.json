@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "produce",
+        "meat_seafood",
+        "dairy_eggs",
+        "bakery",
+        "deli_prepared",
+        "pantry",
+        "frozen",
+        "beverages",
+        "snacks_candy",
+        "alcohol",
+        "household",
+        "personal_care",
+        "health_pharmacy",
+        "baby",
+        "pet",
+        "electronics",
+        "clothing",
+        "home_garden",
+        "automotive_fuel",
+        "restaurant",
+        "services",
+        "other"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "Unit": {
+      "enum": [
+        "each",
+        "g",
+        "kg",
+        "ml",
+        "l",
+        "lb",
+        "oz"
+      ],
+      "title": "Unit",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What a new product is, plus how sure the model is (0..1); below\n``GRAPH__MIN_CONFIDENCE`` the product is left as it is.",
+  "properties": {
+    "canonical_name": {
+      "title": "Canonical Name",
+      "type": "string"
+    },
+    "brand": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Brand"
+    },
+    "size_value": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Size Value"
+    },
+    "size_unit": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Unit"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "tags": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Tags",
+      "type": "array"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    }
+  },
+  "required": [
+    "canonical_name",
+    "brand",
+    "size_value",
+    "size_unit",
+    "category",
+    "tags",
+    "confidence"
+  ],
+  "title": "EnrichmentOutput",
+  "type": "object"
+}

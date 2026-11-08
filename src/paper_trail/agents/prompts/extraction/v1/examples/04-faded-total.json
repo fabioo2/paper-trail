@@ -1,0 +1,39 @@
+{
+  "ocr_text": "METRO #455\n09/05/2026\nDEMPSTERS WHOLE WHT  3.49\nGRADE A LRG EGGS 12  4.29\nGALA APPLES\n  3 @ 0.79           2.37\nSUBTOTAL            10.15\nTAX                  0.00\nTO AL               1 .1\nMASTERCARD **** **** **** 7702\n",
+  "output": {
+    "store_name": "METRO #455",
+    "purchased_on": "2026-09-05",
+    "currency": "CAD",
+    "subtotal_cents": 1015,
+    "tax_cents": 0,
+    "total_cents": 1015,
+    "payment_last4": "7702",
+    "items": [
+      {
+        "raw_text": "DEMPSTERS WHOLE WHT",
+        "description": "Dempster's Whole Wheat Bread",
+        "quantity": "1",
+        "unit_price_cents": 349,
+        "line_total_cents": 349,
+        "kind": "item"
+      },
+      {
+        "raw_text": "GRADE A LRG EGGS 12",
+        "description": "Grade A Large Eggs 12 ct",
+        "quantity": "1",
+        "unit_price_cents": 429,
+        "line_total_cents": 429,
+        "kind": "item"
+      },
+      {
+        "raw_text": "GALA APPLES",
+        "description": "Gala Apples",
+        "quantity": "3",
+        "unit_price_cents": 79,
+        "line_total_cents": 237,
+        "kind": "item"
+      }
+    ],
+    "confidence": 0.7
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "store_name": "COSTCO WHOLESALE #1234",
+  "purchased_on": "2026-11-01",
+  "currency": "CAD",
+  "subtotal_cents": 3240,
+  "tax_cents": 52,
+  "total_cents": 3292,
+  "payment_last4": "1111",
+  "items": [
+    {
+      "raw_text": "1234567 KS ORG EGGS 24CT",
+      "description": "Kirkland Signature Organic Eggs 24 ct",
+      "quantity": "1",
+      "unit_price_cents": 899,
+      "line_total_cents": 899,
+      "product": "Kirkland Signature Organic Eggs 24 ct",
+      "category": "dairy_eggs"
+    },
+    {
+      "raw_text": "KS 2% MILK 4L",
+      "description": "Kirkland 2% Milk 4 L",
+      "quantity": "2",
+      "unit_price_cents": 329,
+      "line_total_cents": 658,
+      "product": "Kirkland 2% Milk 4 L",
+      "category": "dairy_eggs"
+    },
+    {
+      "raw_text": "BANANAS 1.36KG",
+      "description": "Bananas",
+      "quantity": "1.36",
+      "unit_price_cents": 150,
+      "line_total_cents": 204,
+      "product": "Bananas",
+      "category": "produce"
+    },
+    {
+      "raw_text": "KS PAPER TOWEL 12RL H",
+      "description": "Kirkland Signature Paper Towels 12 rolls",
+      "quantity": "1",
+      "unit_price_cents": 1979,
+      "line_total_cents": 1979,
+      "product": "Kirkland Signature Paper Towels 12 rolls",
+      "category": "household"
+    },
+    {
+      "raw_text": "TPD/1234567",
+      "description": "Instant savings",
+      "kind": "discount",
+      "line_total_cents": -500
+    }
+  ]
+}

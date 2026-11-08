@@ -1,0 +1,55 @@
+{
+  "ocr_text": "SHOPPERS DRUG MART #0812\n2026-09-30\nCOCA-COLA 12PK      8.99 H\nDEPOSIT             1.20\nINSTANT SAVINGS    -2.00\nCOLGATE TOTAL 120ML 4.99 H\nECO FEE             0.10\nSUBTOTAL           13.28\nHST 13%             1.82\nTOTAL              15.10\nVISA **** **** **** 0390\n",
+  "output": {
+    "store_name": "SHOPPERS DRUG MART #0812",
+    "purchased_on": "2026-09-30",
+    "currency": "CAD",
+    "subtotal_cents": 1328,
+    "tax_cents": 182,
+    "total_cents": 1510,
+    "payment_last4": "0390",
+    "items": [
+      {
+        "raw_text": "COCA-COLA 12PK",
+        "description": "Coca-Cola 12 pack",
+        "quantity": "1",
+        "unit_price_cents": 899,
+        "line_total_cents": 899,
+        "kind": "item"
+      },
+      {
+        "raw_text": "DEPOSIT",
+        "description": "Container deposit",
+        "quantity": "1",
+        "unit_price_cents": null,
+        "line_total_cents": 120,
+        "kind": "deposit"
+      },
+      {
+        "raw_text": "INSTANT SAVINGS",
+        "description": "Instant savings",
+        "quantity": "1",
+        "unit_price_cents": null,
+        "line_total_cents": -200,
+        "kind": "discount"
+      },
+      {
+        "raw_text": "COLGATE TOTAL 120ML",
+        "description": "Colgate Total Toothpaste 120 ml",
+        "quantity": "1",
+        "unit_price_cents": 499,
+        "line_total_cents": 499,
+        "kind": "item"
+      },
+      {
+        "raw_text": "ECO FEE",
+        "description": "Environmental fee",
+        "quantity": "1",
+        "unit_price_cents": null,
+        "line_total_cents": 10,
+        "kind": "fee"
+      }
+    ],
+    "confidence": 0.92
+  }
+}

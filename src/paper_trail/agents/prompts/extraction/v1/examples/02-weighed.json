@@ -1,0 +1,39 @@
+{
+  "ocr_text": "FRESHCO #112\n2026/10/20\nBANANAS\n 1.36 kg @ $0.99/kg   1.35\nTOMATOES ON VINE\n 0.82 kg @ $4.39/kg   3.60\nWHOLE MILK 4L        6.29\nSUBTOTAL            11.24\nTOTAL               11.24\nCASH                20.00\nCHANGE               8.76\n",
+  "output": {
+    "store_name": "FRESHCO #112",
+    "purchased_on": "2026-10-20",
+    "currency": "CAD",
+    "subtotal_cents": 1124,
+    "tax_cents": null,
+    "total_cents": 1124,
+    "payment_last4": null,
+    "items": [
+      {
+        "raw_text": "BANANAS",
+        "description": "Bananas",
+        "quantity": "1.36",
+        "unit_price_cents": 99,
+        "line_total_cents": 135,
+        "kind": "item"
+      },
+      {
+        "raw_text": "TOMATOES ON VINE",
+        "description": "Tomatoes on the Vine",
+        "quantity": "0.82",
+        "unit_price_cents": 439,
+        "line_total_cents": 360,
+        "kind": "item"
+      },
+      {
+        "raw_text": "WHOLE MILK 4L",
+        "description": "Whole Milk 4 L",
+        "quantity": "1",
+        "unit_price_cents": 629,
+        "line_total_cents": 629,
+        "kind": "item"
+      }
+    ],
+    "confidence": 0.93
+  }
+}
