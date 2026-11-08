@@ -101,7 +101,7 @@ def test_ac_a_10_a_clean_receipt_completes_with_exit_0(
     assert fake.calls == 1
     body = fake.chat_requests[0]
     assert body["model"] == "qwen2.5:7b-instruct"
-    assert body["options"]["num_ctx"] == 8192
+    assert body["options"]["num_ctx"] == 12288
     assert body["options"]["temperature"] == 0.0
     assert body["format"]["additionalProperties"] is False
 

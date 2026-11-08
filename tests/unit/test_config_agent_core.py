@@ -31,7 +31,7 @@ def test_agent_core_defaults_match_the_documented_table() -> None:
     assert ollama.vision_model == "qwen2.5vl:7b"
     assert ollama.embed_model == "nomic-embed-text"
     assert ollama.keep_alive == "5m"
-    assert ollama.num_ctx == 8192  # Ollama's own default of 4096 is too small (measured)
+    assert ollama.num_ctx == 12288  # a prompt, a photo and a 4096-token answer (ADR-0017)
     assert settings.graph == GraphSettings(  # two vision attempts since extraction accuracy
         max_text_attempts=2, max_vision_attempts=2, min_confidence=0.6, feedback=True
     )

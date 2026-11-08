@@ -35,7 +35,7 @@ EXPECTED_EXAMPLES = (
     "04-faded-total.json",
     "05-injection.json",
 )
-NUM_CTX = 8192  # PAPER_TRAIL_OLLAMA__NUM_CTX default
+NUM_CTX = 8192  # stricter than the PAPER_TRAIL_OLLAMA__NUM_CTX default (12288)
 OUTPUT_BUDGET_TOKENS = 2048  # room left for a long receipt's JSON answer
 CHARS_PER_TOKEN = 3  # conservative for English text, digits and JSON
 

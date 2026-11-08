@@ -74,9 +74,10 @@ class OllamaSettings(BaseModel):
     vision_model: str = "qwen2.5vl:7b"
     embed_model: str = "nomic-embed-text"
     keep_alive: str = "5m"
-    # Ollama's default context is 4096 tokens, too small for the few-shot extraction prompt.
+    # Ollama's default context is 4096 tokens, too small for a prompt plus a photo plus the answer
+    # (MAX_OUTPUT_TOKENS); 12288 is what every real receipt run used.
     # One value for every request: changing it between requests reloads the model.
-    num_ctx: int = Field(default=8192, gt=0)
+    num_ctx: int = Field(default=12288, gt=0)
     # Most tokens one extraction answer may take (num_predict): a model that loops on a hard
     # photo stops here instead of filling the context (ADR-0017 amendment).
     max_output_tokens: int = Field(default=4096, gt=0)
