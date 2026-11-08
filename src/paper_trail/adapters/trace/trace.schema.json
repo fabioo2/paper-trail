@@ -1,0 +1,339 @@
+{
+  "$defs": {
+    "AgentRole": {
+      "description": "Who calls a tool or emits a trace event; the tool allowlists are per role (ADR-0013).",
+      "enum": [
+        "supervisor",
+        "extraction",
+        "validation",
+        "matching",
+        "enrichment"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "TraceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Models",
+          "type": "object"
+        },
+        "prompt_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Prompt Versions",
+          "type": "object"
+        },
+        "examples": {
+          "title": "Examples",
+          "type": "boolean"
+        },
+        "feedback": {
+          "title": "Feedback",
+          "type": "boolean"
+        },
+        "max_text_attempts": {
+          "title": "Max Text Attempts",
+          "type": "integer"
+        },
+        "max_vision_attempts": {
+          "title": "Max Vision Attempts",
+          "type": "integer"
+        },
+        "enrichment": {
+          "title": "Enrichment",
+          "type": "boolean"
+        },
+        "transport": {
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "models",
+        "prompt_versions",
+        "examples",
+        "feedback",
+        "max_text_attempts",
+        "max_vision_attempts",
+        "enrichment",
+        "transport"
+      ],
+      "title": "TraceConfig",
+      "type": "object"
+    },
+    "TraceEventOut": {
+      "additionalProperties": false,
+      "properties": {
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "kind": {
+          "$ref": "#/$defs/TraceKind"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "agent",
+        "kind",
+        "name",
+        "summary",
+        "duration_ms",
+        "data"
+      ],
+      "title": "TraceEventOut",
+      "type": "object"
+    },
+    "TraceKind": {
+      "enum": [
+        "node",
+        "tool",
+        "llm",
+        "route",
+        "interrupt",
+        "error",
+        "note"
+      ],
+      "title": "TraceKind",
+      "type": "string"
+    },
+    "TraceOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "review_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Review Id"
+        },
+        "review_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Review Reason"
+        },
+        "resumed_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Resumed From"
+        }
+      },
+      "required": [
+        "status",
+        "review_id",
+        "review_reason",
+        "resumed_from"
+      ],
+      "title": "TraceOutcome",
+      "type": "object"
+    },
+    "TraceTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "llm_calls": {
+          "title": "Llm Calls",
+          "type": "integer"
+        },
+        "prompt_tokens": {
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "tool_calls": {
+          "title": "Tool Calls",
+          "type": "integer"
+        },
+        "tool_denied": {
+          "title": "Tool Denied",
+          "type": "integer"
+        },
+        "text_attempts": {
+          "title": "Text Attempts",
+          "type": "integer"
+        },
+        "vision_attempts": {
+          "title": "Vision Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "llm_calls",
+        "prompt_tokens",
+        "completion_tokens",
+        "tool_calls",
+        "tool_denied",
+        "text_attempts",
+        "vision_attempts"
+      ],
+      "title": "TraceTotals",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "paper-trail.trace/v1",
+      "default": "paper-trail.trace/v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "run": {
+      "title": "Run",
+      "type": "string"
+    },
+    "receipt_id": {
+      "title": "Receipt Id",
+      "type": "integer"
+    },
+    "source_name": {
+      "title": "Source Name",
+      "type": "string"
+    },
+    "image_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Image Sha256"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "title": "Finished At",
+      "type": "string"
+    },
+    "config": {
+      "$ref": "#/$defs/TraceConfig"
+    },
+    "outcome": {
+      "$ref": "#/$defs/TraceOutcome"
+    },
+    "totals": {
+      "$ref": "#/$defs/TraceTotals"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/TraceEventOut"
+      },
+      "title": "Events",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run",
+    "receipt_id",
+    "source_name",
+    "image_sha256",
+    "started_at",
+    "finished_at",
+    "config",
+    "outcome",
+    "totals",
+    "events"
+  ],
+  "title": "TraceDocument",
+  "type": "object"
+}
