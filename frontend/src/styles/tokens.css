@@ -1,0 +1,57 @@
+/*
+ * Design tokens: the only place colours, radii and spacing are defined.
+ * Light values on :root, dark values on .dark (the class is set by the theme provider).
+ * Keep --background in sync with THEME_COLORS in src/lib/theme.ts (browser chrome colour).
+ */
+:root {
+  --background: oklch(0.985 0.002 90);
+  --foreground: oklch(0.2 0.01 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.01 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.01 260);
+  --primary: oklch(0.48 0.12 160);
+  --primary-foreground: oklch(0.985 0.002 90);
+  --secondary: oklch(0.95 0.005 90);
+  --secondary-foreground: oklch(0.25 0.01 260);
+  --muted: oklch(0.955 0.004 90);
+  --muted-foreground: oklch(0.5 0.01 260);
+  --accent: oklch(0.94 0.02 160);
+  --accent-foreground: oklch(0.3 0.06 160);
+  --destructive: oklch(0.58 0.22 27);
+  --success: oklch(0.62 0.15 150);
+  --warning: oklch(0.75 0.15 75);
+  --border: oklch(0.91 0.005 90);
+  --input: oklch(0.91 0.005 90);
+  --ring: oklch(0.6 0.1 160);
+
+  --radius: 0.75rem;
+  --tab-bar-height: 4rem;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+.dark {
+  --background: oklch(0.17 0.006 260);
+  --foreground: oklch(0.96 0.003 90);
+  --card: oklch(0.21 0.007 260);
+  --card-foreground: oklch(0.96 0.003 90);
+  --popover: oklch(0.21 0.007 260);
+  --popover-foreground: oklch(0.96 0.003 90);
+  --primary: oklch(0.72 0.13 160);
+  --primary-foreground: oklch(0.2 0.03 160);
+  --secondary: oklch(0.26 0.008 260);
+  --secondary-foreground: oklch(0.96 0.003 90);
+  --muted: oklch(0.26 0.008 260);
+  --muted-foreground: oklch(0.7 0.01 260);
+  --accent: oklch(0.3 0.04 160);
+  --accent-foreground: oklch(0.92 0.04 160);
+  --destructive: oklch(0.68 0.19 25);
+  --success: oklch(0.72 0.15 150);
+  --warning: oklch(0.8 0.14 75);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.6 0.1 160);
+}

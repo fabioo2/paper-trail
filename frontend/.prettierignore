@@ -1,0 +1,6 @@
+# Build output and generated files (regenerate with `make api-client`, never edit by hand).
+dist
+coverage
+package-lock.json
+openapi.json
+src/api/schema.d.ts
