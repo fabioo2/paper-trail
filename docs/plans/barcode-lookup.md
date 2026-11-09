@@ -414,13 +414,13 @@ class CatalogEntryOut(_Model):
     size_value: str | None
     size_unit: Unit | None
     quantity_text: str | None
-    categories: list[str]       # OFF tags, for tidying
-    category: Category | None   # mapped in code (4.2); None = unmapped
-    tags: list[str]             # e.g. "organic", leaf category names (<= MAX_TAGS)
+    categories: list[str]  # OFF tags, for tidying
+    category: Category | None  # mapped in code (4.2); None = unmapped
+    tags: list[str]  # e.g. "organic", leaf category names (<= MAX_TAGS)
 
 
 class CatalogLookupOutput(_Model):
-    code: ItemCodeOut | None    # kind, printed, keys, scheme
+    code: ItemCodeOut | None  # kind, printed, keys, scheme
     product: ProductOut | None  # our product, when the code is already ours
     entry: CatalogEntryOut | None
 ```
