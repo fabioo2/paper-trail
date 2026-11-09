@@ -238,8 +238,9 @@ docker compose run --rm web receipts show 1             # the receipt as JSON
 The import prints `receipt <id>: <status>` and every arithmetic issue. A receipt that does not
 add up is still recorded, as `needs_review`, with an open review item; one that does is
 `completed` and, when its purchase date is known, adds a price observation for each `item` line
-that names a product (deposit, discount and fee lines are linked to their product but never
-priced). Card numbers are masked before anything is stored or logged. Invalid files exit with status 2 and name the
+that names a product (a deposit, discount or fee line is linked to a product only when the file
+names one for it, and is never priced; tying a discount to the item it reduces is planned in
+[`docs/plans/discounts-and-paid-prices.md`](docs/plans/discounts-and-paid-prices.md)). Card numbers are masked before anything is stored or logged. Invalid files exit with status 2 and name the
 offending field. The format (unknown fields are errors, amounts are integer cents; the lines add
 up to the subtotal, and subtotal plus tax to the total; `tests/data/receipts/costco_simple.json`
 is a full example):
@@ -421,7 +422,10 @@ example, Costco's gold kiwis bought on two receipts (three lines):
 ```
 
 The second receipt's line was linked by the alias the first one left (`match_source` `alias`),
-without a model call. The tables behind it:
+without a model call. The prices are the shelf prices: each of these lines was followed by a
+`-4.00` instant-savings line (such as `0000399102 / 3139415`), stored as its own `discount` line but
+not yet applied, so 11.99 was paid. Storing the regular and the paid price side by side is the
+[discounts plan](docs/plans/discounts-and-paid-prices.md). The tables behind it:
 
 ```mermaid
 erDiagram
