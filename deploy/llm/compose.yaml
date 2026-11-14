@@ -13,7 +13,7 @@ name: paper-trail-llm
 
 services:
   ollama:
-    image: ollama/ollama:0.40.15
+    image: ollama/ollama:0.40.16
     ports:
       - "${OLLAMA_BIND_ADDR:-127.0.0.1}:11434:11434"
     volumes:
@@ -38,7 +38,7 @@ services:
       start_period: 10s
 
   ollama-init:
-    image: ollama/ollama:0.40.15
+    image: ollama/ollama:0.40.16
     depends_on:
       ollama:
         condition: service_healthy

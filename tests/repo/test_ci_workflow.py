@@ -29,11 +29,8 @@ def _triggers(workflow: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_s0_ac_34_workflow_triggers(workflow: dict[str, Any]) -> None:
-    """S0-AC-34: runs on push to main and on pull requests."""
-    triggers = _triggers(workflow)
-
-    assert "main" in triggers["push"]["branches"]
-    assert "pull_request" in triggers
+    """S0-AC-34: runs on pull requests only; main is reached through PRs."""
+    assert set(_triggers(workflow)) == {"pull_request"}
 
 
 def test_s0_ac_34_least_privilege_and_concurrency(workflow: dict[str, Any]) -> None:

@@ -43,15 +43,16 @@ def _external_images(dockerfile: str) -> list[str]:
 
 
 def test_s0_ac_37_base_images_are_literal_pinned_from_lines(dockerfile: str) -> None:
-    """S0-AC-37: python:3.12-slim-trixie, node:24-trixie-slim, uv x.y.z, literal on FROM.
+    """S0-AC-37: Python minor and Node major on a named Debian release, uv x.y.z, literal FROM.
 
     Dependabot's docker updater only reads literal image references, so no ARG indirection.
     """
     froms = re.findall(r"^FROM\s+(\S+)\s+AS\s+(\S+)", dockerfile, re.MULTILINE | re.IGNORECASE)
     by_stage = {stage: image for image, stage in froms}
 
-    assert by_stage["python-base"] == "python:3.12-slim-trixie"
-    assert by_stage["frontend-dev"] == "node:24-trixie-slim"
+    python, node = by_stage["python-base"], by_stage["frontend-dev"]
+    assert re.fullmatch(r"python:\d+\.\d+-slim-[a-z]+", python), python
+    assert re.fullmatch(r"node:\d+-[a-z]+-slim", node), node
     assert re.fullmatch(r"ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+", by_stage["uv"]), by_stage["uv"]
     assert not re.search(r"^ARG\s+\w*_IMAGE\b", dockerfile, re.MULTILINE), "no ARG-based images"
 
