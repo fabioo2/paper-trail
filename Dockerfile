@@ -11,11 +11,11 @@
 ARG APP_UID=1000
 ARG APP_GID=1000
 
-FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
 # --- frontend -----------------------------------------------------------------------------------
 
-FROM node:24-trixie-slim AS frontend-dev
+FROM node:26-trixie-slim AS frontend-dev
 ARG APP_UID
 ARG APP_GID
 ENV npm_config_cache=/tmp/.npm \
@@ -37,7 +37,7 @@ RUN npm run build
 
 # --- python -------------------------------------------------------------------------------------
 
-FROM python:3.12-slim-trixie AS python-base
+FROM python:3.15-slim-trixie AS python-base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
