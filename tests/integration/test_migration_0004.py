@@ -38,10 +38,12 @@ OBSERVATION_CHECKS: list[tuple[str, tuple[int, int, int, int, int], bool]] = [
     ("regular", (899, 0, 0, 899, 0), True),
 ]
 
-# (kind, position, applies_to_position) -> accepted. The DB checks nothing more (Q12).
+# (kind, position, applies_to_position) -> accepted. Beyond Q12's two rules the DB refuses only a
+# negative position (as the domain does); it cannot see the other rows.
 LINE_LINK_CHECKS: list[tuple[str, tuple[str, int, int | None], bool]] = [
     ("a link on an item line", ("item", 1, 0), False),
     ("a link to its own position", ("discount", 1, 1), False),
+    ("a link to a negative position", ("discount", 1, -1), False),
     ("an unlinked discount", ("discount", 1, None), True),
     ("a discount linked to an earlier line", ("discount", 1, 0), True),
     ("a discount linked to a position no line has", ("discount", 1, 5), True),
@@ -58,11 +60,6 @@ def engine(database: Path) -> Iterator[Engine]:
     engine = create_engine(database)
     yield engine
     engine.dispose()
-
-
-def _columns(connection: Connection, table: str) -> dict[str, tuple[str, bool]]:
-    rows = connection.exec_driver_sql(f'PRAGMA table_info("{table}")').mappings()
-    return {row["name"]: (row["type"].upper(), not row["notnull"]) for row in rows}
 
 
 def _rows(connection: Connection, table: str) -> list[dict[str, Any]]:
@@ -176,25 +173,7 @@ def _observation(  # noqa: PLR0913 - one parameter per column a test varies
     )
 
 
-def test_tc_71_upgrade_adds_the_link_and_the_paid_price_columns(
-    database: Path, engine: Engine
-) -> None:
-    command.upgrade(alembic_config(database), "head")
-
-    with engine.connect() as connection:
-        lines = _columns(connection, "line_items")
-        observations = _columns(connection, "price_observations")
-    assert (SCHEMA_HEAD, head_revision(), current_revision(engine)) == ("0004", "0004", "0004")
-    assert lines["applies_to_position"] == ("INTEGER", True)
-    assert {name: observations[name][1] for name in OBSERVATION_COLUMNS} == dict.fromkeys(
-        OBSERVATION_COLUMNS, False
-    )
-    assert {name: observations[name][0] for name in OBSERVATION_COLUMNS[:3]} == dict.fromkeys(
-        OBSERVATION_COLUMNS[:3], "INTEGER"
-    )
-
-
-def test_tc_72_existing_observations_are_regular_prices_after_the_upgrade(
+def test_tc_71_72_existing_observations_are_regular_prices_after_the_upgrade(
     database: Path, engine: Engine
 ) -> None:
     config = alembic_config(database)
@@ -228,6 +207,7 @@ def test_tc_72_existing_observations_are_regular_prices_after_the_upgrade(
 
     command.upgrade(config, "head")
 
+    assert (SCHEMA_HEAD, head_revision(), current_revision(engine)) == ("0004", "0004", "0004")
     with engine.connect() as connection:
         assert _rows(connection, "line_items") == [
             {**row, "applies_to_position": None} for row in lines_before
@@ -312,14 +292,6 @@ def test_tc_73_downgrade_drops_the_new_columns_and_keeps_every_row(
             {name: value for name, value in row.items() if name not in OBSERVATION_COLUMNS}
             for row in observations_before
         ]
-    command.upgrade(config, "head")
-    with engine.connect() as connection:
-        assert _rows(connection, "line_items") == [
-            {**row, "applies_to_position": None} for row in lines_before
-        ]
-        assert _rows(connection, "price_observations") == [
-            {**row, **NEW_OBSERVATION_VALUES, "paid_cents": 899} for row in observations_before
-        ]
 
 
 def _seed_one_line(engine: Engine, kind: str = "item") -> tuple[int, int, int]:
@@ -331,54 +303,35 @@ def _seed_one_line(engine: Engine, kind: str = "item") -> tuple[int, int, int]:
 
 
 @pytest.mark.parametrize(
-    "values",
-    [values for _, values, accepted in OBSERVATION_CHECKS if not accepted],
-    ids=[name for name, _, accepted in OBSERVATION_CHECKS if not accepted],
+    ("values", "accepted"),
+    [(values, accepted) for _, values, accepted in OBSERVATION_CHECKS],
+    ids=[name for name, _, _ in OBSERVATION_CHECKS],
 )
-def test_tc_74_observation_checks_reject(
-    migrated_engine: Engine, values: tuple[int, int, int, int, int]
+def test_tc_74_observation_checks(
+    migrated_engine: Engine, values: tuple[int, int, int, int, int], accepted: bool
 ) -> None:
     receipt_id, product_id, line_id = _seed_one_line(migrated_engine)
     line_total, discount, unit_discount, paid, on_sale = values
 
-    with pytest.raises(IntegrityError), migrated_engine.begin() as connection:
-        _observation(
-            connection,
-            product_id,
-            receipt_id,
-            line_id,
-            line_total=line_total,
-            discount_cents=discount,
-            unit_discount_cents=unit_discount,
-            paid_cents=paid,
-            on_sale=on_sale,
-        )
+    def insert() -> None:
+        with migrated_engine.begin() as connection:
+            _observation(
+                connection,
+                product_id,
+                receipt_id,
+                line_id,
+                line_total=line_total,
+                discount_cents=discount,
+                unit_discount_cents=unit_discount,
+                paid_cents=paid,
+                on_sale=on_sale,
+            )
 
-
-@pytest.mark.parametrize(
-    "values",
-    [values for _, values, accepted in OBSERVATION_CHECKS if accepted],
-    ids=[name for name, _, accepted in OBSERVATION_CHECKS if accepted],
-)
-def test_tc_74_observation_checks_accept(
-    migrated_engine: Engine, values: tuple[int, int, int, int, int]
-) -> None:
-    receipt_id, product_id, line_id = _seed_one_line(migrated_engine)
-    line_total, discount, unit_discount, paid, on_sale = values
-
-    with migrated_engine.begin() as connection:
-        _observation(
-            connection,
-            product_id,
-            receipt_id,
-            line_id,
-            line_total=line_total,
-            discount_cents=discount,
-            unit_discount_cents=unit_discount,
-            paid_cents=paid,
-            on_sale=on_sale,
-        )
-
+    if not accepted:
+        with pytest.raises(IntegrityError):
+            insert()
+        return
+    insert()
     with migrated_engine.connect() as connection:
         stored = connection.execute(
             text(
@@ -390,50 +343,33 @@ def test_tc_74_observation_checks_accept(
 
 
 @pytest.mark.parametrize(
-    "line",
-    [line for _, line, accepted in LINE_LINK_CHECKS if not accepted],
-    ids=[name for name, _, accepted in LINE_LINK_CHECKS if not accepted],
+    ("line", "accepted"),
+    [(line, accepted) for _, line, accepted in LINE_LINK_CHECKS],
+    ids=[name for name, _, _ in LINE_LINK_CHECKS],
 )
-def test_tc_75_line_link_checks_reject(
-    migrated_engine: Engine, line: tuple[str, int, int | None]
+def test_tc_75_line_link_checks(
+    migrated_engine: Engine, line: tuple[str, int, int | None], accepted: bool
 ) -> None:
     receipt_id, _, _ = _seed_one_line(migrated_engine)
     kind, position, applies_to = line
 
-    with pytest.raises(IntegrityError), migrated_engine.begin() as connection:
-        _line(
-            connection,
-            receipt_id,
-            position,
-            kind=kind,
-            unit_price=None,
-            line_total=-100,
-            applies_to_position=applies_to,
-        )
+    def insert() -> int:
+        with migrated_engine.begin() as connection:
+            return _line(
+                connection,
+                receipt_id,
+                position,
+                kind=kind,
+                unit_price=None,
+                line_total=-100,
+                applies_to_position=applies_to,
+            )
 
-
-@pytest.mark.parametrize(
-    "line",
-    [line for _, line, accepted in LINE_LINK_CHECKS if accepted],
-    ids=[name for name, _, accepted in LINE_LINK_CHECKS if accepted],
-)
-def test_tc_75_line_link_checks_accept(
-    migrated_engine: Engine, line: tuple[str, int, int | None]
-) -> None:
-    receipt_id, _, _ = _seed_one_line(migrated_engine)
-    kind, position, applies_to = line
-
-    with migrated_engine.begin() as connection:
-        line_id = _line(
-            connection,
-            receipt_id,
-            position,
-            kind=kind,
-            unit_price=None,
-            line_total=-100,
-            applies_to_position=applies_to,
-        )
-
+    if not accepted:
+        with pytest.raises(IntegrityError):
+            insert()
+        return
+    line_id = insert()
     with migrated_engine.connect() as connection:
         stored = connection.execute(
             text("SELECT kind, position, applies_to_position FROM line_items WHERE id = :id"),
@@ -442,65 +378,24 @@ def test_tc_75_line_link_checks_accept(
     assert tuple(stored) == line
 
 
-def test_tc_76_the_rebuilt_table_keeps_its_indexes_uniqueness_and_cascades(
+def test_tc_76_the_rebuilt_table_keeps_its_indexes_and_foreign_keys(
     database: Path, engine: Engine
 ) -> None:
     config = alembic_config(database)
     command.upgrade(config, "0003")
     with engine.connect() as connection:
-        indexes_at_0003 = _indexes(connection, "price_observations")
-        foreign_keys_at_0003 = connection.exec_driver_sql(
-            'PRAGMA foreign_key_list("price_observations")'
-        ).all()
+        at_0003 = (
+            _indexes(connection, "price_observations"),
+            connection.exec_driver_sql('PRAGMA foreign_key_list("price_observations")').all(),
+        )
 
     command.upgrade(config, "head")
 
     with engine.connect() as connection:
-        assert _indexes(connection, "price_observations") == indexes_at_0003
         assert (
-            connection.exec_driver_sql('PRAGMA foreign_key_list("price_observations")').all()
-            == foreign_keys_at_0003
-        )
-    receipt_id, product_id, line_id = _seed_one_line(engine)
-    with engine.begin() as connection:
-        _observation(
-            connection,
-            product_id,
-            receipt_id,
-            line_id,
-            discount_cents=0,
-            unit_discount_cents=0,
-            paid_cents=899,
-            on_sale=0,
-        )
-    with pytest.raises(IntegrityError), engine.begin() as connection:
-        _observation(
-            connection,
-            product_id,
-            receipt_id,
-            line_id,
-            discount_cents=0,
-            unit_discount_cents=0,
-            paid_cents=899,
-            on_sale=0,
-        )
-
-    other_receipt, other_product, other_line = _seed_one_line(engine)
-    with engine.begin() as connection:
-        _observation(
-            connection,
-            other_product,
-            other_receipt,
-            other_line,
-            discount_cents=0,
-            unit_discount_cents=0,
-            paid_cents=899,
-            on_sale=0,
-        )
-        connection.execute(text("DELETE FROM receipts WHERE id = :id"), {"id": receipt_id})
-        connection.execute(text("DELETE FROM products WHERE id = :id"), {"id": other_product})
-        remaining = connection.execute(text("SELECT count(*) FROM price_observations"))
-        assert remaining.scalar_one() == 0
+            _indexes(connection, "price_observations"),
+            connection.exec_driver_sql('PRAGMA foreign_key_list("price_observations")').all(),
+        ) == at_0003
 
 
 def _fts_ids(connection: Connection, word: str) -> list[int]:

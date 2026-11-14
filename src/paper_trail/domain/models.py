@@ -58,7 +58,8 @@ def _check_currency(currency: str, amounts: Iterable[Money | None], what: str) -
 
 @dataclass(frozen=True, slots=True)
 class LineItem:
-    """One printed line of a receipt."""
+    """One printed line of a receipt. A DISCOUNT line's ``applies_to_position`` names the ITEM
+    line it reduces."""
 
     position: int  # 0-based order on the receipt
     kind: LineKind
@@ -71,7 +72,7 @@ class LineItem:
     category: Category | None = None
     id: int | None = None
     match_source: MatchSource | None = None  # how product_id was found (agent core C)
-    applies_to_position: int | None = None  # DISCOUNT lines only: the ITEM line it reduces
+    applies_to_position: int | None = None
 
     def __post_init__(self) -> None:
         if not self.quantity.is_finite() or self.quantity <= 0:
@@ -84,8 +85,11 @@ class LineItem:
         if self.kind is not LineKind.DISCOUNT:
             msg = f"{line} is set on a {self.kind.value} line; only a discount applies to an item"
             raise DomainValidationError(msg)
-        if target < 0 or target == self.position:
-            msg = f"{line} {target} must name another line of the receipt"
+        if target < 0:
+            msg = f"{line} must name another line of the receipt"
+            raise DomainValidationError(msg)
+        if target == self.position:
+            msg = f"{line} names line {target + 1}, its own line; it must name another line"
             raise DomainValidationError(msg)
 
 
@@ -99,25 +103,25 @@ def _check_discount_links(items: Sequence[LineItem]) -> None:
         target = discount.applies_to_position
         if target is None:
             continue
-        line = f"line {discount.position + 1}: applies_to_position {target}"
+        line = f"line {discount.position + 1}: applies_to_position names line {target + 1}"
         item = by_position.get(target)
         if item is None:
-            msg = f"{line} names no line of the receipt"
+            msg = f"{line}, which is not on the receipt"
             raise DomainValidationError(msg)
         if item.kind is not LineKind.ITEM:
-            msg = f"{line} names line {target + 1}, a {item.kind.value} line, not an item"
+            msg = f"{line}, a {item.kind.value} line, not an item"
             raise DomainValidationError(msg)
         if target in linked:
             msg = (
-                f"{line} names line {target + 1}, which line {linked[target] + 1} already"
-                " applies to; an item takes one discount"
+                f"{line}, which line {linked[target] + 1} already applies to;"
+                " an item takes one discount"
             )
             raise DomainValidationError(msg)
         if not discount.line_total.is_negative():
-            msg = f"{line}: the discount on line {target + 1} must be negative"
+            msg = f"{line}, but the discount must be negative"
             raise DomainValidationError(msg)
         if item.line_total.amount_cents + discount.line_total.amount_cents < 0:
-            msg = f"{line}: the discount is larger than line {target + 1}'s total"
+            msg = f"{line}, but the discount is larger than that line's total"
             raise DomainValidationError(msg)
         linked[target] = discount.position
 

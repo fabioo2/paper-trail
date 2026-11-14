@@ -16,7 +16,6 @@ from pydantic import ValidationError
 from paper_trail.bootstrap import Container, database_is_current
 from paper_trail.domain.errors import DomainValidationError, NotFoundError
 from paper_trail.domain.models import LineItem, ReceiptDraft
-from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import ArithmeticReport
 from paper_trail.domain.rules.discounts import DiscountAttribution, Refusal
 from paper_trail.interfaces.cli.schemas import ReceiptImport
@@ -101,11 +100,10 @@ def discount_row(discount: LineItem, item: LineItem | None, reason: Refusal | No
     head = f"pos {discount.position} `{discount.raw_text}` {discount.line_total.amount_text}"
     if item is None:
         return f"{head} receipt level ({reason})"
-    paid = item.line_total.amount_cents + discount.line_total.amount_cents
-    regular = item.line_total.amount_text
+    paid = item.line_total + discount.line_total
     return (
-        f"{head} -> pos {item.position} `{item.raw_text}`: regular {regular},"
-        f" paid {Money(paid, item.line_total.currency).amount_text}"
+        f"{head} -> pos {item.position} `{item.raw_text}`:"
+        f" regular {item.line_total.amount_text}, paid {paid.amount_text}"
     )
 
 

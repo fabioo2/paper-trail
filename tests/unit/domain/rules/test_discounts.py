@@ -3,7 +3,7 @@
 Pinned, in ``paper_trail.domain.rules.discounts`` (pure):
 
 - ``discount_reference(raw_text)``: the code a discount names (B of ``A / B`` when B is 4-13
-  digits, else A when A is), ``"MULTIPLE"``, or None (P1).
+  digits, else A when A is and B has no digit), ``"MULTIPLE"``, or None (P1).
 - ``attribute_discounts(lines)``: every DISCOUNT line once, linked to the nearest preceding
   untaken ITEM line with its code (leading zeros aside) or kept at receipt level with a
   ``Refusal``; links already on the lines are kept and reserve their item (P2).
@@ -42,7 +42,6 @@ from tests.factories import (
     item_line,
     line_item,
     printed_lines,
-    simple_lines,
 )
 
 COUPON = "0000000001"
@@ -58,13 +57,18 @@ DISCOUNT_REFERENCES = [
     pytest.param("MULTIPLE", MULTIPLE, id="TC-05-multiple"),
     pytest.param(f"{COUPON} / MULTIPLE", MULTIPLE, id="TC-05-coupon-multiple"),
     pytest.param(f"{COUPON} / multiple", MULTIPLE, id="TC-05-multiple-any-case"),
+    pytest.param("multiple", MULTIPLE, id="TC-05-bare-multiple-any-case"),
+    pytest.param("MULTIPLE SAVINGS", MULTIPLE, id="TC-05-multiple-as-first-word"),
+    pytest.param("MULTIPLE / 1234567", MULTIPLE, id="TC-05-multiple-left-of-pair"),
+    pytest.param("multiple/1234567", MULTIPLE, id="TC-05-multiple-left-any-case"),
     pytest.param("Instant savings", None, id="TC-06-no-code"),
     pytest.param("TPD", None, id="TC-06-tpd-alone"),
     pytest.param("", None, id="TC-06-empty"),
     pytest.param("TPD/1281", "1281", id="TC-108-4-digits"),
     pytest.param("TPD/0000001362394", "0000001362394", id="TC-108-13-digits"),
-    pytest.param("1543210 / 12", "1543210", id="TC-108-b-2-digits"),
-    pytest.param("1543210 / 12345678901234", "1543210", id="TC-108-b-14-digits"),
+    pytest.param("1543210 / 12", None, id="TC-108-b-2-digits"),
+    pytest.param("1543210 / 12345678901234", None, id="TC-108-b-14-digits"),
+    pytest.param("0000399102 / 3139415A", None, id="TC-108-b-garbled"),
     pytest.param("TPD/123", None, id="TC-108-b-3-digits"),
     pytest.param("12/34", None, id="TC-108-neither-side"),
 ]
@@ -155,6 +159,11 @@ LINKING = [
         id="TC-17-quantity-marker",
     ),
     pytest.param(
+        [it("(1)05700001285 CRV CHKKN", 599), dc("TPD/05700001285", -100)],
+        {1: 0},
+        id="TC-17-marker-without-space",
+    ),
+    pytest.param(
         [it(CHOC, 1699), dc("TPD/0001362394", -400)], {1: 0}, id="TC-07-zeros-on-discount"
     ),
     pytest.param(
@@ -164,6 +173,21 @@ LINKING = [
     ),
     pytest.param(
         [it(CHOC, 1699), dc("MULTIPLE", -600)], {1: Refusal.MULTIPLE}, id="TC-18-multiple"
+    ),
+    pytest.param(
+        [it(CHOC, 1699), dc("multiple savings", -600)],
+        {1: Refusal.MULTIPLE},
+        id="TC-18-multiple-first-word-any-case",
+    ),
+    pytest.param(
+        [it(CHOC, 1699), dc("MULTIPLE / 1362394", -600)],
+        {1: Refusal.MULTIPLE},
+        id="TC-18-multiple-left-of-pair",
+    ),
+    pytest.param(
+        [it(CHOC, 1699), dc("0000399102 / 1362394A", -400)],
+        {1: Refusal.NO_REFERENCE},
+        id="TC-108-garbled-code-not-the-coupon",
     ),
     pytest.param(
         [it(CHOC, 1699), dc("Instant savings", -400)],
@@ -268,6 +292,11 @@ LINKING = [
         {1: Refusal.NOT_A_SAVING},
         id="Q23-not-a-saving-before-no-reference",
     ),
+    pytest.param(
+        [it("1234567 KS ORG EGGS 24CT", 899), it("1234567 KS 2% MILK", 658, "2")],
+        {},
+        id="TC-35-no-discount-lines",
+    ),
 ]
 
 
@@ -281,51 +310,32 @@ def test_linking(specs: list[Spec], expected: dict[int, Outcome]) -> None:
     assert with_attribution(lines, found) == expected_lines(lines, expected)
 
 
-def test_tc_16_the_printed_receipt() -> None:
-    lines = printed_lines()
-
-    found = attribute_discounts(lines)
-
-    links = tuple(
-        DiscountLink(discount, item, lines[discount].raw_text.removeprefix("TPD/"), new=True)
-        for discount, item in PRINTED_LINKS.items()
-    )
-    multiple = ReceiptLevelDiscount(PRINTED_MULTIPLE, Refusal.MULTIPLE, MULTIPLE)
-    assert found == DiscountAttribution(links, (multiple,))
-    assert found.new_links == links
-    assert with_attribution(lines, found) == printed_lines(PRINTED_LINKS)
-
-
-def test_tc_114_links_on_the_lines_are_reported_as_kept() -> None:
-    lines = printed_lines({6: 5, 8: 7})
+@pytest.mark.parametrize(
+    "kept",
+    [{}, {6: 5, 8: 7}],
+    ids=["TC-16-the-printed-receipt", "TC-114-links-on-the-lines-are-kept"],
+)
+def test_tc_16_114_the_printed_receipt(kept: dict[int, int]) -> None:
+    """Seven links and the MULTIPLE either way; the links the lines carry in are not new."""
+    lines = printed_lines(kept)
 
     found = attribute_discounts(lines)
 
     links = tuple(
         DiscountLink(
-            discount, item, lines[discount].raw_text.removeprefix("TPD/"), new=discount > 8
+            discount, item, lines[discount].raw_text.removeprefix("TPD/"), new=discount not in kept
         )
         for discount, item in PRINTED_LINKS.items()
     )
     multiple = ReceiptLevelDiscount(PRINTED_MULTIPLE, Refusal.MULTIPLE, MULTIPLE)
     assert found == DiscountAttribution(links, (multiple,))
-    assert (len(found.links), len(found.receipt_level), len(found.new_links)) == (7, 1, 5)
+    assert len(found.new_links) == 7 - len(kept)
     assert with_attribution(lines, found) == printed_lines(PRINTED_LINKS)
-
-
-def test_tc_35_a_receipt_without_discounts() -> None:
-    lines = simple_lines()[:4]
-
-    found = attribute_discounts(lines)
-
-    assert found == DiscountAttribution((), ())
-    assert found.new_links == ()
-    assert with_attribution(lines, found) == lines
 
 
 # --- properties (TC-30, TC-31, TC-34) -----------------------------------------------------------
 
-CODES = ["1362394", "1543210", "1234567", "1695232", "1281"]
+CODES = ["1362394", "1543210"]
 
 
 @dataclass(frozen=True)
@@ -336,15 +346,25 @@ class Generated:
 
 @st.composite
 def receipts(draw: st.DrawFn) -> Generated:
+    """Mostly items and coded discounts of two codes, the discounts mostly small savings, so
+    links and refusals between same-code pairs are common; several links on one receipt come
+    up less often (about 8% of examples)."""
     lines: list[LineItem] = []
     codes: dict[int, str] = {}
     for position in range(draw(st.integers(min_value=0, max_value=12))):
-        kind = draw(st.sampled_from(list(LineKind)))
+        kind = draw(st.sampled_from([*[LineKind.ITEM] * 3, *[LineKind.DISCOUNT] * 3, *LineKind]))
         code = draw(st.sampled_from(CODES))
         printed = draw(st.sampled_from(["", "0", "000"])) + code
         if kind is LineKind.DISCOUNT:
-            shape = draw(st.sampled_from(["TPD/{}", "0000000001 / {}", "MULTIPLE", "TPD"]))
-            cents = draw(st.integers(min_value=-3000, max_value=500))
+            shape = draw(
+                st.sampled_from(["TPD/{}", "TPD/{}", "0000000001 / {}", "MULTIPLE", "TPD"])
+            )
+            small = draw(st.integers(min_value=0, max_value=3)) > 0
+            cents = draw(
+                st.integers(min_value=-600, max_value=-1)
+                if small
+                else st.integers(min_value=-3000, max_value=500)
+            )
             line = discount_line(position, shape.format(printed), cents)
             if "{}" in shape:
                 codes[position] = code

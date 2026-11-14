@@ -96,22 +96,24 @@ def with_attribution(lines: Sequence[LineItem], found: DiscountAttribution) -> t
 ```
 
 **Reading the reference (`discount_reference`).** The pattern is `^\s*(?P<left>[A-Za-z0-9]+)\s*/\s*(?P<right>[A-Za-z0-9]+)`, and anything after it is ignored.
-- `right` is `MULTIPLE` (any case) -> `"MULTIPLE"`.
+- `left` or `right` is `MULTIPLE` (any case) -> `"MULTIPLE"`. A line with no pair whose first word is `MULTIPLE` (any case, as the Costco photo prints `MULTIPLE 6.00-`) is `"MULTIPLE"` too.
 - `right` is 4-13 digits -> `right`. This covers `0000399102 / 3139415`, `TPD/1362394` and `0000391723 /1998068`.
-- Otherwise `left` is 4-13 digits -> `left`. This covers `1362394/TPD`, which `is_item_reference` already treats as a reference.
-- Otherwise None.
+- Otherwise `left` is 4-13 digits and `right` has no digit -> `left`. This covers `1362394/TPD`, which `is_item_reference` already treats as a reference.
+- Otherwise None: a `right` with digits that is not a code (`3139415A`, 14 or more digits) names nothing, so `0000399102 / 3139415A` stays at receipt level with `NO_REFERENCE` rather than guessing the coupon number.
 
 Costco's left-hand number (`0000399102`) is the coupon number. It is never compared when a code stands on the right.
 
 **Code equality.** Both sides go through `lstrip("0")`: the item's code from `split_item_code(raw_text)` and the reference. So `0001281` equals `1281`, and an 11-digit UPC equals the same digits printed with a leading zero.
 
 **Pairing (`attribute_discounts`).** Discount lines are handled in position order, considering only DISCOUNT lines whose `applies_to_position` is None. Lines a person already attributed are kept, and their items count as taken.
-1. Reference None -> `NO_REFERENCE`; `MULTIPLE` -> `MULTIPLE`.
+1. An amount that is not negative -> `NOT_A_SAVING` (plan amendment A1; checked first, Q23). Reference None -> `NO_REFERENCE`; `MULTIPLE` -> `MULTIPLE`.
 2. Candidates are the ITEM lines at a smaller position whose code equals the reference and that are not yet taken.
 3. No candidate -> `NO_ITEM`. Items that come *after* the discount are never used: Costco and Superstore print the saving under its item.
 4. The candidate with the largest position (nearest above) is chosen. With 5 CHOC PISTACH lines interleaved with 5 discounts, each discount takes the line just above it. With all 5 items printed first and all 5 discounts after, the first discount takes the 5th item, the second the 4th, and so on. Every item still gets exactly one discount, and the per-item result is the same because the lines are identical.
 5. `abs(discount) > item.line_total` -> `EXCEEDS_ITEM`, so paid can never be negative.
 6. Otherwise the pair is made and the item is taken.
+
+**Fixed point (owner decision Q31).** The pass is repeated on its own output until it adds no link. A discount refused because its nearest item was too small can then find the next free item once a later discount has taken that one, and a discount that loses its item to a later discount's link reports `NO_ITEM`. Attributing the result again therefore adds nothing and gives the same reasons, which is what makes the backfill idempotent.
 
 **Exact or nothing.** Every refusal leaves the discount at receipt level, with its reason in the result (it goes into the trace). The rule never changes an amount, a kind or a quantity. `with_attribution` returns the lines with `applies_to_position` set on linked discounts, and nothing else changed.
 
@@ -243,13 +245,15 @@ class PriceObservation:
   - update each affected observation's discount fields (`PriceRepository.set_discount(line_item_id, discount: Money)`, which recomputes the derived columns from the domain object);
   - receipts without a purchase date have no observations, so only their links are set.
 - **Idempotent:** a second `--apply` reports "0 changes". It writes no amounts, no products and no aliases, and calls no model.
+- **A failure stops the run** (plan answer Q28): the failing receipt's unit rolls back whole, the receipts before it stay applied, and the command exits 1 naming the receipt; a rerun finishes the rest. An unknown or not completed `--receipt` exits 2 before anything is read.
 - `--run NAME` targets a run database, as the other commands do.
 - **Expected on the main database** (from the owner's listing): every coded discount linked, MULTIPLE at receipt level. Gold Kiwi product 24: regular 15.99, discount -4.00, paid 11.99. The exact counts are whatever the dry run prints; they go into the experiment notes.
 
 ## 10. Trace
 
 - `save_receipt` TOOL row: "COMPLETED · 22 items · discounts 7 linked · 1 receipt-level". Its data carries the full `discounts_receipt_level` list.
-- The `persist` node emits one `NOTE` (agent SUPERVISOR, name `discounts`) **only when** something stays at receipt level, for example "discount pos 4 `0000398549 / MULTIPLE` -6.00 kept at receipt level: multiple". No discount stays unexplained.
+- The tracing wrapper around the tools (`TracingToolGateway`, which records the TOOL row; nodes hold no tracing code) emits one `NOTE` after the `save_receipt` call (agent SUPERVISOR, name `discounts`) **only when** something stays at receipt level, for example "kept at receipt level: pos 4 `0000398549 / MULTIPLE` (multiple)". Its data lists each one's position, raw text and reason. No discount stays unexplained.
+- A receipt a person forced through can hold a negative ITEM line (a return). A price cannot be negative, so matching leaves that line without an observation, the receipt completes, and the wrapper emits a `prices` NOTE after `save_matches` naming the line (owner decision Q32).
 - No new `TraceKind`; NOTE exists since ADR-0017.
 
 ## 11. README "What gets saved"
@@ -347,7 +351,7 @@ Pin these in `docs/tests/discounts-and-paid-prices.md`, as the other plans do.
 | `src/paper_trail/ports/repositories.py` | the two new repository methods |
 | `src/paper_trail/application/{products,receipts}.py`, `application/prices.py` (new: backfill) | sections 5, 8, 9 |
 | `src/paper_trail/application/payloads.py`, `interfaces/cli/schemas.py` | optional link fields |
-| `src/paper_trail/tools/models.py`, `tools/handlers.py`, `agents/tracing.py`, `agents/nodes/persist.py` | output counts, summary, NOTE |
+| `src/paper_trail/tools/models.py`, `tools/handlers.py`, `agents/tracing.py` | output counts, summary, NOTE |
 | `src/paper_trail/interfaces/cli/{main,prices}.py` | `prices backfill` |
 | `src/paper_trail/interfaces/web/schemas/receipts.py`, OpenAPI spec, TS client | `applies_to_position` |
 | `README.md`, `docs/adr/0017-...md` (amendment), `docs/tests/discounts-and-paid-prices.md` | |

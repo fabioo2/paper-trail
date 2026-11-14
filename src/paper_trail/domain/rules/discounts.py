@@ -22,21 +22,27 @@ _CODE = re.compile(r"[0-9]{4,13}")
 
 
 class Refusal(StrEnum):
-    """Why a discount stays at receipt level."""
+    """Why a discount stays at receipt level: ``MULTIPLE`` (a saving over several items),
+    ``NO_REFERENCE`` (no code on the line, "TPD", "INSTANT SAVINGS"), ``NO_ITEM`` (no earlier
+    ITEM line with that code that has no discount yet), ``EXCEEDS_ITEM`` (larger than the item's
+    line total) or ``NOT_A_SAVING`` (the amount is not negative)."""
 
-    MULTIPLE = auto()  # "... / MULTIPLE": a saving over several items
-    NO_REFERENCE = auto()  # no code on the line ("TPD", "INSTANT SAVINGS")
-    NO_ITEM = auto()  # no earlier ITEM line with that code that has no discount yet
-    EXCEEDS_ITEM = auto()  # the discount is larger than the item's line total
-    NOT_A_SAVING = auto()  # the amount is not negative
+    MULTIPLE = auto()
+    NO_REFERENCE = auto()
+    NO_ITEM = auto()
+    EXCEEDS_ITEM = auto()
+    NOT_A_SAVING = auto()
 
 
 @dataclass(frozen=True, slots=True)
 class DiscountLink:
+    """A discount line tied to its item. ``reference`` is the code as printed on the discount
+    line, if any; ``new`` is False for a link the line already carried."""
+
     discount_position: int
     item_position: int
-    reference: str | None  # the code as printed on the discount line, if any
-    new: bool  # made by the rule now; False for a link the line already carried
+    reference: str | None
+    new: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +54,10 @@ class ReceiptLevelDiscount:
 
 @dataclass(frozen=True, slots=True)
 class DiscountAttribution:
-    """Every DISCOUNT line of a receipt, either linked or kept at receipt level."""
+    """Every DISCOUNT line of a receipt, either linked (every effective link, kept and new, by
+    discount position) or kept at receipt level."""
 
-    links: tuple[DiscountLink, ...]  # every effective link, kept and new, by discount position
+    links: tuple[DiscountLink, ...]
     receipt_level: tuple[ReceiptLevelDiscount, ...]
 
     @property
@@ -62,18 +69,20 @@ def discount_reference(raw_text: str) -> str | None:
     """The item code a discount line names, ``MULTIPLE``, or None when it names none.
 
     In ``A / B`` the code is B when B is 4-13 digits (A is then a coupon number), else A when A
-    is; a line that starts with ``MULTIPLE`` or has it as B is ``MULTIPLE``.
+    is and B has no digit at all; a B with digits that is not a code names none. A line whose
+    first word is ``MULTIPLE``, or with ``MULTIPLE`` on either side of the pair, in any case, is
+    ``MULTIPLE``.
     """
     match = _PAIR.match(raw_text)
     if match is None:
         words = raw_text.split()
         return MULTIPLE if words and words[0].upper() == MULTIPLE else None
     left, right = match["left"], match["right"]
-    if right.upper() == MULTIPLE:
+    if MULTIPLE in (left.upper(), right.upper()):
         return MULTIPLE
     if _CODE.fullmatch(right):
         return right
-    if _CODE.fullmatch(left):
+    if _CODE.fullmatch(left) and not any(char.isdigit() for char in right):
         return left
     return None
 

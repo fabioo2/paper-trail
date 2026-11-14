@@ -4,6 +4,7 @@ The attribution rule runs on each COMPLETED receipt's stored lines, newest first
 stored is kept; the rule fills only the rest. A dry run writes nothing; applying sets the new
 links and the discount of each linked item's price observation, one unit of work per receipt.
 No amount, product or alias is written and no model is called, so a second run changes nothing.
+A receipt whose unit fails stops the run; when applying, the receipts before it stay applied.
 """
 
 from dataclasses import dataclass
@@ -22,19 +23,24 @@ log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class BackfilledDiscount:
-    """One DISCOUNT line of a stored receipt and what the backfill does with it."""
+    """One DISCOUNT line of a stored receipt and what the backfill does with it: the ITEM line
+    it reduces (None at receipt level, with the ``reason``), whether the link is not stored yet
+    (``new_link``, set by ``apply``) and whether the item's price observation takes the discount
+    (``price_updated``; False when the link is all that changes)."""
 
     receipt_id: int
     discount: LineItem
-    item: LineItem | None  # the ITEM line it reduces; None at receipt level
-    reason: Refusal | None  # why it stays at receipt level; None when linked
-    new_link: bool  # the link is not stored yet (set by --apply)
-    price_updated: bool  # the item's price observation takes the discount (False: link only)
+    item: LineItem | None
+    reason: Refusal | None
+    new_link: bool
+    price_updated: bool
 
 
 @dataclass(frozen=True, slots=True)
 class PriceBackfill:
-    discounts: tuple[BackfilledDiscount, ...]  # newest receipt first, then by position
+    """The discounts of the receipts looked at, newest receipt first, then by position."""
+
+    discounts: tuple[BackfilledDiscount, ...]
     applied: bool
 
     @property
@@ -50,6 +56,14 @@ class PriceBackfill:
         return self.links_set + self.prices_updated
 
 
+class BackfillStoppedError(Exception):
+    """A receipt's unit of work failed; when applying, the receipts before it stay applied."""
+
+    def __init__(self, receipt_id: int, error: Exception) -> None:
+        super().__init__(f"{type(error).__name__}: {error}")
+        self.receipt_id = receipt_id
+
+
 class BackfillPrices:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
@@ -59,17 +73,16 @@ class BackfillPrices:
         with ``apply``, store the outcome. NotFoundError for an unknown ``receipt_id``,
         DomainValidationError for one that is not COMPLETED.
 
-        The scan only collects ids; each receipt is then read, attributed and written in its
-        own unit of work, so a failure leaves earlier receipts applied and that one untouched.
+        The scan only collects ids; each receipt is then read, attributed and (with ``apply``)
+        written in its own unit of work, so a failure leaves earlier receipts applied and that
+        one untouched: BackfillStoppedError names it. A dry run that stops has written nothing.
         """
         found: list[BackfilledDiscount] = []
         for completed in self._receipt_ids(receipt_id):
-            with self._uow_factory(read_only=not apply) as uow:
-                discounts = _backfilled(uow, completed)
-                if apply:
-                    _store(uow, discounts)
-                    uow.commit()
-            found += discounts
+            try:
+                found += self._receipt(completed, apply=apply)
+            except Exception as error:
+                raise BackfillStoppedError(completed, error) from error
         backfill = PriceBackfill(tuple(found), applied=apply)
         log.info(
             "prices.backfilled",
@@ -79,6 +92,14 @@ class BackfillPrices:
             prices_updated=backfill.prices_updated,
         )
         return backfill
+
+    def _receipt(self, receipt_id: int, *, apply: bool) -> list[BackfilledDiscount]:
+        with self._uow_factory(read_only=not apply) as uow:
+            discounts = _backfilled(uow, receipt_id)
+            if apply:
+                _store(uow, discounts)
+                uow.commit()
+        return discounts
 
     def _receipt_ids(self, receipt_id: int | None) -> list[int]:
         """The COMPLETED receipts to look at, newest first."""

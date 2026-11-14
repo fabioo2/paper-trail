@@ -3,16 +3,27 @@
 
 A dry run by default: one row per discount line (linked to its item with the regular and paid
 price, or kept at receipt level with the reason) and a totals line. ``--apply`` writes the new
-links and the observations' discounts. Exit codes: 0 done; 1 the main database is not migrated;
-2 an unknown or not completed ``--receipt`` (or a bad ``--run``). No model is called.
+links and the observations' discounts. Exit codes: 0 done; 1 the main database is not migrated,
+or a receipt failed (named; with ``--apply`` the receipts before it stay applied and a rerun
+finishes the rest, a dry run has written nothing); 2 an unknown or not completed ``--receipt``
+(or a bad ``--run``). No model is called.
 """
 
 import typer
 
-from paper_trail.application.prices import BackfilledDiscount, PriceBackfill
+from paper_trail.application.prices import (
+    BackfilledDiscount,
+    BackfillStoppedError,
+    PriceBackfill,
+)
 from paper_trail.config import Settings
 from paper_trail.domain.errors import DomainValidationError, NotFoundError
-from paper_trail.interfaces.cli.receipts import EXIT_INVALID_INPUT, discount_row, fail
+from paper_trail.interfaces.cli.receipts import (
+    EXIT_INVALID_INPUT,
+    EXIT_UNAVAILABLE,
+    discount_row,
+    fail,
+)
 from paper_trail.interfaces.cli.runs import open_run_database
 
 
@@ -24,6 +35,14 @@ def backfill_prices(
             backfill = container.backfill_prices(receipt_id=receipt_id, apply=apply)
         except (NotFoundError, DomainValidationError) as error:
             fail(EXIT_INVALID_INPUT, str(error))
+        except BackfillStoppedError as error:
+            after = (
+                "the receipts before it are applied, run it again to finish"
+                if apply
+                else "nothing was written"
+            )
+            stopped = f"backfill stopped at receipt {error.receipt_id}: {error}"
+            fail(EXIT_UNAVAILABLE, f"{stopped}; {after}")
     echo_backfill(backfill)
 
 

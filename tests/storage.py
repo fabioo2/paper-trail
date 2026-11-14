@@ -1,15 +1,30 @@
 """Helpers shared by the Stage 1 storage suites (contract, integration, e2e)."""
 
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import closing
+from dataclasses import replace
+from datetime import date, datetime
 from pathlib import Path
 
 from sqlalchemy import Engine
 
+from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.models import LineItem, Receipt
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
-from tests.factories import product, receipt
+from tests.factories import (
+    CREATED_AT,
+    PURCHASED_ON,
+    SIMPLE_SUBTOTAL,
+    SIMPLE_TAX,
+    SIMPLE_TOTAL,
+    cad,
+    price_observation,
+    product,
+    receipt,
+    simple_lines,
+)
 from tests.support import require_id
 
 
@@ -69,3 +84,64 @@ def seed_product_and_receipt(factory: UnitOfWorkFactory) -> tuple[int, int, list
         )
 
     return in_unit(factory, seed)
+
+
+def seed_pre_feature(  # noqa: PLR0913 - a test builder: keyword-only overrides with defaults
+    factory: UnitOfWorkFactory,
+    lines: Sequence[LineItem] | None = None,
+    *,
+    totals: tuple[int, int, int] = (SIMPLE_SUBTOTAL, SIMPLE_TAX, SIMPLE_TOTAL),
+    created_at: datetime = CREATED_AT,
+    purchased_on: date | None = PURCHASED_ON,
+    status: ReceiptStatus = ReceiptStatus.COMPLETED,
+    stage: ProcessingStage = ProcessingStage.DONE,
+    unmatched: frozenset[int] = frozenset(),
+) -> Receipt:
+    """A receipt stored as before discounts were linked, the way migration 0004 leaves existing
+    data: ``lines`` (SIMPLE by default) with no link; every ITEM line not in ``unmatched`` has
+    its own product and, when the receipt is dated, an observation at the regular price with
+    discount 0."""
+    subtotal, tax, total = totals
+
+    def store(uow: UnitOfWork) -> Receipt:
+        items = tuple(
+            replace(
+                line,
+                product_id=require_id(uow.products.add(product(canonical_name=line.raw_text)).id),
+            )
+            if line.kind is LineKind.ITEM and line.position not in unmatched
+            else line
+            for line in (simple_lines() if lines is None else lines)
+        )
+        stored = uow.receipts.add(
+            receipt(
+                status=status,
+                stage=stage,
+                purchased_on=purchased_on,
+                subtotal=cad(subtotal),
+                tax=cad(tax),
+                total=cad(total),
+                items=items,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+        if purchased_on is not None:
+            uow.prices.add_many(
+                [
+                    price_observation(
+                        product_id=require_id(item.product_id),
+                        receipt_id=require_id(stored.id),
+                        line_item_id=require_id(item.id),
+                        observed_on=purchased_on,
+                        quantity=item.quantity,
+                        unit_price=item.unit_price or item.line_total.divided_by(item.quantity),
+                        line_total=item.line_total,
+                    )
+                    for item in stored.items
+                    if item.product_id is not None
+                ]
+            )
+        return stored
+
+    return in_unit(factory, store)

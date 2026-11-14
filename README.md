@@ -240,13 +240,13 @@ add up is still recorded, as `needs_review`, with an open review item; one that 
 `completed` and, when its purchase date is known, adds a price observation for each `item` line
 that names a product (a deposit, discount or fee line gets a product only when the file names
 one for it, and is never priced itself; a discount that names an item's code, such as
-`TPD/1234567`, is applied to that item's paid price, see "What gets saved" below). An item's
-`applies_to` (the 0-based position of the item a discount line reduces) sets that link by hand;
-the rest are found from the codes. `--dry-run` also lists each discount and the item it applies
-to, or why it stays on the receipt. Card numbers are masked before anything is stored or logged.
-Invalid files exit with status 2 and name the offending field. The format (unknown fields are errors, amounts are integer cents; the lines add
-up to the subtotal, and subtotal plus tax to the total; `tests/data/receipts/costco_simple.json`
-is a full example):
+`TPD/1234567`, is applied to that item's paid price, see "What gets saved" below). A discount
+line's `applies_to` (the 0-based position of the item it reduces) sets that link by hand; the
+rest are found from the codes. `--dry-run` also lists each discount and the item it applies to,
+or why it stays on the receipt. Card numbers are masked before anything is stored or logged.
+Invalid files exit with status 2 and name the offending field. The format (unknown fields are
+errors, amounts are integer cents; the lines add up to the subtotal, and subtotal plus tax to
+the total; `tests/data/receipts/costco_simple.json` is a full example):
 
 ```json
 {
@@ -432,9 +432,19 @@ without a model call. Each of these lines was followed by a `-4.00` instant-savi
 the kiwi's code (`0000399102 / 3139415`), stored as its own `discount` line and linked to the
 item above it with that code: the regular 15.99 is the price history; 11.99 is what was paid. A
 discount that cannot be tied to one item (`0000398549 / MULTIPLE`, or a line without a code)
-stays on the receipt, never guessed or prorated. Receipts stored before discounts were linked
-are brought up to date with `paper-trail prices backfill` (a dry run; `--apply` writes, and
-`--run NAME` and `--receipt ID` narrow it). The tables behind it:
+stays on the receipt, never guessed or prorated. A discount larger than the nearest free item
+with its code stays on the receipt too, unless a later discount with the same code takes that
+item: then it links to an earlier, larger item with the code, or, with none, is reported as
+having no item (`no_item`). The upgrade that adds discounts (migration 0004) refuses to run
+while any price observation has a negative line total, and lists their ids; find them with
+`SELECT id FROM price_observations WHERE line_total_cents < 0`, delete or correct them, and
+upgrade again. Receipts stored before discounts were linked are brought up to date with
+`paper-trail prices backfill` (a dry run; `--apply` writes, and `--run NAME` and `--receipt ID`
+narrow it). It looks at completed receipts only: one that was still being processed when the
+upgrade ran (saved, not yet matched) gets its prices at discount 0 when it completes, so run the
+backfill once more after it has. If a receipt fails, the command stops with exit status 1 naming
+it; the receipts before it stay applied and running it again finishes the rest. The tables
+behind it:
 
 ```mermaid
 erDiagram
@@ -461,6 +471,8 @@ erDiagram
   line (per line and per unit), what was paid and whether it was on sale. The regular prices are
   the price history; the paid amounts are the spending. Discounts that cannot be tied to one item
   (`MULTIPLE`) stay on the receipt, so what was spent on items is the paid amounts plus those.
+  A negative item line (a return on a receipt a person forced through review) gets no row; the
+  trace notes it.
 - `corrections` (a person's fixes, the long-term memory matching reads first), `review_items`
   and `jobs`.
 

@@ -256,7 +256,8 @@ def test_tc_98_an_invalid_explicit_link_exits_2_naming_applies_to(
     code, stdout, stderr = _import(_write(tmp_path, data))
 
     assert code == 2
-    assert "applies_to" in stderr
+    assert "  line 5: applies_to names line 5, its own line; it must name another line" in stderr
+    assert "applies_to_position" not in stderr
     assert "Traceback" not in stderr + stdout
     assert _row_count(data_dir) == 0
 

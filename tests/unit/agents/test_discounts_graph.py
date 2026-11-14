@@ -1,4 +1,4 @@
-"""Discounts through the receipt graph (discounts-and-paid-prices plan R1, R2, R5, R7, R10;
+"""Discounts through the receipt graph (discounts-and-paid-prices plan R1, R2, R5, R7, R10, Q32;
 TC-89 to TC-94).
 
 The Costco photo's printed answer (``costco_printed``: five ``1362394`` items each followed by
@@ -8,30 +8,35 @@ new product, so every item is matched and priced with no matching model call.
 
 Pinned:
 - ``save_receipt`` links each coded discount to the nearest preceding untaken item with that
-  code; ``MULTIPLE`` stays at receipt level. Its trace row reads
-  ``PROCESSING · 22 items · discounts 7 linked · 1 receipt-level`` (A9).
+  code; ``MULTIPLE`` stays at receipt level. Its output counts 7 linked and 1 receipt-level
+  (the row's wording is ``test_tracing.py``'s, TC-88).
 - Each linked item's price observation has the discount, paid = line total + discount and
   on_sale; every other one has discount 0, paid = line total, not on sale.
-- One NOTE named ``discounts`` (SUPERVISOR) per ``persist`` when a discount is receipt-level,
-  naming each as ``pos N`` with its reason; none when every discount is linked (Q10, Q29).
-- No model input or output carries the link field.
+- One NOTE named ``discounts`` (SUPERVISOR) per ``save_receipt`` when a discount is
+  receipt-level (Q10, Q29). This is the wiring check; the NOTE's wording, data and the
+  no-NOTE cases are ``test_tracing.py``'s (TC-91, TC-126).
+- No model output schema carries the link field.
+- A negative ITEM line on a receipt a person forced through gets no price observation, the
+  receipt completes, and a ``prices`` NOTE names the line (Q32), whether matching linked it or
+  the review answer named its product.
 """
 
 import json
 from collections.abc import Callable
-from typing import Any
+from dataclasses import replace
+
+import pytest
 
 from paper_trail.agents.prompts import PROMPTS_DIR
 from paper_trail.agents.schemas import ExtractionOutput, MatchDecision, PrintedExtraction
 from paper_trail.application.process_receipt import ProcessOutcome
 from paper_trail.domain.enums import AgentRole, LineKind, ReceiptStatus
-from paper_trail.domain.models import PriceObservation, Receipt
-from paper_trail.domain.rules.discounts import Refusal
+from paper_trail.domain.models import JsonValue, PriceObservation, Receipt
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.agents import GraphOutcome
 from paper_trail.ports.tools import ToolGateway
 from tests.agent_harness import Harness, agent_settings, build_harness
-from tests.extractions import inconsistent_extraction, printed_fixture
+from tests.extractions import extraction, inconsistent_extraction, printed_fixture
 from tests.factories import (
     CHOC,
     KIWI,
@@ -44,8 +49,6 @@ from tests.factories import (
 from tests.fakes.llm import Reply, ScriptedLlm
 from tests.fakes.tools import CrashAfterToolGateway
 from tests.support import require_id
-
-PRINTED_ROW = "PROCESSING · 22 items · discounts 7 linked · 1 receipt-level"
 
 type Observed = tuple[int, int, int, bool]  # discount, unit discount, paid (cents), on sale
 
@@ -124,26 +127,25 @@ def _expected_paid() -> dict[int, Observed]:
     return expected
 
 
-def _save_rows(harness: Harness, receipt_id: int) -> list[str]:
-    return [
-        event.summary
-        for event in harness.events(receipt_id)
-        if event.kind is TraceKind.TOOL and event.name == "save_receipt"
-    ]
+def _save_counts(harness: Harness, receipt_id: int) -> list[tuple[JsonValue, int]]:
+    """(linked, receipt-level) of each ``save_receipt`` call, from its traced output."""
+    counts: list[tuple[JsonValue, int]] = []
+    for event in harness.events(receipt_id):
+        if event.kind is TraceKind.TOOL and event.name == "save_receipt":
+            output = event.data["output"]
+            assert isinstance(output, dict)
+            receipt_level = output["discounts_receipt_level"]
+            assert isinstance(receipt_level, list)
+            counts.append((output["discounts_linked"], len(receipt_level)))
+    return counts
 
 
-def _discount_notes(harness: Harness, receipt_id: int) -> list[TraceEvent]:
+def _notes(harness: Harness, receipt_id: int, name: str = "discounts") -> list[TraceEvent]:
     return [
         event
         for event in harness.events(receipt_id)
-        if event.kind is TraceKind.NOTE and event.name == "discounts"
+        if event.kind is TraceKind.NOTE and event.name == name
     ]
-
-
-def _printed_with(**changes: Any) -> dict[str, Any]:
-    answer = printed_fixture("costco_printed")
-    answer.update(changes)
-    return answer
 
 
 # --- TC-90: the Costco answer, end to end ------------------------------------------------------
@@ -157,84 +159,46 @@ def test_tc_90_the_costco_answer_is_saved_with_its_links_and_paid_prices() -> No
     assert graph.status is ReceiptStatus.COMPLETED
     assert _links(harness.receipt(graph.receipt_id)) == PRINTED_LINKS
     assert _paid(harness, graph.receipt_id) == _expected_paid()
-    assert _save_rows(harness, graph.receipt_id) == [PRINTED_ROW]
+    assert _save_counts(harness, graph.receipt_id) == [(7, 1)]
 
 
 # --- TC-89: the link never reaches a model -----------------------------------------------------
 
 
-def test_tc_89_no_model_input_or_output_carries_the_link() -> None:
+def test_tc_89_no_model_output_schema_carries_the_link() -> None:
     schemas = [
         json.dumps(model.model_json_schema())
         for model in (ExtractionOutput, PrintedExtraction, MatchDecision)
     ]
-    schemas += [path.read_text("utf-8") for path in sorted(PROMPTS_DIR.rglob("schema.json"))]
-    harness = _harness(printed_fixture("costco_printed"))
+    prompt_schemas = [path.read_text("utf-8") for path in PROMPTS_DIR.rglob("schema.json")]
 
-    graph = _graph(harness.process_image())
-
-    assert len(schemas) == 3 + 5
-    assert [schema for schema in schemas if "applies_to" in schema] == []
-    assert graph.status is ReceiptStatus.COMPLETED
-    sent = [
-        message.content
-        for request in harness.llm.requests
-        for message in request.messages
-        if message.role == "user"
-    ]
-    assert sent
-    assert [content for content in sent if "applies_to" in content] == []
+    assert prompt_schemas
+    assert [schema for schema in schemas + prompt_schemas if "applies_to" in schema] == []
 
 
 # --- TC-91: the receipt-level NOTE -------------------------------------------------------------
 
 
-def test_tc_91_a_receipt_level_discount_is_one_supervisor_note() -> None:
-    harness = _harness(printed_fixture("costco_printed"))
-
-    graph = _graph(harness.process_image())
-
-    (note,) = _discount_notes(harness, graph.receipt_id)
-    assert note.agent is AgentRole.SUPERVISOR
-    assert "pos 4" in note.summary
-    assert Refusal.MULTIPLE.value in note.summary.casefold()
-
-
-def test_tc_91_two_receipt_level_discounts_share_one_note() -> None:
+def test_tc_91_the_receipt_level_discounts_share_one_supervisor_note() -> None:
     answer = printed_fixture("costco_printed")
     answer["items"][6]["raw_text"] = "INSTANT SAVINGS"  # no code: NO_REFERENCE
     harness = _harness(answer)
 
     graph = _graph(harness.process_image())
 
-    (note,) = _discount_notes(harness, graph.receipt_id)
-    summary = note.summary.casefold()
-    assert note.agent is AgentRole.SUPERVISOR
-    assert ("pos 4" in summary, "pos 6" in summary) == (True, True)
-    assert (Refusal.MULTIPLE.value in summary, Refusal.NO_REFERENCE.value in summary) == (
-        True,
-        True,
+    (note,) = _notes(harness, graph.receipt_id)
+    assert (note.agent, note.data) == (
+        AgentRole.SUPERVISOR,
+        {
+            "receipt_level": [
+                {"position": 4, "raw_text": "MULTIPLE", "reason": "multiple"},
+                {"position": 6, "raw_text": "INSTANT SAVINGS", "reason": "no_reference"},
+            ]
+        },
     )
     assert _links(harness.receipt(graph.receipt_id)) == {
         link: item for link, item in PRINTED_LINKS.items() if link != 6
     }
-
-
-def test_tc_91_no_note_when_every_discount_is_linked() -> None:
-    answer = _printed_with(subtotal="195.16", total="209.19")
-    del answer["items"][4]  # the MULTIPLE -6.00
-    harness = _harness(answer)
-
-    graph = _graph(harness.process_image())
-
-    assert graph.status is ReceiptStatus.COMPLETED
-    assert _links(harness.receipt(graph.receipt_id)) == {
-        link - 1: item - 1 for link, item in PRINTED_LINKS.items()
-    }
-    assert _discount_notes(harness, graph.receipt_id) == []
-    assert _save_rows(harness, graph.receipt_id) == [
-        "PROCESSING · 21 items · discounts 7 linked · 0 receipt-level"
-    ]
 
 
 # --- TC-92, TC-93: resume after a crash --------------------------------------------------------
@@ -272,7 +236,7 @@ def test_tc_93_a_crash_after_save_receipt_saves_again_with_the_same_links() -> N
     assert resumed.status is ReceiptStatus.COMPLETED
     assert _links(first.receipt(crashed.receipt_id)) == PRINTED_LINKS
     assert _paid(first, crashed.receipt_id) == _expected_paid()
-    assert _save_rows(second, crashed.receipt_id) == [PRINTED_ROW]
+    assert _save_counts(second, crashed.receipt_id) == [(7, 1)]
 
 
 # --- TC-94: a person's corrected draft ---------------------------------------------------------
@@ -303,6 +267,44 @@ def test_tc_94_a_review_answer_keeps_its_link_and_the_rule_fills_the_rest() -> N
     stored = harness.receipt(parked.receipt_id)
     assert stored.status is ReceiptStatus.COMPLETED
     assert _links(stored) == {2: 0, 4: 3}
-    assert _save_rows(harness, parked.receipt_id) == [
-        "PROCESSING · 5 items · discounts 2 linked · 0 receipt-level"
-    ]
+    assert _save_counts(harness, parked.receipt_id) == [(2, 0)]
+
+
+# --- TC-126 (Q32): a negative item line on a forced receipt ------------------------------------
+
+
+@pytest.mark.parametrize("named", [None, "Kirkland Sourdough"], ids=["matched", "review_named"])
+def test_tc_126_a_forced_receipt_with_a_negative_item_line_completes_without_its_price(
+    named: str | None,
+) -> None:
+    """The line is matched, or linked by the review answer and so left out of matching."""
+    answer = extraction(subtotal_cents=559, tax_cents=0, total_cents=559)
+    answer["items"][2] = {
+        "raw_text": "RETURN KS SOURDOUGH",
+        "description": "Kirkland Sourdough Bread return",
+        "quantity": "1",
+        "unit_price_cents": None,
+        "line_total_cents": -998,
+        "kind": "item",
+    }
+    harness = build_harness(ScriptedLlm(answer), settings=agent_settings(max_text_attempts=1))
+    parked = harness.process_image()
+    assert parked.graph is not None
+    assert parked.graph.status is ReceiptStatus.NEEDS_REVIEW
+
+    draft = harness.runner.pending_draft(parked.receipt_id)
+    assert draft is not None
+    if named is not None:
+        draft = replace(draft, product_names={2: named})
+
+    resolved = harness.resolve(
+        require_id(parked.graph.review_id), draft, force=True, reason="a return, checked on paper"
+    )
+
+    assert resolved.status is ReceiptStatus.COMPLETED
+    assert sorted(_observations(harness, parked.receipt_id)) == [0, 1]
+    (note,) = _notes(harness, parked.receipt_id, "prices")
+    assert (note.agent, note.data) == (
+        AgentRole.SUPERVISOR,
+        {"unpriced": [{"position": 2, "raw_text": "RETURN KS SOURDOUGH"}]},
+    )

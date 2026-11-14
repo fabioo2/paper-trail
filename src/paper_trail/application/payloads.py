@@ -202,7 +202,7 @@ class DraftLinePayload(BaseModel):
     unit_price: MoneyPayload | None
     line_total: MoneyPayload
     category: Category | None
-    applies_to_position: StrictInt | None = None  # set only by a person (import, review file)
+    applies_to_position: StrictInt | None = None
 
     @classmethod
     def from_line(cls, line: LineItem) -> Self:

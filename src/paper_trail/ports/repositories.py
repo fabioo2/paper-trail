@@ -61,9 +61,10 @@ class ReceiptRepository(Protocol):
     def set_discount_links(self, receipt_id: int, links: Mapping[int, int]) -> Receipt:
         """Set ``applies_to_position`` of the discount lines at the keys to the item positions
         they map to, stamp updated_at and return the receipt; line ids and everything else are
-        unchanged, and a link already equal is left as it is. ConflictError (and no change)
-        when a line already links elsewhere; NotFoundError (and no change) for an unknown
-        receipt or position; DomainValidationError for a link the domain refuses."""
+        unchanged. A link already equal is left as it is: when every link is, nothing is
+        written and updated_at stays. ConflictError (and no change) when a line already links
+        elsewhere; NotFoundError (and no change) for an unknown receipt, or a position on either
+        side that names no line; DomainValidationError for a link the domain refuses."""
         ...
 
 

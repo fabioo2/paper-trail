@@ -69,7 +69,7 @@ class LineItemOut(BaseModel):
     line_total: MoneyOut
     product_id: int | None
     category: Category | None
-    applies_to_position: int | None  # a DISCOUNT line: the position of the item it reduces
+    applies_to_position: int | None
 
     @classmethod
     def from_domain(cls, item: LineItem) -> "LineItemOut":

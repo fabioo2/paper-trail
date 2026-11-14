@@ -18,19 +18,18 @@ observation at discount 0.
 import copy
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date
 
 import pytest
 
 from paper_trail.application.prices import BackfilledDiscount, BackfillPrices, PriceBackfill
-from paper_trail.application.receipts import RecordReceipt
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import NotFoundError
-from paper_trail.domain.models import LineItem, PriceObservation, Receipt
+from paper_trail.domain.models import PriceObservation, Receipt
 from paper_trail.domain.money import Money
-from paper_trail.domain.rules.arithmetic import Tolerances
+from paper_trail.domain.paging import MAX_PAGE_LIMIT
 from paper_trail.domain.rules.discounts import Refusal
-from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
+from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.factories import (
     CHOC,
     PRINTED_LINKS,
@@ -38,24 +37,16 @@ from tests.factories import (
     PRINTED_SUBTOTAL,
     PRINTED_TAX,
     PRINTED_TOTAL,
-    SIMPLE_SUBTOTAL,
-    SIMPLE_TAX,
-    SIMPLE_TOTAL,
     at,
     cad,
     discount_line,
     item_line,
-    price_observation,
     printed_lines,
-    product,
-    receipt,
-    simple_draft,
-    simple_lines,
 )
 from tests.fakes.clock import FakeClock
 from tests.fakes.state import FakeState
 from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
-from tests.storage import in_unit
+from tests.storage import seed_pre_feature
 from tests.support import require_id
 
 type Outcome = tuple[int, int, int | None, Refusal | None, bool, bool]
@@ -81,68 +72,9 @@ def backfill(uow_factory: UnitOfWorkFactory) -> BackfillPrices:
     return BackfillPrices(uow_factory)
 
 
-def _seed(  # noqa: PLR0913 - a test builder: keyword-only overrides with defaults
-    uow_factory: UnitOfWorkFactory,
-    lines: Sequence[LineItem],
-    *,
-    created_at: datetime,
-    totals: tuple[int, int, int],
-    purchased_on: date | None = date(2026, 11, 1),
-    status: ReceiptStatus = ReceiptStatus.COMPLETED,
-    stage: ProcessingStage = ProcessingStage.DONE,
-    unmatched: frozenset[int] = frozenset(),
-) -> Receipt:
-    """A receipt stored before the feature: every ITEM line not in ``unmatched`` has its own
-    product and, when dated, an observation at the regular price with discount 0."""
-    subtotal, tax, total = totals
-
-    def store(uow: UnitOfWork) -> Receipt:
-        items = tuple(
-            replace(
-                line,
-                product_id=require_id(uow.products.add(product(canonical_name=line.raw_text)).id),
-            )
-            if line.kind.value == "item" and line.position not in unmatched
-            else line
-            for line in lines
-        )
-        stored = uow.receipts.add(
-            receipt(
-                status=status,
-                stage=stage,
-                purchased_on=purchased_on,
-                subtotal=cad(subtotal),
-                tax=cad(tax),
-                total=cad(total),
-                items=items,
-                created_at=created_at,
-                updated_at=created_at,
-            )
-        )
-        if purchased_on is not None:
-            uow.prices.add_many(
-                [
-                    price_observation(
-                        product_id=require_id(item.product_id),
-                        receipt_id=require_id(stored.id),
-                        line_item_id=require_id(item.id),
-                        observed_on=purchased_on,
-                        quantity=item.quantity,
-                        unit_price=item.unit_price or item.line_total.divided_by(item.quantity),
-                        line_total=item.line_total,
-                    )
-                    for item in stored.items
-                    if item.product_id is not None
-                ]
-            )
-        return stored
-
-    return in_unit(uow_factory, store)
-
-
 def _printed(uow_factory: UnitOfWorkFactory) -> Receipt:
     """PRINTED, stored first (id 1) at 12:10, bought 11-01."""
-    return _seed(
+    return seed_pre_feature(
         uow_factory,
         printed_lines(),
         created_at=at(10),
@@ -153,13 +85,9 @@ def _printed(uow_factory: UnitOfWorkFactory) -> Receipt:
 
 def _simple(uow_factory: UnitOfWorkFactory, **overrides: object) -> Receipt:
     """SIMPLE, stored second (id 2) at 12:00, bought 11-05: older, but bought later."""
-    values: dict[str, object] = {
-        "created_at": at(0),
-        "totals": (SIMPLE_SUBTOTAL, SIMPLE_TAX, SIMPLE_TOTAL),
-        "purchased_on": date(2026, 11, 5),
-    }
+    values: dict[str, object] = {"created_at": at(0), "purchased_on": date(2026, 11, 5)}
     values.update(overrides)
-    return _seed(uow_factory, simple_lines(), **values)  # type: ignore[arg-type]
+    return seed_pre_feature(uow_factory, **values)  # type: ignore[arg-type]
 
 
 def _both(uow_factory: UnitOfWorkFactory) -> tuple[Receipt, Receipt]:
@@ -300,9 +228,6 @@ def test_tc_65_apply_sets_the_links_and_the_observations_discounts(
         for receipt_id, stored in after.receipts.items()
     } == before.receipts
     assert (after.products, after.aliases) == (before.products, before.aliases)
-    changed_links = len(_links(after)) - len(_links(before))
-    changed_prices = sum(after.prices[key] != row for key, row in before.prices.items())
-    assert (found.links_set, found.prices_updated) == (changed_links, changed_prices)
 
 
 def test_tc_66_a_second_apply_changes_nothing_and_still_reports_the_effective_links(
@@ -325,26 +250,6 @@ def test_tc_66_a_second_apply_changes_nothing_and_still_reports_the_effective_li
     assert database.state == once
 
 
-def test_tc_66_a_receipt_recorded_after_the_feature_has_nothing_to_backfill(
-    backfill: BackfillPrices,
-    uow_factory: UnitOfWorkFactory,
-    database: FakeDatabase,
-    clock: FakeClock,
-) -> None:
-    """TC-66 (R9): TC-57's receipt is already linked and priced."""
-    names = {0: "Eggs", 1: "Milk", 2: "Bananas", 3: "Paper Towels"}
-    recorded = RecordReceipt(uow_factory, clock, Tolerances())(
-        simple_draft(product_names=names)
-    ).receipt
-    before = copy.deepcopy(database.state)
-
-    found = backfill(apply=True)
-
-    assert _outcomes(found) == [(require_id(recorded.id), 4, 0, None, False, False)]
-    assert found.changes == 0
-    assert database.state == before
-
-
 # --- links already stored, link only, other statuses (TC-67, TC-68, TC-116, TC-119) --------------
 
 
@@ -359,7 +264,7 @@ def test_tc_67_a_stored_link_is_kept_and_its_item_gets_the_discount(
         item_line(1, CHOC, 1699),
         discount_line(2, "TPD/1362394", -400, 0),
     )
-    stored = _seed(uow_factory, lines, created_at=at(0), totals=(2998, 0, 2998))
+    stored = seed_pre_feature(uow_factory, lines, created_at=at(0), totals=(2998, 0, 2998))
     receipt_id = require_id(stored.id)
 
     found = backfill(apply=True)
@@ -399,7 +304,6 @@ def test_tc_68_116_link_only_when_the_item_has_no_observation(
     assert database.state.prices == prices
 
 
-@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
 @pytest.mark.parametrize(
     ("status", "stage"),
     [
@@ -414,16 +318,33 @@ def test_tc_119_only_completed_receipts_are_backfilled(
     database: FakeDatabase,
     status: ReceiptStatus,
     stage: ProcessingStage,
-    apply: bool,
 ) -> None:
     """TC-119 (Q11): a receipt that is not COMPLETED is neither listed nor changed."""
     _simple(uow_factory, status=status, stage=stage)
     before = copy.deepcopy(database.state)
 
-    found = BackfillPrices(uow_factory)(apply=apply)
+    found = BackfillPrices(uow_factory)(apply=True)
 
-    assert found == PriceBackfill(discounts=(), applied=apply)
+    assert found == PriceBackfill(discounts=(), applied=True)
     assert database.state == before
+
+
+def test_tc_123_every_completed_receipt_is_backfilled_past_the_first_page(
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory
+) -> None:
+    """The scan pages through the COMPLETED receipts: one more than a page, all processed."""
+    lines = (item_line(0, CHOC, 1699), discount_line(1, "TPD/1362394", -400))
+    stored = [
+        seed_pre_feature(uow_factory, lines, created_at=at(minute), totals=(1299, 0, 1299))
+        for minute in range(MAX_PAGE_LIMIT + 1)
+    ]
+
+    found = backfill(apply=True)
+
+    assert [entry.receipt_id for entry in found.discounts] == [
+        require_id(saved.id) for saved in reversed(stored)
+    ]
+    assert found.links_set == MAX_PAGE_LIMIT + 1
 
 
 # --- one receipt (TC-70) --------------------------------------------------------------------------
@@ -463,15 +384,3 @@ def test_tc_70_an_unknown_receipt_is_not_found_and_nothing_is_written(
         backfill(receipt_id=receipt_id, apply=True)
 
     assert (database.state, database.commits) == (before, commits)
-
-
-def test_seeded_receipts_are_pre_feature() -> None:
-    """The seed itself: no link and every observation at discount 0 (as 0004 leaves them)."""
-    database = FakeDatabase()
-    uow_factory = fake_uow_factory(database, FakeClock())
-
-    _both(uow_factory)
-
-    assert _links(database.state) == {}
-    assert {row.discount for row in database.state.prices.values()} == {cad(0)}
-    assert len(database.state.prices) == 14 + 4

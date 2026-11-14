@@ -438,8 +438,13 @@ def test_tc_80_set_discount_links_sets_only_the_given_line(
 
 @pytest.mark.parametrize(
     ("receipt_offset", "links"),
-    [(999, {4: 0}), (0, {9: 0}), (0, {4: 0, 9: 0})],
-    ids=["unknown receipt", "unknown position", "one unknown position among known ones"],
+    [(999, {4: 0}), (0, {9: 0}), (0, {4: 0, 9: 0}), (0, {4: 9})],
+    ids=[
+        "unknown receipt",
+        "unknown position",
+        "one unknown position among known ones",
+        "unknown target position",
+    ],
 )
 def test_tc_80_set_discount_links_refuses_what_does_not_exist(
     uow_factory: UnitOfWorkFactory, receipt_offset: int, links: dict[int, int]
@@ -468,20 +473,17 @@ def _printed_linked_to_pj() -> Receipt:
 
 
 def test_tc_121_set_discount_links_never_changes_an_existing_link(
-    uow_factory: UnitOfWorkFactory,
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
 ) -> None:
     """signatures.md: a line already linked to another item is a ConflictError and nothing
-    changes; the same link again is a no-op."""
+    changes; the same link again is a no-op that writes nothing, not even updated_at."""
     saved = _add(uow_factory, _printed_linked_to_pj())
     receipt_id = require_id(saved.id)
+    fake_clock.advance(timedelta(minutes=5))
 
     with pytest.raises(ConflictError):
         in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {6: 5}))
     unchanged = _get(uow_factory, receipt_id)
     again = in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {6: 3}))
 
-    assert unchanged == saved
-    assert again.items == saved.items
-    stored = _get(uow_factory, receipt_id)
-    assert stored is not None
-    assert stored.items == saved.items
+    assert (unchanged, again, _get(uow_factory, receipt_id)) == (saved, saved, saved)

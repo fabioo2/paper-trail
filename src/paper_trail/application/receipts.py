@@ -59,14 +59,15 @@ log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ReceiptAssessment:
-    """What recording a draft would do, decided before anything is written."""
+    """What recording a draft would do, decided before anything is written. The draft's lines
+    carry the new links of ``discounts``."""
 
     draft: ReceiptDraft  # with card numbers masked
     masked_pans: int
     arithmetic: ArithmeticReport
     status: ReceiptStatus
     stage: ProcessingStage
-    discounts: DiscountAttribution  # the draft's lines carry its new links
+    discounts: DiscountAttribution
 
 
 @dataclass(frozen=True, slots=True)

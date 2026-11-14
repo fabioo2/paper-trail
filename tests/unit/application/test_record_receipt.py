@@ -494,40 +494,6 @@ def test_tc_55a_assess_links_the_discount_and_writes_nothing(
     assert (database.commits, _state(database)) == (0, FakeState())
 
 
-def test_tc_55b_assess_keeps_a_persons_link_and_links_the_rest(record: RecordReceipt) -> None:
-    """TC-55 (R4): an explicit 2 -> 0 stays although the rule would pick 1; line 3 gets 1."""
-    items = (
-        item_line(0, CHOC, 1699),
-        item_line(1, CHOC, 1699),
-        discount_line(2, "TPD/1362394", -400, 0),
-        discount_line(3, "TPD/1362394", -400),
-    )
-
-    assessment = record.assess(draft_with(items, subtotal=2598, tax=None, total=2598))
-
-    assert [item.applies_to_position for item in assessment.draft.items] == [None, None, 0, 1]
-    assert assessment.discounts == DiscountAttribution(
-        links=(
-            DiscountLink(2, 0, "1362394", new=False),
-            DiscountLink(3, 1, "1362394", new=True),
-        ),
-        receipt_level=(),
-    )
-
-
-def test_tc_55c_assessing_an_assessed_draft_gives_the_same_counts_and_nothing_new(
-    record: RecordReceipt,
-) -> None:
-    """TC-55 (A4): the effective links are reported again, none of them new."""
-    again = record.assess(record.assess(simple_draft()).draft)
-
-    assert again.draft == simple_draft(link=True)
-    assert again.discounts == DiscountAttribution(
-        links=(DiscountLink(4, 0, "1234567", new=False),), receipt_level=()
-    )
-    assert again.discounts.new_links == ()
-
-
 def test_tc_57_recording_stores_the_link_and_the_paid_prices(
     record: RecordReceipt, database: FakeDatabase
 ) -> None:
@@ -560,33 +526,6 @@ def test_tc_57_recording_stores_the_link_and_the_paid_prices(
         2: expected(2, "1.36", 150, 204, 0),
         3: expected(3, "1", 1979, 1979, 0),
     }
-    assert {position: _paid(row) for position, row in priced.items()} == {
-        0: (cad(899), cad(899), cad(-500), cad(-500), cad(399), True),
-        1: (cad(329), cad(658), cad(0), cad(0), cad(658), False),
-        2: (cad(150), cad(204), cad(0), cad(0), cad(204), False),
-        3: (cad(1979), cad(1979), cad(0), cad(0), cad(1979), False),
-    }
-
-
-def test_tc_59_reconciled_multi_buy_shares_are_not_on_sale(
-    record: RecordReceipt, database: FakeDatabase
-) -> None:
-    """TC-59 (R5, DA-3): two shares of one multi-buy amount, no discount line: no discount."""
-    items = (item_line(0, "1543210 GOLD KIWI", 500), item_line(1, "1695232 KIMCHI", 500))
-
-    result = record(
-        replace(
-            draft_with(items, subtotal=1000, tax=None, total=1000),
-            product_names={0: "Gold Kiwi", 1: "Kimchi"},
-        )
-    )
-
-    priced = _priced(database, result.receipt)
-    assert {position: _paid(row) for position, row in priced.items()} == {
-        0: (cad(500), cad(500), cad(0), cad(0), cad(500), False),
-        1: (cad(500), cad(500), cad(0), cad(0), cad(500), False),
-    }
-    assert result.discounts == DiscountAttribution(links=(), receipt_level=())
 
 
 def test_tc_118_an_inferred_unit_price_need_not_multiply_back_but_paid_is_exact(

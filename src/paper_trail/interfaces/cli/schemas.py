@@ -26,7 +26,7 @@ class LineImport(BaseModel):
     kind: LineKind = LineKind.ITEM
     product: str | None = None  # the product this line is, linked or created on import
     category: Category | None = None
-    applies_to: StrictInt | None = None  # DISCOUNT lines: the 0-based position of its item
+    applies_to: StrictInt | None = None
 
     def to_line_item(self, position: int, currency: str) -> LineItem:
         return LineItem(

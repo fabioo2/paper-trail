@@ -69,7 +69,7 @@ class SaveReceiptOutput(_Model):
     stage: ProcessingStage
     item_count: int
     masked_pans: int
-    discounts_linked: int  # every effective link, kept and new
+    discounts_linked: int
     discounts_receipt_level: list[ReceiptLevelDiscountOut]
 
 
@@ -167,12 +167,20 @@ class LinkedLineOut(_Model):
     source: MatchSource
 
 
+class UnpricedLineOut(_Model):
+    """A linked item line with a negative total, which gets no price observation."""
+
+    position: int
+    raw_text: str
+
+
 class SaveMatchesOutput(_Model):
     receipt_id: int
     linked: int
     new_products: int
     prices: int
     lines: list[LinkedLineOut]
+    unpriced: list[UnpricedLineOut]
 
 
 class SaveEnrichmentInput(_Model):

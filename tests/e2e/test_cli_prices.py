@@ -9,32 +9,30 @@ Pinned: a dry run by default (one row per discount line, nothing written); ``--a
 the links and the observations' discounts, and a second run reports ``0 changes``. Exit codes:
 2 a non-integer ``--receipt``, an invalid ``--run``, an unknown receipt ("unknown receipt") or
 one that is not COMPLETED ("is not completed"); 1 the main database is not migrated (the
-``db upgrade`` hint). The row wording is the implementer's (Q26): rows are checked for the
-facts they carry (the discount, its item, the regular and paid prices).
+``db upgrade`` hint), or a receipt failed (named; with ``--apply`` the receipts before it stay
+applied and a rerun finishes, Q28; a dry run says nothing was written). The row wording is the
+implementer's (Q26): rows are checked for the facts they carry (the discount, its item, the
+regular and paid prices).
 """
 
-from dataclasses import replace
+from datetime import datetime
+from itertools import count
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import Result
 
+from paper_trail.adapters.sqlite.price_repository import SqlitePriceRepository
+from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.bootstrap import RUNS_DIRNAME, build_container, dispose
 from paper_trail.config import DATABASE_FILENAME
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
-from paper_trail.domain.models import LineItem, PriceObservation
+from paper_trail.domain.models import PriceObservation, Receipt
+from paper_trail.domain.money import Money
 from tests.e2e.agent_cli import configure_cli, invoke, rows, run_database
-from tests.factories import (
-    SIMPLE_SUBTOTAL,
-    SIMPLE_TAX,
-    SIMPLE_TOTAL,
-    cad,
-    price_observation,
-    product,
-    receipt,
-    simple_lines,
-)
+from tests.factories import CREATED_AT, at
+from tests.storage import seed_pre_feature
 from tests.support import CopyMigrated, MakeSettings, require_id
 
 RUN = "exp1"
@@ -60,53 +58,21 @@ def _store_pre_feature(
     make_settings: MakeSettings,
     database: Path,
     status: ReceiptStatus = ReceiptStatus.COMPLETED,
+    created_at: datetime = CREATED_AT,
 ) -> int:
-    """SIMPLE stored as before the feature: line 4 unlinked; when COMPLETED, lines 0-3 matched
-    with an observation each at discount 0. Returns the receipt id."""
+    """SIMPLE stored as before the feature (``seed_pre_feature``): line 4 unlinked, lines 0-3
+    matched with an observation each at discount 0. Returns the receipt id."""
     container = build_container(make_settings(database_path=database))
+    stage = (
+        ProcessingStage.DONE if status is ReceiptStatus.COMPLETED else ProcessingStage.NEEDS_REVIEW
+    )
     try:
-        with container.uow_factory() as uow:
-            lines = simple_lines()
-            if status is ReceiptStatus.COMPLETED:
-                ids = [
-                    require_id(uow.products.add(product(canonical_name=line.description)).id)
-                    for line in lines[:4]
-                ]
-                matched = zip(lines[:4], ids, strict=True)
-                lines = (*(replace(line, product_id=pid) for line, pid in matched), lines[4])
-            stage = (
-                ProcessingStage.DONE
-                if status is ReceiptStatus.COMPLETED
-                else ProcessingStage.NEEDS_REVIEW
-            )
-            stored = uow.receipts.add(
-                receipt(
-                    status=status,
-                    stage=stage,
-                    items=lines,
-                    subtotal=cad(SIMPLE_SUBTOTAL),
-                    tax=cad(SIMPLE_TAX),
-                    total=cad(SIMPLE_TOTAL),
-                )
-            )
-            receipt_id = require_id(stored.id)
-            if status is ReceiptStatus.COMPLETED:
-                uow.prices.add_many([_observation(receipt_id, line) for line in stored.items[:4]])
-            uow.commit()
+        stored = seed_pre_feature(
+            container.uow_factory, status=status, stage=stage, created_at=created_at
+        )
     finally:
         dispose(container)
-    return receipt_id
-
-
-def _observation(receipt_id: int, line: LineItem) -> PriceObservation:
-    return price_observation(
-        product_id=require_id(line.product_id),
-        receipt_id=receipt_id,
-        line_item_id=require_id(line.id),
-        quantity=line.quantity,
-        unit_price=line.unit_price,
-        line_total=line.line_total,
-    )
+    return require_id(stored.id)
 
 
 def _snapshot(database: Path) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
@@ -124,6 +90,10 @@ def _line_with(output: str, text: str) -> str:
     return line
 
 
+def _totals(result: Result) -> str:
+    return result.stdout.splitlines()[-1]
+
+
 def _pre_feature_rows(receipt_id: int, first_line_id: int) -> list[tuple[Any, ...]]:
     """The four observations of a pre-feature SIMPLE: regular prices, discount 0."""
     regular = [(899, 899), (329, 658), (150, 204), (1979, 1979)]
@@ -133,43 +103,101 @@ def _pre_feature_rows(receipt_id: int, first_line_id: int) -> list[tuple[Any, ..
     ]
 
 
-def test_tc_101_a_dry_run_lists_the_discount_and_writes_nothing(
-    main_db: Path, make_settings: MakeSettings
-) -> None:
-    _store_pre_feature(make_settings, main_db)
-    before = _snapshot(main_db)
-
-    result = _backfill()
-
-    assert result.exit_code == 0, result.output
-    row = _line_with(result.stdout, "TPD/1234567")
-    for fact in (EGGS, "-5.00", "8.99", "3.99"):
-        assert fact in row, row
-    assert "dry run" in result.stdout.lower()
-    assert _snapshot(main_db) == before
-
-
-def test_tc_102_apply_links_and_prices_then_a_second_run_changes_nothing(
+def test_tc_101_102_a_dry_run_writes_nothing_then_apply_links_and_prices_once(
     main_db: Path, make_settings: MakeSettings
 ) -> None:
     receipt_id = _store_pre_feature(make_settings, main_db)
+    before = _snapshot(main_db)
 
+    dry = _backfill()
+    after_dry = _snapshot(main_db)
     first = _backfill("--apply")
-
-    assert first.exit_code == 0, first.output
-    assert "2 changes" in first.stdout  # 1 link set + 1 observation updated
-    assert rows(main_db, LINKS) == [(receipt_id, p, 0 if p == 4 else None) for p in range(5)]
-    assert rows(main_db, OBSERVATIONS) == [
-        (receipt_id, 1, 899, 899, -500, -500, 399, 1),
-        *_pre_feature_rows(receipt_id, 1)[1:],
-    ]
     after_first = _snapshot(main_db)
-
     second = _backfill("--apply")
 
-    assert second.exit_code == 0, second.output
-    assert "0 changes" in second.stdout
+    assert (dry.exit_code, first.exit_code, second.exit_code) == (0, 0, 0), dry.output
+    row = _line_with(dry.stdout, "TPD/1234567")
+    for fact in (EGGS, "-5.00", "8.99", "3.99"):
+        assert fact in row, row
+    assert [_totals(result) for result in (dry, first, second)] == [
+        "dry run (nothing written): 1 linked · 0 receipt-level · 1 links to set"
+        " · 1 prices to update · 2 changes",
+        "applied: 1 linked · 0 receipt-level · 1 links set · 1 prices updated · 2 changes",
+        "applied: 1 linked · 0 receipt-level · 0 links set · 0 prices updated · 0 changes",
+    ]
+    assert after_dry == before
+    assert after_first == (
+        [(receipt_id, p, 0 if p == 4 else None) for p in range(5)],
+        [(receipt_id, 1, 899, 899, -500, -500, 399, 1), *_pre_feature_rows(receipt_id, 1)[1:]],
+    )
     assert _snapshot(main_db) == after_first
+
+
+def test_tc_124_a_receipt_that_fails_exits_1_naming_it_and_a_rerun_finishes(
+    main_db: Path, make_settings: MakeSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The newer receipt is written first and stays applied; the older one's write fails
+    (only the second ``set_discount`` call) and leaves it whole; the rerun finishes it."""
+    older = _store_pre_feature(make_settings, main_db, created_at=at(0))
+    newer = _store_pre_feature(make_settings, main_db, created_at=at(10))
+    calls = count(1)
+    set_discount = SqlitePriceRepository.set_discount
+
+    def failing_second(
+        self: SqlitePriceRepository, line_item_id: int, discount: Money
+    ) -> PriceObservation | None:
+        if next(calls) == 2:
+            msg = "disk I/O error"
+            raise RuntimeError(msg)
+        return set_discount(self, line_item_id, discount)
+
+    monkeypatch.setattr(SqlitePriceRepository, "set_discount", failing_second)
+    stopped = _backfill("--apply")
+    after_stop = rows(main_db, LINKS)
+    rerun = _backfill("--apply")
+
+    assert stopped.exit_code == 1, stopped.output
+    assert (
+        f"backfill stopped at receipt {older}: RuntimeError: disk I/O error;"
+        " the receipts before it are applied, run it again to finish"
+    ) in stopped.output
+    assert "Traceback" not in stopped.output
+    assert after_stop == [
+        *[(older, p, None) for p in range(5)],
+        *[(newer, p, 0 if p == 4 else None) for p in range(5)],
+    ]
+    assert rerun.exit_code == 0, rerun.output
+    assert _totals(rerun) == (
+        "applied: 2 linked · 0 receipt-level · 1 links set · 1 prices updated · 2 changes"
+    )
+
+
+def test_tc_124_a_dry_run_that_fails_exits_1_saying_nothing_was_written(
+    main_db: Path, make_settings: MakeSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The older receipt's read fails (the second ``get``); a dry run applied nothing, so the
+    message does not say the receipts before it are."""
+    older = _store_pre_feature(make_settings, main_db, created_at=at(0))
+    _store_pre_feature(make_settings, main_db, created_at=at(10))
+    before = _snapshot(main_db)
+    calls = count(1)
+    get = SqliteReceiptRepository.get
+
+    def failing_second(self: SqliteReceiptRepository, receipt_id: int) -> Receipt | None:
+        if next(calls) == 2:
+            msg = "disk I/O error"
+            raise RuntimeError(msg)
+        return get(self, receipt_id)
+
+    monkeypatch.setattr(SqliteReceiptRepository, "get", failing_second)
+    stopped = _backfill()
+
+    assert stopped.exit_code == 1, stopped.output
+    assert (
+        f"backfill stopped at receipt {older}: RuntimeError: disk I/O error; nothing was written"
+    ) in stopped.output
+    assert "applied" not in stopped.output
+    assert _snapshot(main_db) == before
 
 
 def test_tc_103_run_and_receipt_change_only_that_receipt_of_that_run(

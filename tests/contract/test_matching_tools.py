@@ -288,6 +288,7 @@ def test_save_matches_links_creates_remembers_embeds_and_prices(
             {"position": 0, "product_id": eggs, "source": "alias"},
             {"position": 1, "product_id": milk, "source": "new"},
         ],
+        "unpriced": [],
     }
     assert _linked(harness, receipt_id) == [(eggs, MatchSource.ALIAS), (milk, MatchSource.NEW)]
     assert harness.product(milk).canonical_name == "Kirkland 2% Milk 4 L"

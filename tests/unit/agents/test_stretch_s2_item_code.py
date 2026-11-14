@@ -53,10 +53,14 @@ def test_ea_ac_13_anything_else_is_unchanged(raw_text: str) -> None:
 ITEM_CODE_MARKERS = [
     pytest.param("(2) 1362394 CHOC PISTACH", ("1362394", "CHOC PISTACH"), id="TC-08"),
     pytest.param("(10) 1543210 GOLD KIWI", ("1543210", "GOLD KIWI"), id="TC-08-two-digits"),
+    pytest.param(
+        "(1)05700001285 CRV CHKKN", ("05700001285", "CRV CHKKN"), id="TC-08-no-space-after-marker"
+    ),
     pytest.param("(2) GOLD KIWI", (None, "(2) GOLD KIWI"), id="TC-10-marker-without-code"),
     pytest.param("(a) 1362394 X", (None, "(a) 1362394 X"), id="TC-11-not-a-number"),
     pytest.param("(2 1362394 X", (None, "(2 1362394 X"), id="TC-11-unclosed"),
     pytest.param("(2) 123 X", (None, "(2) 123 X"), id="TC-11-code-too-short"),
+    pytest.param("(123) 1362394 X", (None, "(123) 1362394 X"), id="TC-11-three-digit-marker"),
 ]
 
 

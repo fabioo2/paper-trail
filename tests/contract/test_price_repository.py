@@ -159,25 +159,17 @@ def _observe(
     return stored, second
 
 
-@pytest.mark.parametrize("row", SET_DISCOUNT_QUANTITIES)
-def test_tc_82_set_discount_updates_the_lines_observation(
-    uow_factory: UnitOfWorkFactory, row: DiscountRow
-) -> None:
-    quantity, unit_price, line_total, discount, unit_discount, paid = row
-    stored, _ = _observe(uow_factory, quantity, unit_price, line_total)
+def test_tc_82_set_discount_updates_the_lines_observation(uow_factory: UnitOfWorkFactory) -> None:
+    """Only the discount changes (product, quantity and regular prices stay); the stored
+    columns for other quantities are pinned on SQLite below."""
+    stored, _ = _observe(uow_factory, Decimal("1"), 1699, 1699)
 
     updated = in_unit(
-        uow_factory, lambda uow: uow.prices.set_discount(stored.line_item_id, cad(discount))
+        uow_factory, lambda uow: uow.prices.set_discount(stored.line_item_id, cad(-400))
     )
 
-    expected = replace(stored, discount=cad(discount))
+    expected = replace(stored, discount=cad(-400))
     assert (updated, _history(uow_factory, stored.product_id)) == (expected, (expected,))
-    assert (expected.unit_discount, expected.paid, expected.on_sale) == (
-        cad(discount).divided_by(quantity),
-        cad(paid),
-        True,
-    )
-    assert expected.unit_discount == cad(unit_discount)
 
 
 def test_tc_82_set_discount_on_a_line_without_an_observation_is_none(
@@ -205,13 +197,8 @@ def test_tc_83_reassign_keeps_the_discount(uow_factory: UnitOfWorkFactory) -> No
     moved = in_unit(uow_factory, lambda uow: uow.prices.reassign(eggs, other))
 
     expected = replace(stored, product_id=other)
-    assert (moved, _history(uow_factory, other)) == (expected, (expected,))
-    assert (expected.discount, expected.unit_discount, expected.paid, expected.on_sale) == (
-        cad(-500),
-        cad(-500),
-        cad(399),
-        True,
-    )
+    (history,) = _history(uow_factory, other)
+    assert (moved, history, history.discount) == (expected, expected, cad(-500))
 
 
 def _stored_discount_columns(engine: Engine, line_item_id: int) -> tuple[int, ...]:
@@ -234,15 +221,16 @@ def test_tc_81_82_sqlite_stores_the_domain_values(
     (the DB has no CHECK tying the unit discount to the quantity)."""
     quantity, unit_price, line_total, discount, unit_discount, paid = row
     uow_factory = sqlite_uow_factory(migrated_engine, FakeClock())
-    stored, _ = _observe(uow_factory, quantity, unit_price, line_total)
+    stored, second = _observe(uow_factory, quantity, unit_price, line_total)
     regular = _stored_discount_columns(migrated_engine, stored.line_item_id)
+    _observations(
+        uow_factory, [replace(stored, id=None, line_item_id=second, discount=cad(discount))]
+    )
+    added = _stored_discount_columns(migrated_engine, second)
 
     in_unit(uow_factory, lambda uow: uow.prices.set_discount(stored.line_item_id, cad(discount)))
 
+    discounted = (discount, unit_discount, paid, 1)
     assert regular == (0, 0, line_total, 0)
-    assert _stored_discount_columns(migrated_engine, stored.line_item_id) == (
-        discount,
-        unit_discount,
-        paid,
-        1,
-    )
+    assert added == discounted
+    assert _stored_discount_columns(migrated_engine, stored.line_item_id) == discounted

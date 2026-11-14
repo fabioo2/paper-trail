@@ -42,6 +42,7 @@ from paper_trail.tools.models import (
     SaveReceiptOutput,
     SimilaritySearchInput,
     SimilaritySearchOutput,
+    UnpricedLineOut,
 )
 
 
@@ -171,6 +172,10 @@ def save_matches(services: ToolServices, request: SaveMatchesInput) -> SaveMatch
                 position=link.position, product_id=link.product_id, source=link.match_source
             )
             for link in recorded.links
+        ],
+        unpriced=[
+            UnpricedLineOut(position=line.position, raw_text=line.raw_text)
+            for line in recorded.unpriced
         ],
     )
 

@@ -221,6 +221,23 @@ LINKS_AT_THE_BOUNDARY: list[object] = [
         )
         for kind in (LineKind.ITEM, LineKind.DEPOSIT, LineKind.FEE)
     ],
+    *[
+        pytest.param(
+            lambda kind=kind: (
+                item_line(0, CHOC, 1699),
+                line_item(
+                    position=1,
+                    kind=kind,
+                    unit_price=None,
+                    line_total=cad(-100),
+                    applies_to_position=0,
+                ),
+            ),
+            _boundary_error(),
+            id=f"TC-37-link-on-a-negative-{kind}",
+        )
+        for kind in (LineKind.DEPOSIT, LineKind.FEE)
+    ],
     pytest.param(
         lambda: (item_line(0, CHOC, 1699), discount_line(1, "TPD/1362394", -400, 1)),
         _boundary_error(),
@@ -308,6 +325,14 @@ def test_discount_links_at_the_receipt_boundary(
         build(items=lines())
     message = str(raised.value)
     assert [part for part in error if part not in message] == []
+
+
+def test_tc_41_a_refused_link_names_lines_only_one_based() -> None:
+    with pytest.raises(DomainValidationError) as raised:
+        receipt_draft(items=_links_to_kind(LineKind.DEPOSIT))
+    assert str(raised.value) == (
+        "line 3: applies_to_position names line 1, a deposit line, not an item"
+    )
 
 
 # --- paid prices (P5 PAID_PRICES, P5b INVALID_DISCOUNTS: R5, DA-1) ---------------------------

@@ -282,3 +282,30 @@ def test_tc_62_links_are_stored_even_when_no_observation_is(
     assert stored == result.receipt
     assert [item.applies_to_position for item in stored.items] == [None, None, None, None, 0]
     assert database.state.prices == {}
+
+
+def test_tc_125_matching_leaves_a_negative_item_line_unpriced_and_completes(
+    record: RecordReceipt, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+) -> None:
+    """Q32: a person forced through a receipt with a negative ITEM line (a return); matching
+    links it but records no price for it (a price cannot be negative), names it, and the
+    receipt completes."""
+    receipt_id = _processing(uow_factory)
+    eggs, milk = receipt_draft().items
+    refund = replace(milk, raw_text="RETURN KS 2% MILK 4L", unit_price=None, line_total=cad(-658))
+    draft = receipt_draft(items=(eggs, refund), subtotal=cad(241), tax=None, total=cad(241))
+    record.replace(receipt_id, draft, force=True, matching=True)
+    choices = [
+        MatchChoice(0, MatchSource.NEW, new_product_name="Eggs"),
+        MatchChoice(1, MatchSource.NEW, new_product_name="Milk"),
+    ]
+
+    recorded = record.record_matches(receipt_id, choices, FakeEmbeddings())
+
+    saved = database.state.receipts[receipt_id]
+    assert (saved.status, recorded.prices, recorded.unpriced) == (
+        ReceiptStatus.COMPLETED,
+        1,
+        (saved.items[1],),
+    )
+    assert [row.line_item_id for row in database.state.prices.values()] == [saved.items[0].id]

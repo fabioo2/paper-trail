@@ -115,15 +115,24 @@ class FakeReceiptRepository:
     def set_discount_links(self, receipt_id: int, links: Mapping[int, int]) -> Receipt:
         current = self._existing(receipt_id)
         by_position = {item.position: item for item in current.items}
+        changed = False
         for position, target in links.items():
-            line = by_position.get(position)
-            if line is None:
-                msg = f"receipt {receipt_id} has no line at position {position}"
-                raise NotFoundError(msg)
+            for wanted in (position, target):
+                if wanted not in by_position:
+                    msg = f"receipt {receipt_id} has no line at position {wanted}"
+                    raise NotFoundError(msg)
+            line = by_position[position]
             if line.applies_to_position not in {None, target}:
-                msg = f"line {position} already applies to {line.applies_to_position}"
+                msg = (
+                    f"receipt {receipt_id} line at position {position} already applies to"
+                    f" position {line.applies_to_position}"
+                )
                 raise ConflictError(msg)
-            by_position[position] = replace(line, applies_to_position=target)
+            if line.applies_to_position is None:
+                changed = True
+                by_position[position] = replace(line, applies_to_position=target)
+        if not changed:
+            return current
         stored = replace(
             current,
             items=tuple(by_position[item.position] for item in current.items),
