@@ -10,8 +10,9 @@ import unicodedata
 _TAX_FLAGS = frozenset({"h", "gst", "hst", "pst", "qst"})
 _PRICE = re.compile(r"\$?[0-9]+\.[0-9]{2}-?")
 _ITEM_CODE = re.compile(r"[0-9]{4,}")
-# A leading item code and the text after it: Costco 4-7 digits, a PLU 4, a UPC 11-13.
-_LEADING_ITEM_CODE = re.compile(r"([0-9]{4,13})\s+(\S.*)", re.DOTALL)
+# A leading item code and the text after it: Costco 4-7 digits, a PLU 4, a UPC 11-13. A
+# quantity marker before the code ("(1)05700001285 CRV ...") is dropped.
+_LEADING_ITEM_CODE = re.compile(r"(?:\([0-9]{1,2}\)\s*)?([0-9]{4,13})\s+(\S.*)", re.DOTALL)
 
 # Store-name tokens that are legal forms or store formats, not the store.
 _STORE_SUFFIXES = frozenset(
@@ -79,7 +80,8 @@ def normalize_alias(text: str) -> str:
 
 def split_item_code(raw_text: str) -> tuple[str | None, str]:
     """A line's leading item code and the text after it: ``"1281 1% MILK"`` -> ``("1281",
-    "1% MILK")``, so that a code is never read as a size. Without one: ``(None, raw_text)``."""
+    "1% MILK")``, so that a code is never read as a size. A leading ``(N)`` quantity marker is
+    dropped with the code. Without one: ``(None, raw_text)``."""
     if match := _LEADING_ITEM_CODE.fullmatch(raw_text):
         return match[1], match[2]
     return None, raw_text

@@ -37,8 +37,9 @@ from tests.extractions import (
     extraction,
     inconsistent_extraction,
     printed_extraction,
+    printed_fixture,
 )
-from tests.factories import receipt_draft
+from tests.factories import PRINTED_LINKS, receipt_draft
 from tests.fakes.llm import ScriptedLlm
 from tests.fakes.tools import MisroutedToolGateway
 from tests.support import require_id
@@ -196,6 +197,33 @@ def vision_and_enrichment() -> Observed:
     return observed
 
 
+def discounts() -> Observed:
+    """The Costco printed answer: ``save_receipt`` links its seven discounts (discounts plan
+    TC-95); the links and the tool's result are part of what is compared."""
+    harness = build_harness(
+        ScriptedLlm(printed_fixture("costco_printed")),
+        settings=agent_settings(extraction_version="v2"),
+    )
+    observed = _single_run(harness)
+    assert observed.receipt.status is ReceiptStatus.COMPLETED
+    links = {
+        item.position: item.applies_to_position
+        for item in observed.receipt.items
+        if item.applies_to_position is not None
+    }
+    assert links == PRINTED_LINKS
+    (saved,) = [
+        data["output"]
+        for _, _, kind, name, _, data in observed.events
+        if kind is TraceKind.TOOL and name == "save_receipt"
+    ]
+    assert isinstance(saved, dict)
+    refused = saved["discounts_receipt_level"]
+    assert isinstance(refused, list)
+    assert (saved["discounts_linked"], len(refused)) == (7, 1)
+    return observed
+
+
 SCENARIOS: dict[str, Callable[[], Observed]] = {
     scenario.__name__: scenario
     for scenario in (
@@ -206,6 +234,7 @@ SCENARIOS: dict[str, Callable[[], Observed]] = {
         resume,
         review_resolution,
         vision_and_enrichment,
+        discounts,
     )
 }
 

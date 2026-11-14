@@ -119,3 +119,14 @@ def test_s0_ac_40_cross_origin_requests_get_no_cors_headers(client: TestClient) 
     for response in (simple, preflight):
         assert "access-control-allow-origin" not in response.headers
         assert "access-control-allow-credentials" not in response.headers
+
+
+def test_tc_106_applies_to_position_is_a_required_nullable_integer(app: FastAPI) -> None:
+    """TC-106 (R12): the key is always present; its value an integer or null."""
+    schema = app.openapi()["components"]["schemas"]["LineItemOut"]
+
+    assert "applies_to_position" in schema["required"]
+    assert schema["properties"]["applies_to_position"]["anyOf"] == [
+        {"type": "integer"},
+        {"type": "null"},
+    ]

@@ -19,8 +19,9 @@ from dataclasses import replace
 
 import pytest
 
+from paper_trail.application.matching import MatchChoice
 from paper_trail.application.receipts import RecordReceipt
-from paper_trail.domain.enums import ProcessingStage, ReceiptStatus, ReviewReason
+from paper_trail.domain.enums import MatchSource, ProcessingStage, ReceiptStatus, ReviewReason
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import ReceiptDraft
 from paper_trail.domain.money import Money
@@ -35,8 +36,10 @@ from tests.factories import (
     line_item,
     receipt,
     receipt_draft,
+    simple_draft,
 )
 from tests.fakes.clock import FakeClock
+from tests.fakes.embeddings import FakeEmbeddings
 from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
 from tests.storage import in_unit
 from tests.support import require_id
@@ -218,3 +221,64 @@ def test_review_note_a_zero_unit_price_is_a_price(
 
     (observation,) = database.state.prices.values()
     assert observation.unit_price == cad(0)
+
+
+# --- discounts and paid prices (docs/plans/discounts-and-paid-prices.md) -------------------------
+
+SIMPLE_PRODUCTS = ("Eggs", "Milk", "Bananas", "Paper Towels")
+
+
+def test_tc_60_61_matching_prices_the_item_from_the_stored_link_and_never_the_discount(
+    record: RecordReceipt, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+) -> None:
+    """TC-60 (DA-4) and TC-61 (R5, R7): the graph saves SIMPLE for matching, then records the
+    items' matches; the eggs' observation, created at match time, carries the linked discount,
+    and the discount line itself gets no product and no observation."""
+    receipt_id = _processing(uow_factory)
+    record.replace(receipt_id, simple_draft(), matching=True)
+    choices = [
+        MatchChoice(position, MatchSource.NEW, new_product_name=name)
+        for position, name in enumerate(SIMPLE_PRODUCTS)
+    ]
+
+    record.record_matches(receipt_id, choices, FakeEmbeddings())
+
+    saved = database.state.receipts[receipt_id]
+    discount = saved.items[4]
+    assert (discount.applies_to_position, discount.product_id) == (0, None)
+    lines = {item.id: item.position for item in saved.items}
+    paid = {
+        lines[row.line_item_id]: (row.discount, row.paid, row.on_sale)
+        for row in database.state.prices.values()
+    }
+    assert paid == {
+        0: (cad(-500), cad(399), True),
+        1: (cad(0), cad(658), False),
+        2: (cad(0), cad(204), False),
+        3: (cad(0), cad(1979), False),
+    }
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        simple_draft(subtotal=cad(3241), product_names={0: "Eggs"}),
+        simple_draft(purchased_on=None, product_names={0: "Eggs"}),
+    ],
+    ids=["needs-review", "undated"],
+)
+def test_tc_62_links_are_stored_even_when_no_observation_is(
+    record: RecordReceipt,
+    uow_factory: UnitOfWorkFactory,
+    database: FakeDatabase,
+    draft: ReceiptDraft,
+) -> None:
+    """TC-62 (R7): a draft that does not add up, and one without a date, still keep 4 -> 0."""
+    receipt_id = _processing(uow_factory)
+
+    result = record.replace(receipt_id, draft)
+
+    stored = database.state.receipts[receipt_id]
+    assert stored == result.receipt
+    assert [item.applies_to_position for item in stored.items] == [None, None, None, None, 0]
+    assert database.state.prices == {}

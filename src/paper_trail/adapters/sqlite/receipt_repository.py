@@ -1,6 +1,6 @@
 """``ReceiptRepository`` on SQLite: ``receipts`` plus their ``line_items``."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 
@@ -16,7 +16,7 @@ from paper_trail.adapters.sqlite.mappers import (
 )
 from paper_trail.adapters.sqlite.schema import line_items, receipts
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
-from paper_trail.domain.errors import NotFoundError
+from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import ItemLink, LineItem, Receipt, ReceiptSummary
 from paper_trail.domain.paging import Page, PageRequest
 from paper_trail.ports.clock import Clock
@@ -115,6 +115,34 @@ class SqliteReceiptRepository:
         _, updated_at = self._update(receipt_id, {})
         items = tuple(by_position[item.position] for item in current.items)
         return replace(current, items=items, updated_at=updated_at)
+
+    def set_discount_links(self, receipt_id: int, links: Mapping[int, int]) -> Receipt:
+        current = self.get(receipt_id)
+        if current is None:
+            msg = f"receipt {receipt_id} does not exist"
+            raise NotFoundError(msg)
+        by_position = {item.position: item for item in current.items}
+        for position, target in links.items():
+            line = by_position.get(position)
+            if line is None:
+                msg = f"receipt {receipt_id} has no line at position {position}"
+                raise NotFoundError(msg)
+            if line.applies_to_position not in {None, target}:
+                msg = (
+                    f"receipt {receipt_id} line at position {position} already applies to"
+                    f" position {line.applies_to_position}"
+                )
+                raise ConflictError(msg)
+            by_position[position] = replace(line, applies_to_position=target)
+        linked = replace(current, items=tuple(by_position[item.position] for item in current.items))
+        for position, target in links.items():
+            self._connection.execute(
+                update(line_items)
+                .where(line_items.c.id == by_position[position].id)
+                .values(applies_to_position=target)
+            )
+        _, updated_at = self._update(receipt_id, {})
+        return replace(linked, updated_at=updated_at)
 
     def _update(self, receipt_id: int, values: dict[str, object]) -> tuple[datetime, datetime]:
         """Apply ``values`` and stamp updated_at; returns (created_at, updated_at)."""

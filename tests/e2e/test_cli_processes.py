@@ -9,6 +9,7 @@ exercised for real. Checks that need no real process (``db current``, a second `
 
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -20,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command
 
+from paper_trail.adapters.sqlite.migrations import alembic_config
 from tests.e2e.agent_cli import invoke, receipt_status, run_database, trace_files
 from tests.extractions import COSTCO_ENRICHMENTS, COSTCO_OCR, printed_extraction
 from tests.fakes.ollama_server import FakeOllama, serve_fake_ollama
@@ -110,6 +113,55 @@ def test_s0_ac_23_db_upgrade_twice_is_a_no_op(cli_env: dict[str, str], data_dir:
 
     assert second.exit_code == 0, second.output
     assert _schema_snapshot(database) == before == [*before[:-1], (SCHEMA_HEAD,)]
+
+
+def _database_at_0003_with_negative_observations(database: Path) -> None:
+    """Revision 0003 with eight observations, ids 3 and 7 of line total -1.00 (discount lines
+    observed as products: what migration 0004's preflight refuses, A2)."""
+    command.upgrade(alembic_config(database), "0003")
+    now = "2026-11-06T15:00:00.000000+00:00"
+    with closing(sqlite3.connect(database)) as conn:
+        conn.execute(
+            "INSERT INTO receipts (status, stage, currency, created_at, updated_at)"
+            " VALUES ('completed', 'done', 'CAD', ?, ?)",
+            (now, now),
+        )
+        conn.execute("INSERT INTO products (canonical_name, created_at) VALUES ('Eggs', ?)", (now,))
+        for position in range(8):
+            cents = -100 if position in (2, 6) else 899
+            kind = "discount" if cents < 0 else "item"
+            conn.execute(
+                "INSERT INTO line_items (receipt_id, position, kind, raw_text, description,"
+                " quantity, line_total_cents) VALUES (1, ?, ?, 'X', 'X', '1', ?)",
+                (position, kind, cents),
+            )
+            conn.execute(
+                "INSERT INTO price_observations (product_id, receipt_id, line_item_id, store_key,"
+                " observed_on, quantity, unit_price_cents, line_total_cents, currency)"
+                " VALUES (1, 1, ?, 'costco', '2026-11-01', '1', ?, ?, 'CAD')",
+                (position + 1, cents, cents),
+            )
+        conn.commit()
+
+
+def test_tc_122_db_upgrade_refuses_negative_observations_naming_them(
+    cli_env: dict[str, str], data_dir: Path
+) -> None:
+    """TC-122 (A2, Q21): the refused upgrade exits non-zero listing ids 3 and 7, and the
+    database stays at 0003 with its schema and rows as they were."""
+    data_dir.mkdir(parents=True)
+    database = data_dir / "paper_trail.db"
+    _database_at_0003_with_negative_observations(database)
+    before = _schema_snapshot(database)
+
+    upgrade = run_cli(cli_command("db", "upgrade"), cli_env)
+
+    assert upgrade.returncode != 0
+    output = upgrade.stdout + upgrade.stderr
+    assert re.search(r"\b3\b\D{1,5}\b7\b", output), output
+    current = invoke("db", "current")
+    assert current.stdout.strip() == "0003"
+    assert _schema_snapshot(database) == before
 
 
 # --- serve ------------------------------------------------------------------------------------

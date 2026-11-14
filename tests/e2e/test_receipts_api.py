@@ -18,7 +18,7 @@ from paper_trail.bootstrap import Container
 from paper_trail.config import Settings
 from paper_trail.domain.enums import Category, LineKind
 from paper_trail.domain.models import Receipt
-from tests.factories import cad, line_item, receipt_draft
+from tests.factories import cad, line_item, receipt_draft, simple_draft
 from tests.support import require_id
 
 PROBLEM_JSON = "application/problem+json"
@@ -43,6 +43,7 @@ LINE_KEYS = {
     "line_total",
     "product_id",
     "category",
+    "applies_to_position",
 }
 ISSUE_KEYS = {"code", "message", "expected", "actual", "position"}
 
@@ -126,6 +127,7 @@ def test_s1_ac_22_detail_shape(migrated_client: TestClient, weighed: Receipt) ->
         "line_total": {"amount_cents": 497, "currency": "CAD"},
         "product_id": None,
         "category": "produce",
+        "applies_to_position": None,
     }
     assert savings["kind"] == "discount"
     assert savings["unit_price"] is None
@@ -314,3 +316,14 @@ def test_s1_ac_25_schemas_are_named_for_the_client(app: FastAPI) -> None:
         "CategoryOut",
     ):
         assert name in schemas, name
+
+
+def test_tc_105_detail_names_the_item_a_discount_reduces(
+    migrated_client: TestClient, migrated_container: Container
+) -> None:
+    """TC-105 (R12): SIMPLE's TPD/1234567 (line 4) reduces line 0; every line has the key."""
+    stored = migrated_container.record_receipt(simple_draft()).receipt
+
+    body = migrated_client.get(f"/api/receipts/{stored.id}").json()
+
+    assert [item["applies_to_position"] for item in body["items"]] == [None, None, None, None, 0]

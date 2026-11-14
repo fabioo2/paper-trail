@@ -6,6 +6,7 @@ optional; ``description`` defaults to ``raw_text``; positions are the list order
 image_path are None.
 """
 
+import json
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -152,3 +153,37 @@ def test_s1_ac_24_quantity_must_be_a_positive_decimal(quantity: object) -> None:
         ReceiptImport.model_validate(data)
 
     assert "items.0.quantity" in _error_locations(caught.value)
+
+
+# --- discounts: `applies_to` (discounts-and-paid-prices plan, R4, Q5, Q6) -------------------------
+
+
+def _simple_with_link(**link: object) -> dict[str, Any]:
+    """SIMPLE (costco_simple.json) with ``link`` merged into item 4, its ``TPD/1234567``."""
+    data: dict[str, Any] = json.loads(COSTCO_SIMPLE.read_text(encoding="utf-8"))
+    data["items"][4].update(link)
+    return data
+
+
+@pytest.mark.parametrize(
+    ("link", "expected"),
+    [({"applies_to": 0}, 0), ({}, None), ({"applies_to": None}, None)],
+    ids=["linked", "absent", "null"],
+)
+def test_tc_96_applies_to_is_the_discount_lines_0_based_target(
+    link: dict[str, object], expected: int | None
+) -> None:
+    draft = ReceiptImport.model_validate(_simple_with_link(**link)).to_draft()
+
+    assert [item.applies_to_position for item in draft.items] == [None, None, None, None, expected]
+
+
+IMPORT_APPLIES_TO_TYPES = ["0", 1.0, True]
+
+
+@pytest.mark.parametrize("value", IMPORT_APPLIES_TO_TYPES)
+def test_tc_97_applies_to_must_be_a_json_integer(value: object) -> None:
+    with pytest.raises(ValidationError) as caught:
+        ReceiptImport.model_validate(_simple_with_link(applies_to=value))
+
+    assert "items.4.applies_to" in _error_locations(caught.value)

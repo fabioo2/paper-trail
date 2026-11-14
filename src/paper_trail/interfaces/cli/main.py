@@ -1,6 +1,6 @@
 """``paper-trail``: serve the API, run the worker, migrate the database, import and show
-receipts, process receipts through the agents and resolve their reviews, call the agents' tools
-or serve them over MCP, export the API spec.
+receipts, process receipts through the agents and resolve their reviews, correct lines, backfill
+paid prices, call the agents' tools or serve them over MCP, export the API spec.
 
 This is the composition boundary of every process: the only module that reads the
 environment (through ``Settings``) and configures logging. Commands whose stdout is their
@@ -72,6 +72,10 @@ items_app = typer.Typer(
     help="Receipt lines: correct the product a line is linked to.", no_args_is_help=True
 )
 app.add_typer(items_app, name="items")
+prices_app = typer.Typer(
+    help="Price observations: apply discounts to receipts stored before.", no_args_is_help=True
+)
+app.add_typer(prices_app, name="prices")
 
 RunOption = Annotated[
     str | None,
@@ -464,6 +468,25 @@ def items_correct(  # noqa: PLR0913 - one parameter per command-line option
         new_product=new_product,
         category=category,
     )
+
+
+@prices_app.command("backfill")
+def prices_backfill(
+    run: RunOption = None,
+    receipt_id: Annotated[
+        int | None,
+        typer.Option("--receipt", metavar="ID", help="Only this receipt.", show_default=False),
+    ] = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write the links and discounts (default: dry run).")
+    ] = False,
+) -> None:
+    """Link stored discounts to their items and record what was paid; a dry run by default."""
+    from paper_trail.interfaces.cli.prices import backfill_prices
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    backfill_prices(settings, run, receipt_id, apply=apply)
 
 
 @app.command("mcp")

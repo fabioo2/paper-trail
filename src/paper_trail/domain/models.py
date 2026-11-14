@@ -4,7 +4,7 @@ Unsaved entities have ``id=None``; repositories return them with the id assigned
 """
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -71,11 +71,55 @@ class LineItem:
     category: Category | None = None
     id: int | None = None
     match_source: MatchSource | None = None  # how product_id was found (agent core C)
+    applies_to_position: int | None = None  # DISCOUNT lines only: the ITEM line it reduces
 
     def __post_init__(self) -> None:
         if not self.quantity.is_finite() or self.quantity <= 0:
             msg = f"line {self.position + 1}: quantity must be positive, got {self.quantity}"
             raise InvalidQuantityError(msg)
+        target = self.applies_to_position
+        if target is None:
+            return
+        line = f"line {self.position + 1}: applies_to_position"
+        if self.kind is not LineKind.DISCOUNT:
+            msg = f"{line} is set on a {self.kind.value} line; only a discount applies to an item"
+            raise DomainValidationError(msg)
+        if target < 0 or target == self.position:
+            msg = f"{line} {target} must name another line of the receipt"
+            raise DomainValidationError(msg)
+
+
+def _check_discount_links(items: Sequence[LineItem]) -> None:
+    """Every ``applies_to_position`` names an ITEM line of ``items``, no ITEM line twice, the
+    discount is negative and no larger than the item's line total; DomainValidationError
+    naming both lines (1-based, like every line message) otherwise."""
+    by_position = {item.position: item for item in items}
+    linked: dict[int, int] = {}
+    for discount in items:
+        target = discount.applies_to_position
+        if target is None:
+            continue
+        line = f"line {discount.position + 1}: applies_to_position {target}"
+        item = by_position.get(target)
+        if item is None:
+            msg = f"{line} names no line of the receipt"
+            raise DomainValidationError(msg)
+        if item.kind is not LineKind.ITEM:
+            msg = f"{line} names line {target + 1}, a {item.kind.value} line, not an item"
+            raise DomainValidationError(msg)
+        if target in linked:
+            msg = (
+                f"{line} names line {target + 1}, which line {linked[target] + 1} already"
+                " applies to; an item takes one discount"
+            )
+            raise DomainValidationError(msg)
+        if not discount.line_total.is_negative():
+            msg = f"{line}: the discount on line {target + 1} must be negative"
+            raise DomainValidationError(msg)
+        if item.line_total.amount_cents + discount.line_total.amount_cents < 0:
+            msg = f"{line}: the discount is larger than line {target + 1}'s total"
+            raise DomainValidationError(msg)
+        linked[target] = discount.position
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +154,7 @@ class ReceiptDraft:
 
     def __post_init__(self) -> None:
         _check_payment_last4(self.payment_last4)
+        _check_discount_links(self.items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +184,7 @@ class Receipt:
         amounts = [self.subtotal, self.tax, self.total]
         amounts += [money for item in self.items for money in (item.unit_price, item.line_total)]
         _check_currency(self.currency, amounts, "a receipt")
+        _check_discount_links(self.items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +226,8 @@ class ProductAlias:
 
 @dataclass(frozen=True, slots=True)
 class PriceObservation:
-    """What one product cost on one receipt line."""
+    """What one product cost on one receipt line: ``unit_price`` and ``line_total`` are the
+    regular prices, ``discount`` (<= 0) the line's linked discount."""
 
     id: int | None
     product_id: int
@@ -191,9 +238,37 @@ class PriceObservation:
     quantity: Decimal
     unit_price: Money
     line_total: Money
+    discount: Money
 
     def __post_init__(self) -> None:
-        _check_currency(self.unit_price.currency, [self.line_total], "a price observation")
+        _check_currency(
+            self.unit_price.currency, [self.line_total, self.discount], "a price observation"
+        )
+        if self.discount.amount_cents > 0:
+            msg = f"a price observation's discount must be <= 0, got {self.discount.amount_text}"
+            raise DomainValidationError(msg)
+        if self.paid.is_negative():
+            msg = (
+                f"a price observation's discount {self.discount.amount_text} is larger than its"
+                f" line total {self.line_total.amount_text}"
+            )
+            raise DomainValidationError(msg)
+
+    @property
+    def paid(self) -> Money:
+        return self.line_total + self.discount
+
+    @property
+    def unit_discount(self) -> Money:
+        return self.discount.divided_by(self.quantity)
+
+    @property
+    def paid_unit_price(self) -> Money:
+        return self.paid.divided_by(self.quantity)
+
+    @property
+    def on_sale(self) -> bool:
+        return self.discount.is_negative()
 
 
 @dataclass(frozen=True, slots=True)

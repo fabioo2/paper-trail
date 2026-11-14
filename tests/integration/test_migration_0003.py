@@ -61,10 +61,6 @@ def _insert_receipt(connection: Connection, sha: str | None) -> None:
     )
 
 
-def test_head_is_0003() -> None:
-    assert SCHEMA_HEAD == "0003"
-
-
 def test_upgrade_adds_the_agent_core_columns(database: Path, engine: Engine) -> None:
     command.upgrade(alembic_config(database), "head")
 
@@ -72,7 +68,7 @@ def test_upgrade_adds_the_agent_core_columns(database: Path, engine: Engine) -> 
         assert _columns(connection, "receipts")["image_sha256"] == ("TEXT", True)
         assert _columns(connection, "line_items")["match_source"] == ("TEXT", True)
         assert "image_sha256" in _unique_single_column_indexes(connection, "receipts")
-    assert current_revision(engine) == "0003"
+    assert current_revision(engine) == SCHEMA_HEAD
 
 
 def test_one_receipt_per_image_and_many_without(migrated_engine: Engine) -> None:

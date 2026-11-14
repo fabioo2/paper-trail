@@ -6,15 +6,30 @@ from decimal import Decimal
 
 import pytest
 
-from paper_trail.domain.enums import Category, LineKind, ProcessingStage, ReceiptStatus
-from paper_trail.domain.errors import DomainValidationError, NotFoundError
-from paper_trail.domain.models import Receipt, ReceiptSummary
+from paper_trail.domain.enums import Category, LineKind, MatchSource, ProcessingStage, ReceiptStatus
+from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
+from paper_trail.domain.models import ItemLink, LineItem, Receipt, ReceiptSummary
 from paper_trail.domain.money import Money
 from paper_trail.domain.paging import PageRequest
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
-from tests.factories import at, cad, line_item, receipt
+from tests.factories import (
+    PRINTED_SUBTOTAL,
+    PRINTED_TAX,
+    PRINTED_TOTAL,
+    SIMPLE_SUBTOTAL,
+    SIMPLE_TAX,
+    SIMPLE_TOTAL,
+    at,
+    cad,
+    line_item,
+    printed_lines,
+    product,
+    receipt,
+    simple_lines,
+)
 from tests.fakes.clock import FakeClock
 from tests.storage import in_unit
+from tests.support import require_id
 
 
 def _add(uow_factory: UnitOfWorkFactory, value: Receipt) -> Receipt:
@@ -343,3 +358,130 @@ def test_s1_ac_10_replace_contents_of_missing_receipt_raises(
     """S1-AC-10: replace_contents raises NotFoundError for an unknown id."""
     with pytest.raises(NotFoundError):
         in_unit(uow_factory, lambda uow: uow.receipts.replace_contents(receipt(id=999)))
+
+
+# --- discount links (discounts-and-paid-prices plan R6, R9) ----------------------------------
+
+
+def _simple(*, link: bool) -> Receipt:
+    """SIMPLE: line 4 ``TPD/1234567`` -5.00 is the eggs' (line 0) discount when ``link``."""
+    return receipt(
+        items=simple_lines(link=link),
+        subtotal=cad(SIMPLE_SUBTOTAL),
+        tax=cad(SIMPLE_TAX),
+        total=cad(SIMPLE_TOTAL),
+    )
+
+
+def _with_link(value: Receipt, discount: int, item: int | None) -> tuple[LineItem, ...]:
+    return tuple(
+        replace(line, applies_to_position=item) if line.position == discount else line
+        for line in value.items
+    )
+
+
+def test_tc_79_links_round_trip_through_add_get_and_replace_contents(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
+) -> None:
+    linked = _simple(link=True)
+    saved = _add(uow_factory, linked)
+    loaded = _get(uow_factory, require_id(saved.id))
+    unlinked = _add(uow_factory, _simple(link=False))
+    fake_clock.advance(timedelta(hours=1))
+
+    replaced = in_unit(
+        uow_factory,
+        lambda uow: uow.receipts.replace_contents(replace(unlinked, items=linked.items)),
+    )
+
+    assert (_without_ids(saved), loaded) == (linked, saved)
+    assert [line.applies_to_position for line in linked.items] == [None, None, None, None, 0]
+    assert _get(uow_factory, require_id(unlinked.id)) == replaced
+    assert _without_ids(replaced) == replace(
+        linked, updated_at=fake_clock.now(), created_at=unlinked.created_at
+    )
+
+
+def test_tc_79_linking_a_product_keeps_the_discount_link(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
+) -> None:
+    saved = _add(uow_factory, _simple(link=True))
+    product_id = require_id(in_unit(uow_factory, lambda uow: uow.products.add(product())).id)
+    receipt_id = require_id(saved.id)
+    fake_clock.advance(timedelta(minutes=2))
+
+    linked = in_unit(
+        uow_factory,
+        lambda uow: uow.receipts.link_items(
+            receipt_id, [ItemLink(0, product_id, MatchSource.ALIAS)]
+        ),
+    )
+
+    eggs = replace(saved.items[0], product_id=product_id, match_source=MatchSource.ALIAS)
+    expected = replace(saved, items=(eggs, *saved.items[1:]), updated_at=fake_clock.now())
+    assert (linked, _get(uow_factory, receipt_id)) == (expected, expected)
+    assert expected.items[4].applies_to_position == 0
+
+
+def test_tc_80_set_discount_links_sets_only_the_given_line(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
+) -> None:
+    saved = _add(uow_factory, _simple(link=False))
+    receipt_id = require_id(saved.id)
+    fake_clock.advance(timedelta(minutes=5))
+
+    returned = in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {4: 0}))
+
+    expected = replace(saved, items=_with_link(saved, 4, 0), updated_at=fake_clock.now())
+    assert (returned, _get(uow_factory, receipt_id)) == (expected, expected)
+
+
+@pytest.mark.parametrize(
+    ("receipt_offset", "links"),
+    [(999, {4: 0}), (0, {9: 0}), (0, {4: 0, 9: 0})],
+    ids=["unknown receipt", "unknown position", "one unknown position among known ones"],
+)
+def test_tc_80_set_discount_links_refuses_what_does_not_exist(
+    uow_factory: UnitOfWorkFactory, receipt_offset: int, links: dict[int, int]
+) -> None:
+    saved = _add(uow_factory, _simple(link=False))
+    receipt_id = require_id(saved.id)
+
+    with pytest.raises(NotFoundError):
+        in_unit(
+            uow_factory,
+            lambda uow: uow.receipts.set_discount_links(receipt_id + receipt_offset, links),
+        )
+
+    assert _get(uow_factory, receipt_id) == saved
+
+
+def _printed_linked_to_pj() -> Receipt:
+    """PRINTED with line 6 ``TPD/1362394`` linked by a person to line 3 (PJ, 29.99)."""
+    return receipt(
+        store_name="COSTCO WHOLESALE #9999",
+        items=printed_lines({6: 3}),
+        subtotal=cad(PRINTED_SUBTOTAL),
+        tax=cad(PRINTED_TAX),
+        total=cad(PRINTED_TOTAL),
+    )
+
+
+def test_tc_121_set_discount_links_never_changes_an_existing_link(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """signatures.md: a line already linked to another item is a ConflictError and nothing
+    changes; the same link again is a no-op."""
+    saved = _add(uow_factory, _printed_linked_to_pj())
+    receipt_id = require_id(saved.id)
+
+    with pytest.raises(ConflictError):
+        in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {6: 5}))
+    unchanged = _get(uow_factory, receipt_id)
+    again = in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {6: 3}))
+
+    assert unchanged == saved
+    assert again.items == saved.items
+    stored = _get(uow_factory, receipt_id)
+    assert stored is not None
+    assert stored.items == saved.items

@@ -4,7 +4,7 @@ Repositories never commit: they are reached through a ``UnitOfWork``, which owns
 transaction. Methods that stamp times use the injected clock.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from paper_trail.domain.enums import CorrectionKind, ProcessingStage, ReceiptStatus
@@ -17,6 +17,7 @@ from paper_trail.domain.models import (
     Receipt,
     ReceiptSummary,
 )
+from paper_trail.domain.money import Money
 from paper_trail.domain.paging import Page, PageRequest
 
 
@@ -55,6 +56,14 @@ class ReceiptRepository(Protocol):
 
     def find_by_image_sha256(self, sha256: str) -> Receipt | None:
         """The receipt of this image, if any. ``add`` raises ConflictError for a second one."""
+        ...
+
+    def set_discount_links(self, receipt_id: int, links: Mapping[int, int]) -> Receipt:
+        """Set ``applies_to_position`` of the discount lines at the keys to the item positions
+        they map to, stamp updated_at and return the receipt; line ids and everything else are
+        unchanged, and a link already equal is left as it is. ConflictError (and no change)
+        when a line already links elsewhere; NotFoundError (and no change) for an unknown
+        receipt or position; DomainValidationError for a link the domain refuses."""
         ...
 
 
@@ -96,6 +105,15 @@ class PriceRepository(Protocol):
     def reassign(self, line_item_id: int, product_id: int) -> PriceObservation | None:
         """Move the line's observation to another product (all else kept); None when the line
         has none."""
+        ...
+
+    def for_line_item(self, line_item_id: int) -> PriceObservation | None:
+        """The line's observation, if it has one."""
+        ...
+
+    def set_discount(self, line_item_id: int, discount: Money) -> PriceObservation | None:
+        """Set the line's observation's discount (its paid and unit discount follow) and return
+        it; None, and nothing written, when the line has no observation."""
         ...
 
 

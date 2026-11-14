@@ -217,7 +217,14 @@ def _arithmetic_summary(result: Mapping[str, JsonValue]) -> str:
 
 
 def _save_summary(result: Mapping[str, JsonValue]) -> str:
-    return f"{str(result['status']).upper()} · {result['item_count']} items"
+    """Status and items, then the discounts when the receipt has any discount line."""
+    summary = f"{str(result['status']).upper()} · {result['item_count']} items"
+    linked = result.get("discounts_linked")
+    receipt_level = result.get("discounts_receipt_level")
+    level = len(receipt_level) if isinstance(receipt_level, list) else 0
+    if not linked and not level:
+        return summary
+    return f"{summary} · discounts {linked or 0} linked · {level} receipt-level"
 
 
 def _review_summary(result: Mapping[str, JsonValue]) -> str:

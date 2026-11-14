@@ -27,12 +27,26 @@ from paper_trail.domain.enums import (
     ReviewReason,
     ReviewStatus,
 )
-from paper_trail.domain.models import ReceiptDraft
+from paper_trail.domain.models import PriceObservation, Receipt, ReceiptDraft
 from paper_trail.domain.paging import PageRequest
 from paper_trail.domain.rules.arithmetic import IssueCode, Tolerances
+from paper_trail.domain.rules.discounts import DiscountAttribution, DiscountLink
 from paper_trail.domain.rules.normalization import normalize_alias
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
-from tests.factories import MASKED_TEST_PAN, TEST_PAN, cad, line_item, receipt_draft
+from tests.factories import (
+    CHOC,
+    MASKED_TEST_PAN,
+    PURCHASED_ON,
+    TEST_PAN,
+    cad,
+    discount_line,
+    draft_with,
+    item_line,
+    line_item,
+    price_observation,
+    receipt_draft,
+    simple_draft,
+)
 from tests.fakes.clock import FakeClock
 from tests.fakes.repositories import FakePriceRepository
 from tests.fakes.state import FakeState
@@ -440,3 +454,157 @@ def test_s1_ac_20_review_details_keep_missing_amounts_as_null(record: RecordRece
     assert issue["code"] == IssueCode.NEGATIVE_ITEM.value
     assert issue["expected"] is None
     assert issue["actual"] == {"amount_cents": -658, "currency": "CAD"}
+
+
+# --- discounts and paid prices (docs/plans/discounts-and-paid-prices.md) --------------------
+
+SIMPLE_NAMES = {0: EGGS, 1: MILK, 2: "Bananas", 3: "Kirkland Signature Paper Towels 12 rolls"}
+SIMPLE_ATTRIBUTION = DiscountAttribution(
+    links=(DiscountLink(4, 0, "1234567", new=True),), receipt_level=()
+)
+
+
+def _priced(database: FakeDatabase, saved: Receipt) -> dict[int, PriceObservation]:
+    """The stored observations by the position of their line."""
+    positions = {item.id: item.position for item in saved.items}
+    return {positions[row.line_item_id]: row for row in _state(database).prices.values()}
+
+
+def _paid(observation: PriceObservation) -> tuple[object, ...]:
+    return (
+        observation.unit_price,
+        observation.line_total,
+        observation.discount,
+        observation.unit_discount,
+        observation.paid,
+        observation.on_sale,
+    )
+
+
+def test_tc_55a_assess_links_the_discount_and_writes_nothing(
+    record: RecordReceipt, database: FakeDatabase
+) -> None:
+    """TC-55 (R7, A4): ``assess`` returns the draft with its new links and the attribution."""
+    assessment = record.assess(simple_draft())
+
+    assert assessment.draft == simple_draft(link=True)
+    assert assessment.draft.items[4].applies_to_position == 0
+    assert assessment.discounts == SIMPLE_ATTRIBUTION
+    assert assessment.arithmetic.ok
+    assert (database.commits, _state(database)) == (0, FakeState())
+
+
+def test_tc_55b_assess_keeps_a_persons_link_and_links_the_rest(record: RecordReceipt) -> None:
+    """TC-55 (R4): an explicit 2 -> 0 stays although the rule would pick 1; line 3 gets 1."""
+    items = (
+        item_line(0, CHOC, 1699),
+        item_line(1, CHOC, 1699),
+        discount_line(2, "TPD/1362394", -400, 0),
+        discount_line(3, "TPD/1362394", -400),
+    )
+
+    assessment = record.assess(draft_with(items, subtotal=2598, tax=None, total=2598))
+
+    assert [item.applies_to_position for item in assessment.draft.items] == [None, None, 0, 1]
+    assert assessment.discounts == DiscountAttribution(
+        links=(
+            DiscountLink(2, 0, "1362394", new=False),
+            DiscountLink(3, 1, "1362394", new=True),
+        ),
+        receipt_level=(),
+    )
+
+
+def test_tc_55c_assessing_an_assessed_draft_gives_the_same_counts_and_nothing_new(
+    record: RecordReceipt,
+) -> None:
+    """TC-55 (A4): the effective links are reported again, none of them new."""
+    again = record.assess(record.assess(simple_draft()).draft)
+
+    assert again.draft == simple_draft(link=True)
+    assert again.discounts == DiscountAttribution(
+        links=(DiscountLink(4, 0, "1234567", new=False),), receipt_level=()
+    )
+    assert again.discounts.new_links == ()
+
+
+def test_tc_57_recording_stores_the_link_and_the_paid_prices(
+    record: RecordReceipt, database: FakeDatabase
+) -> None:
+    """TC-57 (R5, R7): the import path links line 4 to the eggs, whose observation keeps its
+    regular prices and adds discount -5.00, paid 3.99; the other lines are not on sale."""
+    result = record(simple_draft(product_names=SIMPLE_NAMES))
+
+    saved = result.receipt
+    assert [item.applies_to_position for item in saved.items] == [None, None, None, None, 0]
+    assert result.discounts == SIMPLE_ATTRIBUTION
+    priced = _priced(database, saved)
+
+    def expected(position: int, quantity: str, unit: int, total: int, discount: int) -> object:
+        line = saved.items[position]
+        return price_observation(
+            id=priced[position].id,
+            product_id=require_id(line.product_id),
+            receipt_id=require_id(saved.id),
+            line_item_id=require_id(line.id),
+            observed_on=PURCHASED_ON,
+            quantity=Decimal(quantity),
+            unit_price=cad(unit),
+            line_total=cad(total),
+            discount=cad(discount),
+        )
+
+    assert priced == {
+        0: expected(0, "1", 899, 899, -500),
+        1: expected(1, "2", 329, 658, 0),
+        2: expected(2, "1.36", 150, 204, 0),
+        3: expected(3, "1", 1979, 1979, 0),
+    }
+    assert {position: _paid(row) for position, row in priced.items()} == {
+        0: (cad(899), cad(899), cad(-500), cad(-500), cad(399), True),
+        1: (cad(329), cad(658), cad(0), cad(0), cad(658), False),
+        2: (cad(150), cad(204), cad(0), cad(0), cad(204), False),
+        3: (cad(1979), cad(1979), cad(0), cad(0), cad(1979), False),
+    }
+
+
+def test_tc_59_reconciled_multi_buy_shares_are_not_on_sale(
+    record: RecordReceipt, database: FakeDatabase
+) -> None:
+    """TC-59 (R5, DA-3): two shares of one multi-buy amount, no discount line: no discount."""
+    items = (item_line(0, "1543210 GOLD KIWI", 500), item_line(1, "1695232 KIMCHI", 500))
+
+    result = record(
+        replace(
+            draft_with(items, subtotal=1000, tax=None, total=1000),
+            product_names={0: "Gold Kiwi", 1: "Kimchi"},
+        )
+    )
+
+    priced = _priced(database, result.receipt)
+    assert {position: _paid(row) for position, row in priced.items()} == {
+        0: (cad(500), cad(500), cad(0), cad(0), cad(500), False),
+        1: (cad(500), cad(500), cad(0), cad(0), cad(500), False),
+    }
+    assert result.discounts == DiscountAttribution(links=(), receipt_level=())
+
+
+def test_tc_118_an_inferred_unit_price_need_not_multiply_back_but_paid_is_exact(
+    record: RecordReceipt, database: FakeDatabase
+) -> None:
+    """TC-118 (A8, Q19): 15 for 10.00 with no printed unit price: unit price 0.67 (66.67 half
+    up; 0.67 x 15 = 10.05), unit discount -0.07, paid exactly 9.00. Nothing rejects it."""
+    items = (
+        item_line(0, CHOC, 1000, quantity=Decimal("15")),
+        discount_line(1, "TPD/1362394", -100),
+    )
+
+    result = record(
+        replace(draft_with(items, subtotal=900, tax=None, total=900), product_names={0: EGGS})
+    )
+
+    assert result.receipt.items[1].applies_to_position == 0
+    (observation,) = _priced(database, result.receipt).values()
+    assert observation.quantity == Decimal("15")
+    assert _paid(observation) == (cad(67), cad(1000), cad(-100), cad(-7), cad(900), True)
+    assert observation.paid_unit_price == cad(60)

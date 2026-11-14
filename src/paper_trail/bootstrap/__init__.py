@@ -17,6 +17,7 @@ from paper_trail.adapters.sqlite.migrations import current_revision, head_revisi
 from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
 from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
+from paper_trail.application.prices import BackfillPrices
 from paper_trail.application.products import GetProduct
 from paper_trail.application.receipts import (
     GetReceipt,
@@ -44,6 +45,7 @@ class Container:
     list_receipts: ListReceipts
     correct_line_item: CorrectLineItem
     get_product: GetProduct
+    backfill_prices: BackfillPrices
     tolerances: Tolerances
 
 
@@ -67,6 +69,7 @@ def build_container(settings: Settings) -> Container:
         list_receipts=ListReceipts(uow_factory),
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
+        backfill_prices=BackfillPrices(uow_factory),
         tolerances=tolerances,
     )
 

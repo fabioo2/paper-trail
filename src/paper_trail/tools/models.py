@@ -22,6 +22,7 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import DomainValidationError
 from paper_trail.domain.models import JsonValue, Product, require_id
+from paper_trail.domain.rules.discounts import Refusal
 
 
 class _Model(BaseModel):
@@ -54,12 +55,22 @@ class SaveReceiptInput(_Model):
     force: bool = False  # a person approved the draft: COMPLETED even if it does not add up
 
 
+class ReceiptLevelDiscountOut(_Model):
+    """A discount kept at receipt level, and why."""
+
+    position: int
+    raw_text: str
+    reason: Refusal
+
+
 class SaveReceiptOutput(_Model):
     receipt_id: int
     status: ReceiptStatus
     stage: ProcessingStage
     item_count: int
     masked_pans: int
+    discounts_linked: int  # every effective link, kept and new
+    discounts_receipt_level: list[ReceiptLevelDiscountOut]
 
 
 class OpenReviewInput(_Model):

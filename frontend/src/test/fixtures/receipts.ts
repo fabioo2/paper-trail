@@ -51,6 +51,7 @@ export function lineItem(overrides: Partial<LineItemOut> = {}): LineItemOut {
     line_total: cad(899),
     product_id: null,
     category: "dairy_eggs",
+    applies_to_position: null,
     ...overrides,
   };
 }

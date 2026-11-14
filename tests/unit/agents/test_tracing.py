@@ -15,9 +15,16 @@ Pinned (docs/tests/agent-core-A.md):
 - ROUTE (supervisor): ``name`` = target; ``data`` has ``target``, ``reason``, ``text_attempts``
   and ``vision_attempts``. INTERRUPT (supervisor): ``name`` "review", ``data`` has
   ``review_id`` and ``reason``.
+- The ``save_receipt`` row (discounts-and-paid-prices plan A9, TC-88) keeps its status and item
+  count and appends `` · discounts N linked · M receipt-level`` only when the receipt has
+  discount lines (N + M > 0).
 """
 
+import pytest
+
+from paper_trail.agents.tracing import _save_summary
 from paper_trail.domain.enums import AgentRole
+from paper_trail.domain.models import JsonValue
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from tests.agent_harness import TEXT_MODEL, build_harness
 from tests.extractions import extraction, inconsistent_extraction
@@ -179,3 +186,36 @@ def test_an_upright_ocr_event_does_not_mention_rotation() -> None:
     assert isinstance(output, dict)
     assert output["rotation_degrees"] == 0
     assert "rotated" not in event.summary
+
+
+def _saved(items: int, linked: int, receipt_level: int) -> dict[str, JsonValue]:
+    """A ``save_receipt`` result as the trace sees it (JSON)."""
+    refused: list[JsonValue] = [
+        {"position": position, "raw_text": "MULTIPLE", "reason": "multiple"}
+        for position in range(receipt_level)
+    ]
+    return {
+        "receipt_id": 1,
+        "status": "processing",
+        "stage": "matching",
+        "item_count": items,
+        "masked_pans": 0,
+        "discounts_linked": linked,
+        "discounts_receipt_level": refused,
+    }
+
+
+# P11 SAVE_SUMMARIES: (items, linked, receipt level) -> the row's summary.
+SAVE_SUMMARIES = [
+    (22, 7, 1, "PROCESSING · 22 items · discounts 7 linked · 1 receipt-level"),
+    (5, 0, 1, "PROCESSING · 5 items · discounts 0 linked · 1 receipt-level"),
+    (5, 1, 0, "PROCESSING · 5 items · discounts 1 linked · 0 receipt-level"),
+    (4, 0, 0, "PROCESSING · 4 items"),
+]
+
+
+@pytest.mark.parametrize(("items", "linked", "receipt_level", "summary"), SAVE_SUMMARIES)
+def test_tc_88_the_save_row_counts_the_discounts(
+    items: int, linked: int, receipt_level: int, summary: str
+) -> None:
+    assert _save_summary(_saved(items, linked, receipt_level)) == summary

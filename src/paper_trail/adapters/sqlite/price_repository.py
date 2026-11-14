@@ -6,9 +6,10 @@ from dataclasses import replace
 from sqlalchemy import Connection, insert, select, update
 
 from paper_trail.adapters.sqlite.integrity import unique_violation_as_conflict
-from paper_trail.adapters.sqlite.mappers import price_from_row, price_values
+from paper_trail.adapters.sqlite.mappers import discount_values, price_from_row, price_values
 from paper_trail.adapters.sqlite.schema import price_observations
 from paper_trail.domain.models import PriceObservation
+from paper_trail.domain.money import Money
 
 
 class SqlitePriceRepository:
@@ -52,3 +53,25 @@ class SqlitePriceRepository:
             .one_or_none()
         )
         return None if row is None else price_from_row(row)
+
+    def for_line_item(self, line_item_id: int) -> PriceObservation | None:
+        row = (
+            self._connection.execute(
+                select(price_observations).where(price_observations.c.line_item_id == line_item_id)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else price_from_row(row)
+
+    def set_discount(self, line_item_id: int, discount: Money) -> PriceObservation | None:
+        current = self.for_line_item(line_item_id)
+        if current is None:
+            return None
+        changed = replace(current, discount=discount)
+        self._connection.execute(
+            update(price_observations)
+            .where(price_observations.c.id == changed.id)
+            .values(discount_values(changed))
+        )
+        return changed

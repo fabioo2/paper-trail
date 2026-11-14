@@ -25,7 +25,7 @@ from paper_trail.domain.errors import DomainValidationError, NotFoundError
 from paper_trail.domain.trace import TraceKind
 from tests.agent_harness import Harness, build_harness
 from tests.extractions import COSTCO_OCR, EGGS_ALIAS, MASKED_PAN, STORE_KEY, extraction
-from tests.factories import TEST_PAN, product
+from tests.factories import TEST_PAN, cad, product, simple_draft
 from tests.fakes.llm import Reply, ScriptedLlm
 from tests.storage import in_unit
 from tests.support import require_id
@@ -154,3 +154,22 @@ def test_unknown_things_are_not_found_and_nothing_changes(
 
     assert harness.receipt(receipt_id) == before
     assert harness.latest_correction(EGGS_ALIAS, CorrectionKind.PRODUCT_LINK, STORE_KEY) is None
+
+
+def test_tc_63_a_corrected_discounted_line_keeps_its_discount() -> None:
+    """TC-63 (R8, wiring of TC-83): the observation moved to the new product is still the one
+    with discount -5.00 and paid 3.99."""
+    harness = build_harness(ScriptedLlm())
+    recorded = harness.record(simple_draft(product_names={0: "Eggs"})).receipt
+    receipt_id = require_id(recorded.id)
+    target = _other_product(harness)
+
+    harness.correct(receipt_id, 0, product_id=target)
+
+    (moved,) = harness.price_history(target)
+    assert (moved.line_item_id, moved.discount, moved.paid, moved.on_sale) == (
+        recorded.items[0].id,
+        cad(-500),
+        cad(399),
+        True,
+    )

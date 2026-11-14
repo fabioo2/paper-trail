@@ -33,6 +33,7 @@ from paper_trail.tools.models import (
     ProductLookupInput,
     ProductLookupOutput,
     ProductOut,
+    ReceiptLevelDiscountOut,
     SaveEnrichmentInput,
     SaveEnrichmentOutput,
     SaveMatchesInput,
@@ -88,12 +89,22 @@ def save_receipt(services: ToolServices, request: SaveReceiptInput) -> SaveRecei
         request.receipt_id, request.draft.to_draft(), force=request.force, matching=True
     )
     receipt = result.receipt
+    raw_texts = {item.position: item.raw_text for item in receipt.items}
     return SaveReceiptOutput(
         receipt_id=require_id(receipt.id),
         status=receipt.status,
         stage=receipt.stage,
         item_count=len(receipt.items),
         masked_pans=result.masked_pans,
+        discounts_linked=len(result.discounts.links),
+        discounts_receipt_level=[
+            ReceiptLevelDiscountOut(
+                position=discount.discount_position,
+                raw_text=raw_texts[discount.discount_position],
+                reason=discount.reason,
+            )
+            for discount in result.discounts.receipt_level
+        ],
     )
 
 
