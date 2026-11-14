@@ -8,6 +8,9 @@ updates:
     groups:
       base-images:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: docker-compose
     directories: ["/", "/deploy/llm"]
