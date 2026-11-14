@@ -38,6 +38,9 @@ afterEach(() => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
   server.close();
+  // sonner removes a closing toast with an uncleared 200 ms setTimeout that outlives unmount;
+  // let it fire while jsdom's window still exists, or it throws after teardown.
+  await new Promise((resolve) => setTimeout(resolve, 250));
 });
