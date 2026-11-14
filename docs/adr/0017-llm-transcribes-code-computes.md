@@ -31,7 +31,7 @@ The first real photos (a crumpled Costco and a Superstore receipt, 2026-11-08) n
 - The numbers on a saved receipt are computed by tested code; a model error surfaces as a named, quoted value in the retry feedback rather than a silently wrong amount.
 - Two schemas exist for one output; `ANSWER_MODELS` maps each extraction prompt to its answer model, and an extraction prompt version without one fails when the graph is built.
 - The vision-first threshold is calibrated on two photos only; the experiment trace records each receipt's OCR confidence and route so it can be moved.
-- Deferred: attributing a discount to the item it reduces (needs a net-price column and an owner decision on which price the history shows); `split_item_code` is its first building block.
+- Deferred: attributing a discount to the item it reduces (needs a net-price column and an owner decision on which price the history shows); `split_item_code` is its first building block. Done: see the 2026-11-14 amendment.
 
 ## Amendment (2026-11-08): the photo upright, and a bounded answer
 
@@ -61,3 +61,14 @@ A blind re-run of a new Superstore receipt went text first (OCR confidence 0.68,
 
 - **Vision first for every photo.** `GRAPH__VISION_FIRST_BELOW` now defaults to 1.0, and 1.0 is a dedicated rule (`ALWAYS_VISION_FIRST`): every photo goes vision first, even one whose OCR read is perfect or has no confidence. OCR still runs, for the rotation, card masking and the multi-buy cross-check. A text input (`--text-file`) still uses the text path, and `--no-vision` or 0 still turns vision first off.
 - **Completeness beside arithmetic.** `check_completeness` (`domain/rules/completeness.py`, pure) reports a blank store name (`MISSING_STORE`) and a purchase date that is missing or reads as no date up to today (`MISSING_DATE`). Its messages are feedback the model can act on: "no purchase date was read: copy the date exactly as printed" and "no store name was read: copy the store name printed at the top". The `validate` node adds these issues to the arithmetic ones, so they route the same way: a retry with feedback, then review with reason `validation_failed`. Nothing incomplete is saved as COMPLETED by the graph, but a person can still keep such a receipt from the review (`review resolve`, `--force`), because saving checks the arithmetic only. `IssueCode` gains the two codes, so the OpenAPI spec and the generated client were regenerated.
+
+## Amendment (2026-11-14): a discount line reduces the item it names
+
+The deferred item above is closed by `docs/plans/discounts-and-paid-prices.md` (owner decisions DA-1 to DA-6). The same split holds: the model transcribes the discount line as printed, and code ties it to its item. `attribute_discounts` (`domain/rules/discounts.py`, pure) reads the code a discount line names (`0000399102 / 3139415`, `TPD/1362394`, `1362394/TPD`) and links the discount to the nearest preceding ITEM line with that code (leading zeros ignored) that has no discount yet. It is exact or nothing: a discount that is not negative, says `MULTIPLE`, has no code, finds no such item, or is larger than that item's total stays at receipt level with its reason. A discount larger than its nearest free item is not always final, though: the rule repeats its pass until it adds no link, so when a later discount with the same code takes that nearer item, the larger discount links to an earlier, larger item with its code (and when none fits it reports `NO_ITEM`). Nothing is guessed, prorated or split, and no amount changes, so the arithmetic report is identical with or without the links. A link a person sets in an import or review file is validated and kept; the rule fills only the rest.
+
+- The rule runs in `RecordReceipt.assess`, so the graph's save, a review resolution, the JSON import and `--dry-run` all apply it. No model input or output carries the link.
+- `line_items.applies_to_position` (migration 0004) stores the link by position: line ids change on every save, positions do not.
+- Price observations keep the regular unit price and line total (the price history) and add the line's discount, the discount per unit, what was paid and `on_sale`. Multi-buy shares are not discounts: regular equals paid (DA-3).
+- `split_item_code` accepts a leading `(N)` quantity marker, so `(1)05700001285 ...` still yields its code.
+- The `save_receipt` trace row counts the linked and receipt-level discounts, and a `discounts` NOTE names each receipt-level one and why, so no discount goes unexplained.
+- `paper-trail prices backfill` applies the rule to receipts stored before it, one unit of work per receipt; a dry run by default and idempotent.

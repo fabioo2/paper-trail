@@ -1,6 +1,6 @@
 """In-memory repositories (implement ``paper_trail.ports.repositories``) over a ``FakeState``."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -15,6 +15,7 @@ from paper_trail.domain.models import (
     Receipt,
     ReceiptSummary,
 )
+from paper_trail.domain.money import Money
 from paper_trail.domain.paging import Page, PageRequest
 from paper_trail.ports.clock import Clock
 from tests.fakes.state import FakeState, newest_first_page
@@ -110,6 +111,35 @@ class FakeReceiptRepository:
             ),
             None,
         )
+
+    def set_discount_links(self, receipt_id: int, links: Mapping[int, int]) -> Receipt:
+        current = self._existing(receipt_id)
+        by_position = {item.position: item for item in current.items}
+        changed = False
+        for position, target in links.items():
+            for wanted in (position, target):
+                if wanted not in by_position:
+                    msg = f"receipt {receipt_id} has no line at position {wanted}"
+                    raise NotFoundError(msg)
+            line = by_position[position]
+            if line.applies_to_position not in {None, target}:
+                msg = (
+                    f"receipt {receipt_id} line at position {position} already applies to"
+                    f" position {line.applies_to_position}"
+                )
+                raise ConflictError(msg)
+            if line.applies_to_position is None:
+                changed = True
+                by_position[position] = replace(line, applies_to_position=target)
+        if not changed:
+            return current
+        stored = replace(
+            current,
+            items=tuple(by_position[item.position] for item in current.items),
+            updated_at=self._clock.now(),
+        )
+        self._state.receipts[receipt_id] = stored
+        return stored
 
     def _existing(self, receipt_id: int) -> Receipt:
         current = self._state.receipts.get(receipt_id)
@@ -226,6 +256,19 @@ class FakePriceRepository:
                 moved = replace(row, product_id=product_id)
                 self._state.prices[price_id] = moved
                 return moved
+        return None
+
+    def for_line_item(self, line_item_id: int) -> PriceObservation | None:
+        return next(
+            (row for row in self._state.prices.values() if row.line_item_id == line_item_id), None
+        )
+
+    def set_discount(self, line_item_id: int, discount: Money) -> PriceObservation | None:
+        for price_id, row in self._state.prices.items():
+            if row.line_item_id == line_item_id:
+                changed = replace(row, discount=discount)
+                self._state.prices[price_id] = changed
+                return changed
         return None
 
 

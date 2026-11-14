@@ -42,6 +42,11 @@ from paper_trail.domain.rules.arithmetic import (
     Tolerances,
     check_arithmetic,
 )
+from paper_trail.domain.rules.discounts import (
+    DiscountAttribution,
+    attribute_discounts,
+    with_attribution,
+)
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.rules.normalization import normalize_alias, normalize_store_name
 from paper_trail.ports.agents import ReceiptGraphRunner
@@ -54,13 +59,15 @@ log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ReceiptAssessment:
-    """What recording a draft would do, decided before anything is written."""
+    """What recording a draft would do, decided before anything is written. The draft's lines
+    carry the new links of ``discounts``."""
 
     draft: ReceiptDraft  # with card numbers masked
     masked_pans: int
     arithmetic: ArithmeticReport
     status: ReceiptStatus
     stage: ProcessingStage
+    discounts: DiscountAttribution
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +76,7 @@ class RecordReceiptResult:
     arithmetic: ArithmeticReport
     review: ReviewItem | None
     masked_pans: int
+    discounts: DiscountAttribution
 
 
 class RecordReceipt:
@@ -90,14 +98,17 @@ class RecordReceipt:
         self._tolerances = tolerances
 
     def assess(self, draft: ReceiptDraft) -> ReceiptAssessment:
-        """Mask and check ``draft`` without writing anything (``receipts import --dry-run``)."""
+        """Mask ``draft``, link its discounts to their items and check it, without writing
+        anything (``receipts import --dry-run``). Linking changes no amount."""
         masked, masked_pans = _masked(draft)
+        discounts = attribute_discounts(masked.items)
+        masked = replace(masked, items=with_attribution(masked.items, discounts))
         report = check_arithmetic(masked, self._tolerances)
         if report.ok:
             status, stage = ReceiptStatus.COMPLETED, ProcessingStage.DONE
         else:
             status, stage = ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
-        return ReceiptAssessment(masked, masked_pans, report, status, stage)
+        return ReceiptAssessment(masked, masked_pans, report, status, stage, discounts)
 
     def __call__(self, draft: ReceiptDraft) -> RecordReceiptResult:
         assessment = self.assess(draft)
@@ -234,7 +245,9 @@ class RecordReceipt:
             item_count=len(receipt.items),
             masked_pans=assessment.masked_pans,
         )
-        return RecordReceiptResult(receipt, assessment.arithmetic, review, assessment.masked_pans)
+        return RecordReceiptResult(
+            receipt, assessment.arithmetic, review, assessment.masked_pans, assessment.discounts
+        )
 
 
 class InconsistentDraftError(DomainValidationError):

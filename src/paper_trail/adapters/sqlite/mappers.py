@@ -105,6 +105,7 @@ def line_item_values(item: LineItem, receipt_id: int) -> Values:
         "product_id": item.product_id,
         "category": item.category,
         "match_source": item.match_source,
+        "applies_to_position": item.applies_to_position,
     }
 
 
@@ -121,6 +122,7 @@ def line_item_from_row(row: RowMapping, currency: str) -> LineItem:
         product_id=row["product_id"],
         category=row["category"],
         match_source=row["match_source"],
+        applies_to_position=row["applies_to_position"],
     )
 
 
@@ -181,6 +183,17 @@ def price_values(observation: PriceObservation) -> Values:
         "unit_price_cents": observation.unit_price.amount_cents,
         "line_total_cents": observation.line_total.amount_cents,
         "currency": observation.unit_price.currency,
+        **discount_values(observation),
+    }
+
+
+def discount_values(observation: PriceObservation) -> Values:
+    """The discount columns, all derived from the observation's discount."""
+    return {
+        "discount_cents": observation.discount.amount_cents,
+        "unit_discount_cents": observation.unit_discount.amount_cents,
+        "paid_cents": observation.paid.amount_cents,
+        "on_sale": observation.on_sale,
     }
 
 
@@ -196,6 +209,7 @@ def price_from_row(row: RowMapping) -> PriceObservation:
         quantity=row["quantity"],
         unit_price=Money(row["unit_price_cents"], currency),
         line_total=Money(row["line_total_cents"], currency),
+        discount=Money(row["discount_cents"], currency),
     )
 
 

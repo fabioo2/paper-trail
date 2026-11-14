@@ -69,6 +69,7 @@ class LineItemOut(BaseModel):
     line_total: MoneyOut
     product_id: int | None
     category: Category | None
+    applies_to_position: int | None
 
     @classmethod
     def from_domain(cls, item: LineItem) -> "LineItemOut":
@@ -83,6 +84,7 @@ class LineItemOut(BaseModel):
             line_total=MoneyOut.from_domain(item.line_total),
             product_id=item.product_id,
             category=item.category,
+            applies_to_position=item.applies_to_position,
         )
 
 

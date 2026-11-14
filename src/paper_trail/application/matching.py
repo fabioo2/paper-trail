@@ -66,10 +66,15 @@ class MatchChoice:
 
 @dataclass(frozen=True, slots=True)
 class MatchesRecorded:
+    """``unpriced``: the linked ITEM lines with a negative total (possible only on a receipt a
+    person forced through), which get no price observation, a line the review answer linked
+    included."""
+
     receipt_id: int
     links: tuple[ItemLink, ...]  # in the order of the choices
     new_products: int
     prices: int  # price observations recorded or moved
+    unpriced: tuple[LineItem, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,8 +127,9 @@ def record_matches(
     now: datetime,
 ) -> MatchesRecorded:
     """Create the new products (with their vectors), link the lines, remember each line's
-    alias at the store (MATCHED), price every linked ITEM line when the date is known, and mark
-    the receipt COMPLETED/DONE. ``vectors`` holds the embedding of each alias to create."""
+    alias at the store (MATCHED), price every linked ITEM line when the date is known (one with
+    a negative total is left unpriced: a price cannot be negative), and mark the receipt
+    COMPLETED/DONE. ``vectors`` holds the embedding of each alias to create."""
     if set(vectors) != set(plan.to_create):
         msg = f"receipt {require_id(plan.receipt.id)} changed while its matches were being saved"
         raise ConflictError(msg)
@@ -144,7 +150,11 @@ def record_matches(
     linked = uow.receipts.link_items(receipt_id, links)
     positions = {link.position for link in links}
     prices = 0
+    unpriced: list[LineItem] = []
     for item in linked.items:
+        negative = item.kind is LineKind.ITEM and item.line_total.is_negative()
+        if negative and item.product_id is not None:
+            unpriced.append(item)
         if item.position not in positions:
             continue
         product_id = require_id(item.product_id)
@@ -158,9 +168,10 @@ def record_matches(
                 source=AliasSource.MATCHED,
                 now=now,
             )
-        prices += _price(uow, linked, item, product_id)
+        if not negative:
+            prices += _price(uow, linked, item, product_id)
     uow.receipts.update_status(receipt_id, ReceiptStatus.COMPLETED, ProcessingStage.DONE)
-    return MatchesRecorded(receipt_id, links, len(created), prices)
+    return MatchesRecorded(receipt_id, links, len(created), prices, tuple(unpriced))
 
 
 def _created_before(line: LineItem) -> bool:

@@ -26,6 +26,7 @@ class LineImport(BaseModel):
     kind: LineKind = LineKind.ITEM
     product: str | None = None  # the product this line is, linked or created on import
     category: Category | None = None
+    applies_to: StrictInt | None = None
 
     def to_line_item(self, position: int, currency: str) -> LineItem:
         return LineItem(
@@ -39,6 +40,7 @@ class LineImport(BaseModel):
             else Money(self.unit_price_cents, currency),
             line_total=Money(self.line_total_cents, currency),
             category=self.category,
+            applies_to_position=self.applies_to,
         )
 
 

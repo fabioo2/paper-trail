@@ -57,3 +57,9 @@ def test_ac_a_agent_core_schema_is_revision_0003_after_0002() -> None:
     """Agent core (PLAN 3.5): migrations/versions/0003_agent_core.py is revision "0003",
     revising "0002" (Stage 2's ingestion migration becomes 0004)."""
     assert _revision_ids("0003_agent_core.py") == ("0003", "0002")
+
+
+def test_paid_prices_schema_is_revision_0004_after_0003() -> None:
+    """Discounts and paid prices (R6, TC-78): migrations/versions/0004_paid_prices.py is
+    revision "0004", revising "0003"."""
+    assert _revision_ids("0004_paid_prices.py") == ("0004", "0003")

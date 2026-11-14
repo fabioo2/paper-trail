@@ -217,3 +217,87 @@ def test_s1_ac_24_show_unknown_id_exits_1(migrated: Path) -> None:
     assert shown.exit_code == 1
     assert "999" in shown.stderr
     assert shown.stdout == ""
+
+
+# --- discounts (discounts-and-paid-prices plan, R7, A3, A7) ---------------------------------------
+
+
+def _table_counts(data_dir: Path) -> dict[str, int]:
+    with closing(sqlite3.connect(data_dir / "paper_trail.db")) as connection:
+        tables = [
+            name
+            for (name,) in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                " AND sql NOT LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name"
+            )
+        ]
+        return {
+            table: connection.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]  # noqa: S608
+            for table in tables
+        }
+
+
+def _rows(data_dir: Path, sql: str) -> list[tuple[Any, ...]]:
+    with closing(sqlite3.connect(data_dir / "paper_trail.db")) as connection:
+        return connection.execute(sql).fetchall()
+
+
+def _line_with(output: str, text: str) -> str:
+    (line,) = [line for line in output.splitlines() if text in line]
+    return line
+
+
+def test_tc_98_an_invalid_explicit_link_exits_2_naming_applies_to(
+    migrated: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    data = _sample()
+    data["items"][4]["applies_to"] = 4  # its own index
+
+    code, stdout, stderr = _import(_write(tmp_path, data))
+
+    assert code == 2
+    assert "  line 5: applies_to names line 5, its own line; it must name another line" in stderr
+    assert "applies_to_position" not in stderr
+    assert "Traceback" not in stderr + stdout
+    assert _row_count(data_dir) == 0
+
+
+def test_tc_99_import_links_the_discount_and_records_what_was_paid(
+    migrated: Path, data_dir: Path
+) -> None:
+    code, _, stderr = _import(COSTCO_SIMPLE)
+
+    assert code == 0, stderr
+    links = _rows(
+        data_dir, "SELECT position, applies_to_position FROM line_items ORDER BY position"
+    )
+    assert links == [(0, None), (1, None), (2, None), (3, None), (4, 0)]
+    assert _rows(
+        data_dir,
+        "SELECT o.unit_price_cents, o.line_total_cents, o.discount_cents, o.paid_cents, o.on_sale"
+        " FROM price_observations o JOIN line_items l ON l.id = o.line_item_id"
+        " WHERE l.position = 0",
+    ) == [(899, 899, -500, 399, 1)]
+
+
+def test_tc_100_dry_run_prints_the_attribution_and_writes_nothing(
+    migrated: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    data = _sample()
+    data["items"].append(
+        {"raw_text": "MULTIPLE", "description": "Multi-buy savings", "kind": "discount",
+         "line_total_cents": -100}
+    )  # fmt: skip
+    data["subtotal_cents"] = 3140
+    data["total_cents"] = 3192
+    before = _table_counts(data_dir)
+
+    code, stdout, stderr = _import(_write(tmp_path, data), "--dry-run")
+
+    assert code == 0, stderr
+    assert "dry run: completed" in stdout
+    assert "1234567 KS ORG EGGS 24CT" in _line_with(stdout, "TPD/1234567")
+    assert "multiple" in _line_with(stdout, "MULTIPLE")  # the reason, as Refusal spells it
+    assert "1 linked" in stdout
+    assert "1 receipt-level" in stdout
+    assert _table_counts(data_dir) == before

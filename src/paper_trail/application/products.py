@@ -13,6 +13,7 @@ from paper_trail.domain.models import (
     Receipt,
     require_id,
 )
+from paper_trail.domain.money import Money
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
@@ -56,7 +57,16 @@ def remember_alias(  # noqa: PLR0913 - the fields of one alias, plus where and w
 
 
 def price_observation(receipt: Receipt, item: LineItem, purchased_on: date) -> PriceObservation:
-    """What the line's product cost on this receipt (the line must be linked)."""
+    """What the line's product cost on this receipt (the line must be linked): its regular
+    price, and the discount line that applies to it, if any."""
+    discount = next(
+        (
+            line.line_total.amount_cents
+            for line in receipt.items
+            if line.applies_to_position == item.position
+        ),
+        0,
+    )
     return PriceObservation(
         id=None,
         product_id=require_id(item.product_id),
@@ -69,6 +79,7 @@ def price_observation(receipt: Receipt, item: LineItem, purchased_on: date) -> P
         if item.unit_price is None
         else item.unit_price,
         line_total=item.line_total,
+        discount=Money(discount, item.line_total.currency),
     )
 
 

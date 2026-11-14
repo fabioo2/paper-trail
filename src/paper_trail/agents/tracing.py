@@ -2,7 +2,9 @@
 
 ``traced_node`` brackets a node with NODE start/end events; ``TracingLlm`` and
 ``TracingToolGateway`` decorate the ports so that every model call and every tool call, a
-denial included, becomes one event. The runner applies all three.
+denial included, becomes one event. A save that leaves a discount at receipt level or an item
+line without a price also gets a NOTE naming them, so neither goes unexplained. The runner
+applies all three.
 """
 
 import hashlib
@@ -145,6 +147,11 @@ class TracingToolGateway:
             raise
         data["output"] = dict(result)
         self._emit(role, name, _tool_summary(name, result), data, started)
+        note = _TOOL_NOTES.get(name)
+        found = None if note is None else note(result)
+        if found is not None:
+            note_name, summary, note_data = found
+            self._tracer.emit(role, TraceKind.NOTE, note_name, summary, data=note_data)
         return result
 
     def describe(self, role: AgentRole) -> tuple[ToolDescription, ...]:
@@ -217,7 +224,14 @@ def _arithmetic_summary(result: Mapping[str, JsonValue]) -> str:
 
 
 def _save_summary(result: Mapping[str, JsonValue]) -> str:
-    return f"{str(result['status']).upper()} · {result['item_count']} items"
+    """Status and items, then the discounts when the receipt has any discount line."""
+    summary = f"{str(result['status']).upper()} · {result['item_count']} items"
+    linked = result.get("discounts_linked")
+    receipt_level = result.get("discounts_receipt_level")
+    level = len(receipt_level) if isinstance(receipt_level, list) else 0
+    if not linked and not level:
+        return summary
+    return f"{summary} · discounts {linked or 0} linked · {level} receipt-level"
 
 
 def _review_summary(result: Mapping[str, JsonValue]) -> str:
@@ -265,6 +279,39 @@ def _enrichment_summary(result: Mapping[str, JsonValue]) -> str:
     memory = " (memory)" if result["category_source"] == "memory" else ""
     return f"{product['category']}{memory} · #{product['id']} {product['canonical_name']}"
 
+
+type _Note = tuple[str, str, dict[str, JsonValue]]
+
+
+def _entries(value: JsonValue) -> list[dict[str, JsonValue]]:
+    return [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
+
+
+def _discounts_note(result: Mapping[str, JsonValue]) -> _Note | None:
+    """The discounts a saved receipt keeps at receipt level and why (0-based positions)."""
+    receipt_level = _entries(result.get("discounts_receipt_level"))
+    if not receipt_level:
+        return None
+    named = "; ".join(
+        f"pos {entry['position']} `{entry['raw_text']}` ({entry['reason']})"
+        for entry in receipt_level
+    )
+    return "discounts", f"kept at receipt level: {named}", {"receipt_level": [*receipt_level]}
+
+
+def _unpriced_note(result: Mapping[str, JsonValue]) -> _Note | None:
+    """The matched item lines left without a price because their total is negative."""
+    unpriced = _entries(result.get("unpriced"))
+    if not unpriced:
+        return None
+    named = "; ".join(f"pos {entry['position']} `{entry['raw_text']}`" for entry in unpriced)
+    return "prices", f"no price for a negative item line: {named}", {"unpriced": [*unpriced]}
+
+
+_TOOL_NOTES: dict[str, Callable[[Mapping[str, JsonValue]], _Note | None]] = {
+    "save_receipt": _discounts_note,
+    "save_matches": _unpriced_note,
+}
 
 _TOOL_SUMMARIES: dict[str, Callable[[Mapping[str, JsonValue]], str]] = {
     "ocr_read": _ocr_summary,

@@ -6,7 +6,7 @@ sqlite-vec virtual tables. This module mirrors the regular tables for queries, a
 nullability and foreign keys must match the migrated database.
 """
 
-from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, MetaData, Table, Text
 
 from paper_trail.adapters.sqlite.types import (
     DecimalText,
@@ -81,6 +81,7 @@ line_items = Table(
     Column("product_id", Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True),
     Column("category", StrEnumType(Category), nullable=True),
     Column("match_source", StrEnumType(MatchSource), nullable=True),
+    Column("applies_to_position", Integer, nullable=True),
 )
 
 product_aliases = Table(
@@ -109,6 +110,10 @@ price_observations = Table(
     Column("unit_price_cents", Integer, nullable=False),
     Column("line_total_cents", Integer, nullable=False),
     Column("currency", Text, nullable=False),
+    Column("discount_cents", Integer, nullable=False, server_default="0"),
+    Column("unit_discount_cents", Integer, nullable=False, server_default="0"),
+    Column("paid_cents", Integer, nullable=False),
+    Column("on_sale", Boolean, nullable=False, server_default="0"),
 )
 
 jobs = Table(

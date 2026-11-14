@@ -238,12 +238,15 @@ docker compose run --rm web receipts show 1             # the receipt as JSON
 The import prints `receipt <id>: <status>` and every arithmetic issue. A receipt that does not
 add up is still recorded, as `needs_review`, with an open review item; one that does is
 `completed` and, when its purchase date is known, adds a price observation for each `item` line
-that names a product (a deposit, discount or fee line is linked to a product only when the file
-names one for it, and is never priced; tying a discount to the item it reduces is planned in
-[`docs/plans/discounts-and-paid-prices.md`](docs/plans/discounts-and-paid-prices.md)). Card numbers are masked before anything is stored or logged. Invalid files exit with status 2 and name the
-offending field. The format (unknown fields are errors, amounts are integer cents; the lines add
-up to the subtotal, and subtotal plus tax to the total; `tests/data/receipts/costco_simple.json`
-is a full example):
+that names a product (a deposit, discount or fee line gets a product only when the file names
+one for it, and is never priced itself; a discount that names an item's code, such as
+`TPD/1234567`, is applied to that item's paid price, see "What gets saved" below). A discount
+line's `applies_to` (the 0-based position of the item it reduces) sets that link by hand; the
+rest are found from the codes. `--dry-run` also lists each discount and the item it applies to,
+or why it stays on the receipt. Card numbers are masked before anything is stored or logged.
+Invalid files exit with status 2 and name the offending field. The format (unknown fields are
+errors, amounts are integer cents; the lines add up to the subtotal, and subtotal plus tax to
+the total; `tests/data/receipts/costco_simple.json` is a full example):
 
 ```json
 {
@@ -405,27 +408,43 @@ example, Costco's gold kiwis bought on two receipts (three lines):
     {
       "observed_on": "2026-09-24", "store_name": "Costco Wholesale", "receipt_id": 4,
       "line_item_id": 53, "raw_text": "3139415 GOLD KIWI", "match_source": "alias",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
+      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
     },
     {
       "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
       "line_item_id": 34, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
+      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
     },
     {
       "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
       "line_item_id": 36, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD"
+      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
+      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
     }
   ]
 }
 ```
 
 The second receipt's line was linked by the alias the first one left (`match_source` `alias`),
-without a model call. The prices are the shelf prices: each of these lines was followed by a
-`-4.00` instant-savings line (such as `0000399102 / 3139415`), stored as its own `discount` line but
-not yet applied, so 11.99 was paid. Storing the regular and the paid price side by side is the
-[discounts plan](docs/plans/discounts-and-paid-prices.md). The tables behind it:
+without a model call. Each of these lines was followed by a `-4.00` instant-savings line naming
+the kiwi's code (`0000399102 / 3139415`), stored as its own `discount` line and linked to the
+item above it with that code: the regular 15.99 is the price history; 11.99 is what was paid. A
+discount that cannot be tied to one item (`0000398549 / MULTIPLE`, or a line without a code)
+stays on the receipt, never guessed or prorated. A discount larger than the nearest free item
+with its code stays on the receipt too, unless a later discount with the same code takes that
+item: then it links to an earlier, larger item with the code, or, with none, is reported as
+having no item (`no_item`). The upgrade that adds discounts (migration 0004) refuses to run
+while any price observation has a negative line total, and lists their ids; find them with
+`SELECT id FROM price_observations WHERE line_total_cents < 0`, delete or correct them, and
+upgrade again. Receipts stored before discounts were linked are brought up to date with
+`paper-trail prices backfill` (a dry run; `--apply` writes, and `--run NAME` and `--receipt ID`
+narrow it). It looks at completed receipts only: one that was still being processed when the
+upgrade ran (saved, not yet matched) gets its prices at discount 0 when it completes, so run the
+backfill once more after it has. If a receipt fails, the command stops with exit status 1 naming
+it; the receipts before it stay applied and running it again finishes the rest. The tables
+behind it:
 
 ```mermaid
 erDiagram
@@ -443,11 +462,17 @@ erDiagram
   and the stored photo.
 - `line_items`: each printed line in order: raw text, kind (`item`, `discount`, `deposit`,
   `fee`), quantity, unit price, line total, and the product it was matched to, with how
-  (`memory`, `alias`, `vector`, `llm`, `new`).
+  (`memory`, `alias`, `vector`, `llm`, `new`); a `discount` line's `applies_to_position` names the
+  item line it reduces.
 - `products`: the enriched product: name, brand, size, category and tags; its embedding lives
   in the `product_vectors` (sqlite-vec) table and its names in `product_aliases`.
 - `price_observations`: one row per purchased item line on a dated receipt: product, receipt,
-  line, store, date, quantity, unit price and total. This is the price history.
+  line, store, date, quantity, the regular unit price and total, and the discount applied to the
+  line (per line and per unit), what was paid and whether it was on sale. The regular prices are
+  the price history; the paid amounts are the spending. Discounts that cannot be tied to one item
+  (`MULTIPLE`) stay on the receipt, so what was spent on items is the paid amounts plus those.
+  A negative item line (a return on a receipt a person forced through review) gets no row; the
+  trace notes it.
 - `corrections` (a person's fixes, the long-term memory matching reads first), `review_items`
   and `jobs`.
 
@@ -455,7 +480,8 @@ Until the item page arrives (a product with its price history chart, `GET /api/p
 and `GET /api/products/{id}/prices`, PLAN stage 6), the history can be read with SQL:
 
 ```sql
-SELECT o.observed_on, r.store_name, o.quantity, o.unit_price_cents, o.line_total_cents
+SELECT o.observed_on, r.store_name, o.quantity, o.unit_price_cents, o.line_total_cents,
+       o.paid_cents, o.on_sale
 FROM price_observations o JOIN receipts r ON r.id = o.receipt_id
 WHERE o.product_id = 24 ORDER BY o.observed_on;
 ```

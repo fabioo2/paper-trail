@@ -15,13 +15,30 @@ Pinned (docs/tests/agent-core-A.md):
 - ROUTE (supervisor): ``name`` = target; ``data`` has ``target``, ``reason``, ``text_attempts``
   and ``vision_attempts``. INTERRUPT (supervisor): ``name`` "review", ``data`` has
   ``review_id`` and ``reason``.
+- The ``save_receipt`` row (discounts-and-paid-prices plan A9, TC-88) keeps its status and item
+  count and appends `` · discounts N linked · M receipt-level`` only when the receipt has
+  discount lines (N + M > 0).
+- The tool gateway adds one NOTE after the tool's event, in the calling role (TC-91, TC-126):
+  ``discounts`` after a ``save_receipt`` that keeps discounts at receipt level (each one's
+  0-based position, raw text and reason), ``prices`` after a ``save_matches`` that leaves
+  negative item lines unpriced (position and raw text); none when the list is empty or for
+  another tool.
 """
 
+from collections.abc import Mapping
+
+import pytest
+
+from paper_trail.agents.tracing import TracingToolGateway, _save_summary
 from paper_trail.domain.enums import AgentRole
+from paper_trail.domain.models import JsonValue
 from paper_trail.domain.trace import TraceEvent, TraceKind
+from paper_trail.ports.tools import ToolDescription
 from tests.agent_harness import TEXT_MODEL, build_harness
-from tests.extractions import extraction, inconsistent_extraction
+from tests.extractions import NOW, extraction, inconsistent_extraction
+from tests.fakes.clock import FakeClock
 from tests.fakes.llm import COMPLETION_TOKENS, PROMPT_TOKENS, ScriptedLlm
+from tests.fakes.trace import FakeTracer
 
 NODE_AGENTS = {
     "read": AgentRole.EXTRACTION,
@@ -179,3 +196,115 @@ def test_an_upright_ocr_event_does_not_mention_rotation() -> None:
     assert isinstance(output, dict)
     assert output["rotation_degrees"] == 0
     assert "rotated" not in event.summary
+
+
+def _saved(items: int, linked: int, receipt_level: int) -> dict[str, JsonValue]:
+    """A ``save_receipt`` result as the trace sees it (JSON)."""
+    refused: list[JsonValue] = [
+        {"position": position, "raw_text": "MULTIPLE", "reason": "multiple"}
+        for position in range(receipt_level)
+    ]
+    return {
+        "receipt_id": 1,
+        "status": "processing",
+        "stage": "matching",
+        "item_count": items,
+        "masked_pans": 0,
+        "discounts_linked": linked,
+        "discounts_receipt_level": refused,
+    }
+
+
+# P11 SAVE_SUMMARIES: (items, linked, receipt level) -> the row's summary.
+SAVE_SUMMARIES = [
+    (22, 7, 1, "PROCESSING · 22 items · discounts 7 linked · 1 receipt-level"),
+    (5, 0, 1, "PROCESSING · 5 items · discounts 0 linked · 1 receipt-level"),
+    (5, 1, 0, "PROCESSING · 5 items · discounts 1 linked · 0 receipt-level"),
+    (4, 0, 0, "PROCESSING · 4 items"),
+]
+
+
+@pytest.mark.parametrize(("items", "linked", "receipt_level", "summary"), SAVE_SUMMARIES)
+def test_tc_88_the_save_row_counts_the_discounts(
+    items: int, linked: int, receipt_level: int, summary: str
+) -> None:
+    assert _save_summary(_saved(items, linked, receipt_level)) == summary
+
+
+class _Returning:
+    """A tool gateway that answers every call with ``result``."""
+
+    def __init__(self, result: dict[str, JsonValue]) -> None:
+        self._result = result
+
+    def call(
+        self, role: AgentRole, name: str, payload: Mapping[str, JsonValue]
+    ) -> Mapping[str, JsonValue]:
+        return self._result
+
+    def describe(self, role: AgentRole) -> tuple[ToolDescription, ...]:
+        return ()
+
+
+MULTIPLE: JsonValue = {"position": 4, "raw_text": "MULTIPLE", "reason": "multiple"}
+SAVINGS: JsonValue = {"position": 6, "raw_text": "SAVINGS", "reason": "no_reference"}
+RETURN: JsonValue = {"position": 2, "raw_text": "RETURN KS SOURDOUGH"}
+CREDIT: JsonValue = {"position": 5, "raw_text": "CREDIT"}
+
+TOOL_RESULTS: dict[str, dict[str, JsonValue]] = {
+    "save_receipt": _saved(5, 0, 0),
+    "save_matches": {"lines": [], "new_products": 0, "prices": 0},
+    "open_review": {"review_id": 1},
+}
+
+# (tool, result, the NOTE as (name, summary, data), or None for no NOTE).
+TOOL_NOTES = [
+    pytest.param(
+        "save_receipt",
+        {"discounts_receipt_level": [MULTIPLE, SAVINGS]},
+        (
+            "discounts",
+            "kept at receipt level: pos 4 `MULTIPLE` (multiple); pos 6 `SAVINGS` (no_reference)",
+            {"receipt_level": [MULTIPLE, SAVINGS]},
+        ),
+        id="receipt-level discounts",
+    ),
+    pytest.param("save_receipt", {"discounts_receipt_level": []}, None, id="every one linked"),
+    pytest.param(
+        "save_matches",
+        {"unpriced": [RETURN, CREDIT]},
+        (
+            "prices",
+            "no price for a negative item line: pos 2 `RETURN KS SOURDOUGH`; pos 5 `CREDIT`",
+            {"unpriced": [RETURN, CREDIT]},
+        ),
+        id="unpriced lines",
+    ),
+    pytest.param("save_matches", {"unpriced": []}, None, id="every line priced"),
+    pytest.param(
+        "open_review",
+        {"discounts_receipt_level": [MULTIPLE], "unpriced": [RETURN]},
+        None,
+        id="another tool",
+    ),
+]
+
+
+@pytest.mark.parametrize(("tool", "result", "note"), TOOL_NOTES)
+def test_tc_91_126_the_tool_gateway_notes_what_a_save_leaves_out(
+    tool: str, result: dict[str, JsonValue], note: tuple[str, str, JsonValue] | None
+) -> None:
+    tracer = FakeTracer(FakeClock(NOW))
+    gateway = TracingToolGateway(_Returning({**TOOL_RESULTS[tool], **result}), tracer)
+
+    with tracer.bind(1):
+        gateway.call(AgentRole.SUPERVISOR, tool, {})
+
+    kinds = [event.kind for event in tracer.events(1)]
+    notes = [
+        (event.agent, event.name, event.summary, event.data)
+        for event in tracer.events(1)
+        if event.kind is TraceKind.NOTE
+    ]
+    expected = [] if note is None else [(AgentRole.SUPERVISOR, *note)]
+    assert (kinds, notes) == ([TraceKind.TOOL] + [TraceKind.NOTE] * len(expected), expected)

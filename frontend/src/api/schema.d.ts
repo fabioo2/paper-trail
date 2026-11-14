@@ -181,6 +181,8 @@ export interface components {
         IssueCode: "line_math" | "items_vs_subtotal" | "subtotal_plus_tax_vs_total" | "items_plus_tax_vs_total" | "negative_item" | "currency_mismatch" | "empty_receipt" | "missing_store" | "missing_date";
         /** LineItemOut */
         LineItemOut: {
+            /** Applies To Position */
+            applies_to_position: number | null;
             category: components["schemas"]["Category"] | null;
             /** Description */
             description: string;
