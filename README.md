@@ -564,7 +564,7 @@ most important ones:
 - `PAPER_TRAIL_RECEIPTS_DIR`: the folder of receipt photos `make process` reads.
 - `PAPER_TRAIL_TOOLS__TRANSPORT` (default `inprocess`): how the agents call their tools,
   `inprocess` or `mcp`; `PAPER_TRAIL_MCP__URL` is the MCP server `tools --transport mcp` uses.
-  `PAPER_TRAIL_MCP__TIMEOUT_S` (default `240`) must be above the OCR and model request
+  `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above the OCR and model request
   timeouts, since one tool call waits for them.
 - `PAPER_TRAIL_MATCHING__AUTO_LINK_MAX_DISTANCE` / `__REVIEW_MAX_DISTANCE` (defaults `0.15` /
   `0.30`, cosine distances): link a product by embedding, or ask the model to confirm it.

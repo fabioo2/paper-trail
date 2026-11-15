@@ -39,3 +39,13 @@ Measured on the GPU PC (Ollama 0.40.15): Ollama's default context is 4096 tokens
 ## Amendment (2026-11-08): amounts as printed (ADR-0017)
 
 The `extraction/v2` and `vision/v1` schemas (`PrintedExtraction`) ask for amounts, quantities, unit prices, taxes and the date as the strings printed on the receipt ("4.00-", "0.460 kg", "26/11/02"), not integer cents: the vision model wrote 1.29 as 1290 cents and dropped trailing minus signs. Pure domain parsers (`domain/rules/printed.py`) compute the cents, signs and quantities, and `PrintedExtraction.to_output()` returns the existing `ExtractionOutput`, so every later step is unchanged. `extraction/v1` (integer cents) stays for comparison. See ADR-0017.
+
+## Amendment (2026-11-14): read-timeout retry (reliability fix)
+
+A shared GPU sometimes answers slower than the request timeout, and a timeout stopped the run until a manual `resume`.
+
+- A chat request (`OllamaLlm`, text or vision) whose answer times out (`httpx.ReadTimeout` only) is sent again at once, unchanged, up to `PAPER_TRAIL_OLLAMA__TIMEOUT_RETRIES` more times (default 1, 0..3). The schema-repair request has its own retries. Refused or timed-out connections, other transport errors and error answers are not retried: a host that is off still stops the run with its checkpoint.
+- Embedding requests are never retried, so the MCP tool timeout still only needs to outlast one request timeout. The request timeout default rises from 180 s to 300 s (MCP 240 s to 330 s).
+- No backoff: each try gets the full timeout. When every try times out the `LlmUnavailableError` counts them ("timed out N times").
+- Each retried try logs `llm.timeout_retry`. The call's count is `LlmResult.timeout_retries` (or `LlmError.timeout_retries` when it fails); the trace stores it in the LLM event's data and leads the row's summary with `↻N`. Error messages are unchanged, since they reach the model's next prompt.
+- One model call can now take (1 + retries) × 2 requests × the request timeout (1200 s at the defaults); a future job lease must outlast that.

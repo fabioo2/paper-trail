@@ -55,7 +55,7 @@ One `Settings` class in `src/paper_trail/config.py`, env prefix `PAPER_TRAIL_`, 
 | `PAPER_TRAIL_WORKER__POLL_INTERVAL_S` | `float` = `1.0` (0.1..60) | S0 | Worker idle poll interval |
 | `PAPER_TRAIL_WORKER__HEARTBEAT_INTERVAL_S` | `float` = `10.0` | S0 | Heartbeat write interval |
 | `PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S` | `float` = `8.0` | S0 | Max time to finish current step after SIGTERM |
-| `PAPER_TRAIL_WORKER__LEASE_S` | `int` = `300` | S2 | Job lease length |
+| `PAPER_TRAIL_WORKER__LEASE_S` | `int` = `300` | S2 | Job lease length. When the worker gets handlers, a lease (or its reclaim) must outlast one model call's worst case, (1 + `OLLAMA__TIMEOUT_RETRIES`) × 2 requests × `OLLAMA__REQUEST_TIMEOUT_S` (1200 s with the defaults; reliability fix 2026-11-14) |
 | `PAPER_TRAIL_WORKER__MAX_ATTEMPTS` | `int` = `5` | S2 | Job attempts before `failed` |
 | `PAPER_TRAIL_UPLOAD__MAX_BYTES` | `int` = `15_000_000` | S2 | Upload size limit |
 | `PAPER_TRAIL_UPLOAD__MAX_PIXELS` | `int` = `40_000_000` | S2 | Decompression-bomb guard |
@@ -64,7 +64,8 @@ One `Settings` class in `src/paper_trail/config.py`, env prefix `PAPER_TRAIL_`, 
 | `PAPER_TRAIL_OCR__ROTATION_MIN_CONFIDENCE` | `float` = `0.6` (0..1) | S2 | Below this mean word confidence the upright read is retried at 90, 180 and 270 degrees and the most confident read wins (sideways phone photos, `docs/tests/ocr-rotation.md`); `0` turns the retry off. Each Tesseract run keeps `OCR__TIMEOUT_S` |
 | `PAPER_TRAIL_OLLAMA__BASE_URL` | `AnyHttpUrl \| None` = `None` | S2 | Ollama on the LLM host, e.g. `http://192.168.0.x:11434` (two-host) or `http://ollama:11434` (single host, over the shared `paper-trail-llm` network, §2.4a); `None` → GPU always "unavailable" |
 | `PAPER_TRAIL_OLLAMA__PROBE_TIMEOUT_S` | `float` = `2.0` | S2 | Availability probe timeout |
-| `PAPER_TRAIL_OLLAMA__REQUEST_TIMEOUT_S` | `float` = `180.0` | S3 | Generation timeout |
+| `PAPER_TRAIL_OLLAMA__REQUEST_TIMEOUT_S` | `float` = `300.0` | S3 | Generation timeout (180.0 until the 2026-11-14 reliability fix) |
+| `PAPER_TRAIL_OLLAMA__TIMEOUT_RETRIES` | `int` = `1` (0..3) | S3 | A chat request that times out waiting for the answer is sent again this many times; other failures and embedding requests are not retried (reliability fix 2026-11-14) |
 | `PAPER_TRAIL_OLLAMA__TEXT_MODEL` | `str` = `qwen2.5:7b-instruct` | S2 | Probe checks presence |
 | `PAPER_TRAIL_OLLAMA__VISION_MODEL` | `str` = `qwen2.5vl:7b` | S2 | |
 | `PAPER_TRAIL_OLLAMA__EMBED_MODEL` | `str` = `nomic-embed-text` | S2 | |
@@ -87,7 +88,7 @@ One `Settings` class in `src/paper_trail/config.py`, env prefix `PAPER_TRAIL_`, 
 | `PAPER_TRAIL_MATCHING__REVIEW_MAX_DISTANCE` | `float` = `0.30` (0..2, not below auto-link) | S4 (agent core C) | Above auto, at most this → LLM confirm; else new product |
 | `PAPER_TRAIL_TOOLS__TRANSPORT` | `Literal["inprocess","mcp"]` = `inprocess` | S5 | Tool gateway adapter |
 | `PAPER_TRAIL_MCP__URL` | `AnyHttpUrl` = `http://mcp:8000` | S5 | The standalone server `tools --transport mcp` uses (*agent core*: `process --transport mcp` serves its run's tools itself) |
-| `PAPER_TRAIL_MCP__TIMEOUT_S` | `float > 0` = `240.0` | S5 | One MCP tool call, connecting included (*agent core*); must be greater than the OCR worst case (`OCR__TIMEOUT_S` × 4 Tesseract runs (1 + the retry rotations) while `OCR__ROTATION_MIN_CONFIDENCE` > 0, else × 1) and `OLLAMA__REQUEST_TIMEOUT_S`, since a call waits for its tool (agent core C; rotation 2026-11-08) |
+| `PAPER_TRAIL_MCP__TIMEOUT_S` | `float > 0` = `330.0` | S5 | One MCP tool call, connecting included (*agent core*); must be greater than the OCR worst case (`OCR__TIMEOUT_S` × 4 Tesseract runs (1 + the retry rotations) while `OCR__ROTATION_MIN_CONFIDENCE` > 0, else × 1) and `OLLAMA__REQUEST_TIMEOUT_S`, since a call waits for its tool (agent core C; rotation 2026-11-08) |
 | `PAPER_TRAIL_BACKUP__DIR` | `Path` = `/backups` | S8 | Mounted from a host folder of your choice |
 | `PAPER_TRAIL_BACKUP__AT` / `__KEEP` | `time`=`03:30` / `int`=`14` | S8 | Nightly time (local TZ), retention |
 | `TZ` | `America/Toronto` (compose) | S0 | Local time for the backup scheduler and receipt dates |

@@ -7,18 +7,23 @@ error; a second bad answer is an ``LlmOutputError``. An answer cut off at ``num_
 (``done_reason`` "length") that does not validate is an ``LlmOutputError`` at once: a repair
 would re-send the whole long answer and overflow the context. Connection failures, timeouts and
 error statuses are ``LlmUnavailableError`` naming the host (a context overflow excepted, see
-``http``).
+``http``). A request that times out waiting for the answer is first sent again, up to
+``timeout_retries`` times, each with a ``llm.timeout_retry`` warning; the repair request has its
+own retries. The count of retried tries is on the result, or on the error when the call fails.
 """
 
 import base64
 from typing import Any
 
 import httpx
+import structlog
 from pydantic import TypeAdapter, ValidationError
 
 from paper_trail.adapters.ollama.http import ollama_client, post_json
 from paper_trail.config import OllamaSettings
-from paper_trail.ports.llm import ChatMessage, LlmOutputError, LlmRequest, LlmResult
+from paper_trail.ports.llm import ChatMessage, LlmError, LlmOutputError, LlmRequest, LlmResult
+
+log = structlog.get_logger(__name__)
 
 _REPAIR = (
     "Your answer did not match the JSON schema. Answer again with one JSON object that "
@@ -33,11 +38,29 @@ class OllamaLlm:
         self._settings = settings
 
     def complete_structured[M](self, request: LlmRequest, schema: type[M]) -> LlmResult[M]:
+        retried: list[int] = []
+        try:
+            value, prompt_tokens, completion_tokens = self._complete(request, schema, retried)
+        except LlmError as error:
+            error.timeout_retries = len(retried)
+            raise
+        return LlmResult(
+            value=value,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            timeout_retries=len(retried),
+        )
+
+    def _complete[M](
+        self, request: LlmRequest, schema: type[M], retried: list[int]
+    ) -> tuple[M, int | None, int | None]:
         adapter = TypeAdapter(schema)
         messages = [_message(message) for message in request.messages]
         body = self._body(request, adapter.json_schema(), messages)
         with ollama_client(self._settings) as client:
-            content, prompt_tokens, completion_tokens, truncated = self._chat(client, body)
+            content, prompt_tokens, completion_tokens, truncated = self._chat(
+                client, body, retried, repair=False
+            )
             try:
                 value = adapter.validate_json(content)
             except ValidationError as error:
@@ -50,7 +73,9 @@ class OllamaLlm:
                     {"role": "assistant", "content": content},
                     {"role": "user", "content": _REPAIR.format(problems=problems)},
                 ]
-                content, repair_prompt, repair_completion, _ = self._chat(client, body)
+                content, repair_prompt, repair_completion, _ = self._chat(
+                    client, body, retried, repair=True
+                )
                 prompt_tokens = _sum(prompt_tokens, repair_prompt)
                 completion_tokens = _sum(completion_tokens, repair_completion)
                 try:
@@ -58,9 +83,7 @@ class OllamaLlm:
                 except ValidationError as again:
                     msg = f"the answer does not match {_name(schema)}: {_problems(again)}"
                     raise LlmOutputError(msg) from None
-        return LlmResult(
-            value=value, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-        )
+        return value, prompt_tokens, completion_tokens
 
     def _body(
         self, request: LlmRequest, schema: dict[str, Any], messages: list[dict[str, Any]]
@@ -80,12 +103,29 @@ class OllamaLlm:
             "keep_alive": self._settings.keep_alive,
         }
 
-    @staticmethod
     def _chat(
-        client: httpx.Client, body: dict[str, Any]
+        self, client: httpx.Client, body: dict[str, Any], retried: list[int], *, repair: bool
     ) -> tuple[str, int | None, int | None, bool]:
-        """The answer's content, token counts and whether it was cut off at ``num_predict``."""
-        answer = post_json(client, "api/chat", body)
+        """The answer's content, token counts and whether it was cut off at ``num_predict``;
+        each timed-out try that is sent again is added to ``retried``."""
+
+        def on_retry(try_number: int) -> None:
+            retried.append(try_number)
+            log.warning(
+                "llm.timeout_retry",
+                model=body["model"],
+                try_number=try_number,
+                timeout_s=self._settings.request_timeout_s,
+                repair=repair,
+            )
+
+        answer = post_json(
+            client,
+            "api/chat",
+            body,
+            read_timeout_retries=self._settings.timeout_retries,
+            on_retry=on_retry,
+        )
         message = answer.get("message")
         content = message.get("content", "") if isinstance(message, dict) else ""
         truncated = answer.get("done_reason") == "length"

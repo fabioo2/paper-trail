@@ -476,7 +476,8 @@ built); these are the remaining design choices.
   stopped receipt's line and in the final message. `items correct` opens only the run's
   database (`open_run_database`), not the agents.
 - **Review note 1** is validation, not derivation (decision 4): `MCP__TIMEOUT_S` defaults to
-  240 s, above the 180 s model request timeout.
+  240 s, above the 180 s model request timeout (330 s and 300 s since the 2026-11-14
+  reliability fix).
 - **Measured costs to expect on the GPU PC:** extraction about 3.6 s per attempt. With one model
   loaded at a time, the first line that needs a vector search switches to nomic-embed-text
   (about 7 s), and a confirmation in the band switches back to the text model (about 7 s

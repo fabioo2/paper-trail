@@ -1,6 +1,6 @@
 # Discounts and paid prices plan (a discount line -> the item it reduces)
 
-Written 2026-11-08 by the planner. Status: **approved by the owner 2026-11-08, with the recommended answer to every decision (DA-1 to DA-6, section 15).** Built **first**, before `docs/plans/barcode-lookup.md` (which therefore moves to migration 0005). Builds on `docs/plans/extraction-accuracy.md` (S2 `split_item_code`, `is_item_reference`, `reconcile_multi_buy`), ADR-0006 (money as integer cents) and ADR-0017. It takes over the item "Deferred: discount attributed to the item it reduces" from extraction-accuracy §2.8 and from ADR-0017's Consequences. ADR-0017 gets an amendment; no new ADR (ADR-0018 stays with the barcode plan).
+Written 2026-11-08 by the planner. Status: **approved by the owner 2026-11-08, with the recommended answer to every decision (DA-1 to DA-6, section 15).** Built **first**, before `docs/plans/barcode-lookup.md` (which therefore moves to migration 0005, and to 0006 after the 2026-11-14 reliability fix took 0005). Builds on `docs/plans/extraction-accuracy.md` (S2 `split_item_code`, `is_item_reference`, `reconcile_multi_buy`), ADR-0006 (money as integer cents) and ADR-0017. It takes over the item "Deferred: discount attributed to the item it reduces" from extraction-accuracy §2.8 and from ADR-0017's Consequences. ADR-0017 gets an amendment; no new ADR (ADR-0018 stays with the barcode plan).
 
 ## Summary (approve from here)
 
@@ -19,7 +19,7 @@ Written 2026-11-08 by the planner. Status: **approved by the owner 2026-11-08, w
    - It refuses, keeping the discount at receipt level with a reason, for: `MULTIPLE`; no code; no earlier item without a discount; a discount larger than its item.
    - It never changes an amount.
 4. **Plain code, no LLM.** The rule runs inside `RecordReceipt.assess`, so every path gets it: the graph's `save_receipt`, a review resolution, the JSON import and `--dry-run`. Price observations are computed from the stored links whenever they are written (`_record_prices`, `record_matches`).
-5. **Schema: migration 0004** (the barcode plan moves to 0005).
+5. **Schema: migration 0004** (the barcode plan moves to 0005, now 0006: the reliability fix took 0005).
    - `line_items.applies_to_position`: nullable; CHECK that it is set only on discount lines and never points at its own line.
    - `price_observations` is rebuilt with `discount_cents`, `unit_discount_cents`, `paid_cents` and `on_sale`, with CHECKs: `paid = line_total + discount`, `discount <= 0`, `paid >= 0`, `on_sale = (discount < 0)`.
    - Existing rows are copied with discount 0 and paid equal to the line total.
@@ -194,7 +194,7 @@ CREATE TABLE price_observations_new (
 - **Downgrade:** rebuild `price_observations` without the four columns, and `ALTER TABLE line_items DROP COLUMN applies_to_position` (0003's downgrade already proves DROP COLUMN works).
 - Run as one Alembic migration in its own transaction, `PRAGMA foreign_keys` unchanged; nothing references `price_observations`.
 - `adapters/sqlite/schema.py` mirrors the new columns. `test_schema_matches_metadata` passes, and the frozen migrations 0001-0003 are untouched.
-- **Coordination:** `docs/plans/barcode-lookup.md` renumbers its migration to `0005_product_codes.py` (`down_revision = "0004"`).
+- **Coordination:** `docs/plans/barcode-lookup.md` renumbers its migration to `0005_product_codes.py` (`down_revision = "0004"`); since the 2026-11-14 reliability fix it is `0006_product_codes.py` (`down_revision = "0005"`).
 
 ## 7. Domain model changes (`domain/models.py`)
 
