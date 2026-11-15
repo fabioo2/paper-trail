@@ -62,7 +62,8 @@ def traced_node(tracer: Tracer, agent: AgentRole, name: str, node: Node) -> Node
 class TracingLlm:
     """An ``LlmPort`` that records each call on one receipt's trace: the prompt tag, model,
     attempt (1-based per tag), token counts, rendered messages and the validated output. An
-    image is recorded as its SHA-256, never its bytes."""
+    image is recorded as its SHA-256, never its bytes. A call whose request timed out and was
+    sent again records the count (``timeout_retries``) and leads its summary with ``↻N``."""
 
     def __init__(self, inner: LlmPort, tracer: Tracer, receipt_id: int) -> None:
         self._inner = inner
@@ -86,7 +87,7 @@ class TracingLlm:
             self._emit(
                 agent,
                 request.tag,
-                f"{type(error).__name__}: {error}",
+                _retried(f"{type(error).__name__}: {error}", error.timeout_retries, data),
                 data,
                 started=started,
                 error=error,
@@ -98,7 +99,8 @@ class TracingLlm:
             "completion_tokens": result.completion_tokens,
             "output": output,
         }
-        self._emit(agent, request.tag, _llm_summary(output), data, started=started, error=None)
+        summary = _retried(_llm_summary(output), result.timeout_retries, data)
+        self._emit(agent, request.tag, summary, data, started=started, error=None)
         return result
 
     def _attempt(self, tag: str) -> int:
@@ -171,6 +173,15 @@ def _traced_message(message: ChatMessage) -> JsonValue:
     if message.images:
         traced["images"] = [hashlib.sha256(image).hexdigest() for image in message.images]
     return traced
+
+
+def _retried(summary: str, retries: int, data: dict[str, JsonValue]) -> str:
+    """``summary`` led by ``↻N`` when ``retries`` timed-out tries were sent again, so the
+    trace table's narrow cell keeps it; the count also goes into ``data``."""
+    if not retries:
+        return summary
+    data["timeout_retries"] = retries
+    return f"↻{retries} {summary}"
 
 
 def _money(cents: object) -> str:

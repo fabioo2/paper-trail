@@ -1,11 +1,13 @@
 """Talking to Ollama over HTTP, shared by the chat and embedding adapters (ADR-0009).
 
 Every failure to get a JSON answer (not configured, refused, timed out, an error status, not
-JSON) is an ``LlmUnavailableError`` naming the host, so a run stops with its checkpoint and can
-resume when the host is back. One exception: a request longer than the model's context is the
-request's fault, not the host's, so it is an ``LlmOutputError`` (a failed attempt).
+JSON) is an ``LlmUnavailableError`` naming the host, after any retries the caller asked for, so
+a run stops with its checkpoint and can resume when the host is back. One exception: a request
+longer than the model's context is the request's fault, not the host's, so it is an
+``LlmOutputError`` (a failed attempt).
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -29,17 +31,39 @@ def ollama_client(settings: OllamaSettings) -> httpx.Client:
     )
 
 
-def post_json(client: httpx.Client, path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST ``body`` to ``path`` and return the JSON object answered."""
+def post_json(
+    client: httpx.Client,
+    path: str,
+    body: dict[str, Any],
+    *,
+    read_timeout_retries: int = 0,
+    on_retry: Callable[[int], None] | None = None,
+) -> dict[str, Any]:
+    """POST ``body`` to ``path`` and return the JSON object answered.
+
+    A request that times out waiting for the answer is sent again, unchanged and at once, up to
+    ``read_timeout_retries`` more times; ``on_retry`` gets the number of the try that timed out
+    before each one. Any answer, an error status included, ends the tries.
+    """
     host = _host(client)
-    try:
-        response = client.post(path, json=body)
-    except httpx.TimeoutException:
-        msg = f"the LLM host {host} timed out"
-        raise LlmUnavailableError(msg) from None
-    except httpx.HTTPError as error:
-        msg = f"cannot reach the LLM host {host}: {type(error).__name__}"
-        raise LlmUnavailableError(msg) from None
+    tries = 0
+    while True:
+        tries += 1
+        try:
+            response = client.post(path, json=body)
+            break
+        except httpx.ReadTimeout:
+            if tries > read_timeout_retries:
+                msg = f"the LLM host {host} timed out {tries} time{'s' if tries > 1 else ''}"
+                raise LlmUnavailableError(msg) from None
+            if on_retry is not None:
+                on_retry(tries)
+        except httpx.TimeoutException:
+            msg = f"the LLM host {host} timed out"
+            raise LlmUnavailableError(msg) from None
+        except httpx.HTTPError as error:
+            msg = f"cannot reach the LLM host {host}: {type(error).__name__}"
+            raise LlmUnavailableError(msg) from None
     if response.is_error:
         reason = _error_text(response)
         msg = f"the LLM host {host} answered {response.status_code}: {reason}"

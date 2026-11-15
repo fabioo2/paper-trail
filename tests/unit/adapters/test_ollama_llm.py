@@ -12,8 +12,8 @@ Pinned (docs/tests/agent-core-A.md):
   second failure raises ``LlmOutputError``. Token counts are summed over both calls; a count
   the host did not report is None (when no call reported it).
 - Connection errors, timeouts and non-2xx answers raise ``LlmUnavailableError`` whose message
-  names the host (``llm-host.test:11434``); with no ``base_url`` it says "not configured" and
-  sends nothing.
+  names the host (``llm-host.test:11434``; one row per kind in ``test_ollama_retry.py``, RL-TC-05
+  and RL-TC-06); with no ``base_url`` it says "not configured" and sends nothing.
 """
 
 import base64
@@ -154,27 +154,6 @@ def test_missing_token_counts_are_none(router: respx.MockRouter) -> None:
     result = OllamaLlm(ollama_settings()).complete_structured(REQUEST, Answer)
 
     assert (result.prompt_tokens, result.completion_tokens) == (None, None)
-
-
-@pytest.mark.parametrize(
-    "answer",
-    [
-        httpx.ConnectError("connection refused"),
-        httpx.ConnectTimeout("connect timeout"),
-        httpx.ReadTimeout("read timeout"),
-        httpx.Response(500, json={"error": "model failed to load"}),
-        httpx.Response(404, json={"error": "model 'qwen2.5:7b-instruct' not found"}),
-    ],
-    ids=["refused", "connect-timeout", "read-timeout", "server-error", "model-missing"],
-)
-def test_ac_a_01_unavailable_errors_name_the_host(
-    router: respx.MockRouter, answer: Exception | httpx.Response
-) -> None:
-    """AC-A-01: LlmUnavailableError's message names the host, so the CLI can say which."""
-    router.post("/api/chat").mock(side_effect=[answer])
-
-    with pytest.raises(LlmUnavailableError, match=r"llm-host\.test:11434"):
-        OllamaLlm(ollama_settings()).complete_structured(REQUEST, Answer)
 
 
 def test_ac_a_01_base_url_comes_from_settings() -> None:

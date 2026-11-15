@@ -123,7 +123,7 @@ Out of slice A, and not tested here:
 - `upload: UploadSettings(max_pixels=40_000_000)`. Only `max_pixels` is used in slice A.
 - `ollama: OllamaSettings`:
   - `base_url: AnyHttpUrl | None = None`;
-  - `probe_timeout_s = 2.0`, `request_timeout_s = 180.0`;
+  - `probe_timeout_s = 2.0`, `request_timeout_s = 300.0` (180.0 until the 2026-11-14 reliability fix), `timeout_retries = 1`;
   - `text_model`, `vision_model` and `embed_model`, with the PLAN defaults;
   - `keep_alive = "5m"`, `num_ctx = 8192` (> 0).
 - `graph: GraphSettings(max_text_attempts=2 (>= 1), max_vision_attempts=1 (>= 0), min_confidence=0.6 (0..1), feedback=True)`.

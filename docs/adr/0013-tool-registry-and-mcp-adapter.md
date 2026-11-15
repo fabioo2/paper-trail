@@ -66,6 +66,6 @@ The proposal serves tools through an MCP server and requires that each agent can
   MCP too, instead of failing the receipt.
 - `McpSettings.timeout_s` bounds one call, and a call waits for its tool, so `Settings` refuses
   an `MCP__TIMEOUT_S` that is not greater than `OCR__TIMEOUT_S` and `OLLAMA__REQUEST_TIMEOUT_S`
-  (default 240 s). `McpToolGateway` names the scheme's default port (80 or 443) in its
+  (default 330 s; 240 s until the 2026-11-14 reliability fix). `McpToolGateway` names the scheme's default port (80 or 443) in its
   messages, and reads a foreign server's text-only result as one JSON object (anything else is
   a `ToolOutputError`, since the server did answer).

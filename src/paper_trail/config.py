@@ -69,7 +69,10 @@ class OllamaSettings(BaseModel):
 
     base_url: AnyHttpUrl | None = None  # None: not configured, the LLM is unavailable
     probe_timeout_s: float = Field(default=2.0, gt=0)
-    request_timeout_s: float = Field(default=180.0, gt=0)
+    request_timeout_s: float = Field(default=300.0, gt=0)
+    # Chat requests that time out waiting for the answer are sent again this many times;
+    # embedding requests never are.
+    timeout_retries: int = Field(default=1, ge=0, le=3)
     text_model: str = "qwen2.5:7b-instruct"
     vision_model: str = "qwen2.5vl:7b"
     embed_model: str = "nomic-embed-text"
@@ -163,7 +166,7 @@ class McpSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     url: AnyHttpUrl = AnyHttpUrl("http://mcp:8000")
-    timeout_s: float = Field(default=240.0, gt=0)  # connect plus answer, per tool call
+    timeout_s: float = Field(default=330.0, gt=0)  # connect plus answer, per tool call
 
 
 class Settings(BaseSettings):

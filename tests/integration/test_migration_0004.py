@@ -207,7 +207,7 @@ def test_tc_71_72_existing_observations_are_regular_prices_after_the_upgrade(
 
     command.upgrade(config, "head")
 
-    assert (SCHEMA_HEAD, head_revision(), current_revision(engine)) == ("0004", "0004", "0004")
+    assert (SCHEMA_HEAD, head_revision(), current_revision(engine)) == ("0005", "0005", "0005")
     with engine.connect() as connection:
         assert _rows(connection, "line_items") == [
             {**row, "applies_to_position": None} for row in lines_before

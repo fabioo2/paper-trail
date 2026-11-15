@@ -4,7 +4,7 @@ Pinned (docs/tests/ocr-rotation.md, docs/PLAN.md 1.3): ``OcrSettings.rotation_mi
 a fraction in 0..1, default 0.6, env ``PAPER_TRAIL_OCR__ROTATION_MIN_CONFIDENCE``; 0 turns the
 rotation retry off. ``OcrSettings.worst_case_s`` is the longest one ``ocr_read`` may take
 (every rotation run at ``timeout_s``), and ``Settings`` refuses an ``MCP__TIMEOUT_S`` that is not
-above it; ``OCR__TIMEOUT_S`` defaults to 30 s so the 240 s MCP default covers four runs.
+above it; ``OCR__TIMEOUT_S`` defaults to 30 s so the 330 s MCP default covers four runs.
 """
 
 import pytest
@@ -57,8 +57,10 @@ def test_the_default_ocr_timeout_is_30_seconds() -> None:
 def test_an_mcp_timeout_below_the_rotation_worst_case_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """60 s per run, four runs: 240 s of OCR, so an MCP call of 240 s could give up early."""
+    """60 s per run, four runs: 240 s of OCR, so an MCP call of 240 s could give up early.
+    The model request timeout is set below it, so only the OCR worst case can refuse."""
     monkeypatch.setenv("PAPER_TRAIL_OCR__TIMEOUT_S", "60")
+    monkeypatch.setenv("PAPER_TRAIL_OLLAMA__REQUEST_TIMEOUT_S", "60")
     monkeypatch.setenv("PAPER_TRAIL_MCP__TIMEOUT_S", "240")
 
     with pytest.raises(ValidationError, match="MCP__TIMEOUT_S"):
@@ -70,6 +72,7 @@ def test_with_rotation_off_one_ocr_run_bounds_the_mcp_timeout(
 ) -> None:
     monkeypatch.setenv("PAPER_TRAIL_OCR__TIMEOUT_S", "60")
     monkeypatch.setenv("PAPER_TRAIL_OCR__ROTATION_MIN_CONFIDENCE", "0")
+    monkeypatch.setenv("PAPER_TRAIL_OLLAMA__REQUEST_TIMEOUT_S", "60")
     monkeypatch.setenv("PAPER_TRAIL_MCP__TIMEOUT_S", "240")
 
     assert Settings().mcp.timeout_s == 240.0

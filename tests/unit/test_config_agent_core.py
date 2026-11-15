@@ -26,7 +26,7 @@ def test_agent_core_defaults_match_the_documented_table() -> None:
     assert settings.upload.max_pixels == 40_000_000
     ollama = settings.ollama
     assert ollama.base_url is None  # not configured: the GPU is "unavailable"
-    assert (ollama.probe_timeout_s, ollama.request_timeout_s) == (2.0, 180.0)
+    assert (ollama.probe_timeout_s, ollama.request_timeout_s) == (2.0, 300.0)
     assert ollama.text_model == "qwen2.5:7b-instruct"
     assert ollama.vision_model == "qwen2.5vl:7b"
     assert ollama.embed_model == "nomic-embed-text"

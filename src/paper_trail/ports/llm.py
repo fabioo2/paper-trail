@@ -10,6 +10,8 @@ type ChatRole = Literal["system", "user", "assistant"]
 class LlmError(Exception):
     """Base class of the model's failures."""
 
+    timeout_retries: int = 0  # timed-out tries sent again during the call before it failed
+
 
 class LlmUnavailableError(LlmError):
     """The LLM host cannot be reached, timed out or failed; the message names the host.
@@ -43,6 +45,7 @@ class LlmResult[M]:
     value: M
     prompt_tokens: int | None  # None when the host did not report them
     completion_tokens: int | None
+    timeout_retries: int = 0  # timed-out tries sent again during the call, repair included
 
 
 class LlmPort(Protocol):

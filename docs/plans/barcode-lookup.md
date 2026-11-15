@@ -47,7 +47,7 @@ It builds on `docs/plans/agent-core.md` (slices A-D as built), `docs/plans/extra
    - keeps every choice a person made;
    - drops the vectors of unconfirmed products.
 9. **Kept from the first draft:**
-   - `product_codes` (now migration **0005**);
+   - `product_codes` (now migration **0006**);
    - the offline OFF build (`make catalog`);
    - PLU import, with no IFPS data committed;
    - the `catalog_lookup` tool;
@@ -78,7 +78,7 @@ Owner decisions: D-1 to D-16 (section 13).
 | `CATALOG__LEARN_NEW_CODES` setting | No setting: a product created for a coded line always takes the code |
 | New product named after `line.description` (written by the extraction model) | Named after `printed_name(raw_text)`. `description` stays on the line as a reading aid |
 | Backfill re-describes from OFF, else keeps LLM fields | Backfill resets every machine-written field, splits products whose lines carry different codes, then applies data sources (section 5.5) |
-| Migration 0004 | 0005 (`down_revision = "0004"`) |
+| Migration 0004 | 0006 (`down_revision = "0005"`; 0005 is the reliability fix's foreign key indexes) |
 | `(N)` marker in `split_item_code` added here | Already landed with the discounts plan |
 | Tax flags `mrj`/`hmrj`: cuttable | Core (display names); alias re-normalization stays cuttable |
 | Costco only through the store catalog | Assisted manual entry with costco.ca search links; the app makes no request to costco.ca |
@@ -329,7 +329,7 @@ class ProductCatalog(Protocol):
   - else parsed from `quantity` (`"1.5 kg"`; `"6 x 355 ml"` -> None);
   - else None, which OFF tidying may resolve (4.2).
 
-### 3.2 Migration 0005 (`0005_product_codes.py`, `down_revision = "0004"`)
+### 3.2 Migration 0006 (`0006_product_codes.py`, `down_revision = "0005"`)
 
 ```sql
 CREATE TABLE product_codes (
@@ -346,7 +346,7 @@ CREATE TABLE product_codes (
 );
 CREATE INDEX ix_product_codes_product ON product_codes(product_id);
 
--- line_items.match_source gains 'catalog': SQLite cannot alter a CHECK, so 0005 copies the
+-- line_items.match_source gains 'catalog': SQLite cannot alter a CHECK, so 0006 copies the
 -- column to a temporary one, drops it, re-adds it with the new CHECK, copies back and drops the
 -- temporary column (0003's downgrade already proves DROP COLUMN works on it). No table rebuild,
 -- so the line_items FTS triggers are untouched.
@@ -773,7 +773,7 @@ A dry run by default and idempotent. It writes one unit of work per product and 
 - **BC-AC-05** `catalog_fields` and `printed_name`:
   - `catalog_fields` builds fields **and their sources** from an OFF or PLU entry: size from `product_quantity`/unit and from `quantity` text; unparseable -> no size; brand kept separate; organic PLU -> "Organic ..." plus the tag; unmapped category -> null;
   - `printed_name`: `06038306487 PC UNS BABYWIPES HMRJ` -> `PC UNS BABYWIPES`; `3139415 GOLD KIWI` -> `GOLD KIWI`; `(1)05700001285 CRV CHKKN PBLN BR MRJ` -> `CRV CHKKN PBLN BR`; `TH 2PC PJ` unchanged; never empty.
-- **BC-AC-06** Migration 0005 (`down_revision` 0004):
+- **BC-AC-06** Migration 0006 (`down_revision` 0005):
   - upgrade and downgrade round-trip;
   - `product_codes` constraints: UNIQUE, the scheme/store CHECK, cascade on product delete;
   - the existing `match_source` values survive the column swap, and `catalog` is accepted;
@@ -781,7 +781,7 @@ A dry run by default and idempotent. It writes one unit of work per product and 
   - `product_groups`, `products.group_id` and `product_group_decisions` exist with their constraints (ordered pair, UNIQUE, cascade, SET NULL);
   - the `line_items` and `products` FTS triggers still fire;
   - the schema-matches-metadata test passes;
-  - migrations 0001-0004 are unchanged.
+  - migrations 0001-0005 are unchanged.
 - **BC-AC-07** Repository contracts:
   - `ProductCodeRepository`: find, upsert, list, remove; the machine policy keeps an existing row and logs the conflict; the person policy replaces it;
   - `ProductGroupRepository`: decision lookup in either order; `join` creates or reuses a group; two different groups are refused.
@@ -891,7 +891,7 @@ A dry run by default and idempotent. It writes one unit of work per product and 
 | Suite | File |
 |---|---|
 | unit/domain | `test_item_codes.py` (AC-01..03), `test_catalog_categories.py` (AC-04), `test_printed_name.py` + `test_catalog_fields.py` (AC-05), `test_lookup_url.py` (AC-20), `test_product_confirmed.py` |
-| integration | `test_migration_0005.py` (AC-06), `test_product_codes_sqlite.py` + `test_product_groups_sqlite.py` (AC-07), `test_off_catalog.py` + `test_plu_catalog.py` (AC-08, fixture files built in `tmp_path`), `test_catalog_build.py` (AC-09, `http.server` on loopback in a thread), `test_catalog_backfill_sqlite.py` (AC-16, 19) |
+| integration | `test_migration_0006.py` (AC-06), `test_product_codes_sqlite.py` + `test_product_groups_sqlite.py` (AC-07), `test_off_catalog.py` + `test_plu_catalog.py` (AC-08, fixture files built in `tmp_path`), `test_catalog_build.py` (AC-09, `http.server` on loopback in a thread), `test_catalog_backfill_sqlite.py` (AC-16, 19) |
 | contract | `test_product_catalog_contract.py`: the same cases against `FakeCatalog`, `CompositeCatalog` (fakes) and the SQLite adapters |
 | unit/tools | `test_catalog_lookup_tool.py`, `test_describe_from_catalog_tool.py`, `test_save_group_decisions_tool.py`, `test_similarity_search_filters.py` (AC-10); registry allowlist table update |
 | unit/agents | `test_matching_codes.py` (AC-11, asserts 0 model requests), `test_enrichment_catalog_agent.py` + `test_catalog_normalize.py` (AC-13), `test_cross_store_linking.py` (AC-21), graph run through `agent_harness` (AC-12). The existing within-store vector/LLM-band matching tests and the LLM enrichment tests are **removed or rewritten** to the new rule; each one is listed in `docs/tests/barcode-lookup.md` |
@@ -947,7 +947,7 @@ After this run, update the README "What gets saved" example: product 24's name a
 | `ports/catalog.py`, `ports/repositories.py`, `ports/unit_of_work.py` | `ProductCatalog`, `CatalogProduct`; `ProductCodeRepository`, `ProductGroupRepository` |
 | `adapters/sqlite/{schema,mappers,product_code_repository,product_group_repository,store_catalog,vector_repository,unit_of_work}.py` | tables, repositories, store catalog, search filters |
 | `adapters/catalog/{off,plu,composite,off_online,build}.py` | adapters and the build pipeline |
-| `migrations/versions/0005_product_codes.py` | section 3.2 |
+| `migrations/versions/0006_product_codes.py` | section 3.2 |
 | `application/catalog.py` | todo, add (incl. title), fill, adopt (move lines), import/export, backfill, `catalog_fields`, cross-store linking, group decisions |
 | `application/enrichment.py` | retired; the CATEGORY-memory rule moves to `catalog.py` |
 | `application/matching.py`, `application/corrections.py`, `application/receipts.py` | codes in `plan_matches`/`record_matches`; learning hooks; embeddings only for confirmed products |
@@ -965,7 +965,7 @@ After this run, update the README "What gets saved" example: product 24's name a
 | Piece | Estimate |
 |---|---|
 | Domain codes, check digits, category map, `printed_name`, `lookup_url`, `catalog_fields` + tests | 1.5 h |
-| Migration 0005 (`product_codes`, `match_source` swap, `field_sources`, groups), repositories, enums, OpenAPI regen | 1.75 h |
+| Migration 0006 (`product_codes`, `match_source` swap, `field_sources`, groups), repositories, enums, OpenAPI regen | 1.75 h |
 | `catalog build` (stream filter, meta, atomic, resume) + `make catalog` | 1.5 h |
 | Port, OFF/PLU/store/composite adapters, fake, `catalog_lookup` tool | 1 h |
 | Matching within a store (codes, printed text, no model), `save_matches` codes, embeddings only for confirmed | 1.5 h |
@@ -990,7 +990,7 @@ After this run, update the README "What gets saved" example: product 24's name a
 
 **Minimum viable:**
 - domain codes, `printed_name` and `lookup_url`;
-- migration 0005;
+- migration 0006;
 - matching within a store without a model;
 - the Lookup/Enrichment agent (lookup part);
 - `catalog todo` with links, `add` (incl. `--from-title`), CSV export/import, `adopt --move-lines`;
