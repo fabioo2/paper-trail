@@ -5,6 +5,7 @@ Every builder returns a valid object by default. The defaults describe one consi
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -13,6 +14,7 @@ from paper_trail.domain.enums import (
     AliasSource,
     Category,
     CorrectionKind,
+    FieldSource,
     LineKind,
     ProcessingStage,
     ReceiptStatus,
@@ -148,6 +150,22 @@ def product(**overrides: Any) -> Product:
     }
     values.update(overrides)
     return Product(**values)
+
+
+def legacy_product(**overrides: Any) -> Product:
+    """``product(**overrides)`` as migration 0006 leaves a product stored before codes:
+    ``legacy_model`` on every filled field (``size`` when ``size_value`` is set, ``tags`` when
+    there are any)."""
+    stored = product(**overrides)
+    filled = {
+        "canonical_name": True,
+        "brand": stored.brand is not None,
+        "size": stored.size_value is not None,
+        "category": stored.category is not None,
+        "tags": bool(stored.tags),
+    }
+    sources = {key: FieldSource.LEGACY_MODEL for key, given in filled.items() if given}
+    return replace(stored, field_sources=sources)
 
 
 def product_alias(product_id: int, **overrides: Any) -> ProductAlias:

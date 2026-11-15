@@ -1,4 +1,4 @@
-"""No catalog module can reach the network (barcode-lookup PR 1a, R12; PC-TC-80).
+"""No catalog module can reach the network (barcode-lookup R12; PC-TC-80, 108).
 
 A static scan of every module that parses, stores or looks up product codes: none imports an
 HTTP client or ``socket``. The scan is shown to catch a planted import in a copy of the tree. The
@@ -22,9 +22,8 @@ CATALOG_MODULES = (
     "adapters/sqlite/store_catalog.py",
     "adapters/sqlite/product_code_repository.py",
     "application/catalog.py",
+    "interfaces/cli/catalog.py",
 )
-# PR 1b adds the CLI module; it joins the scan as soon as it exists.
-LATER_MODULES = ("interfaces/cli/catalog.py",)
 FORBIDDEN = ("httpx", "requests", "urllib.request", "urllib3", "http.client", "aiohttp", "socket")
 
 
@@ -35,7 +34,6 @@ def _files(src: Path) -> list[Path]:
         path = package / relative
         assert path.exists(), relative
         files.extend(sorted(path.rglob("*.py")) if path.is_dir() else [path])
-    files.extend(path for path in (package / r for r in LATER_MODULES) if path.exists())
     return files
 
 
@@ -71,6 +69,7 @@ def test_no_catalog_module_imports_a_network_client() -> None:
         ("domain/rules/item_codes.py", "from urllib.request import urlopen"),
         ("adapters/sqlite/store_catalog.py", "import socket"),
         ("application/catalog.py", "from http import client"),
+        ("interfaces/cli/catalog.py", "import requests"),
     ],
 )
 def test_the_scan_reports_a_planted_import(tmp_path: Path, module: str, statement: str) -> None:

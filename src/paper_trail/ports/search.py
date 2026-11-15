@@ -45,6 +45,10 @@ class VectorIndex(Protocol):
         """Forget the product's vector (no-op when it has none)."""
         ...
 
+    def has(self, product_id: int) -> bool:
+        """Whether the product has a vector."""
+        ...
+
     def nearest(self, vector: Sequence[float], *, k: int) -> tuple[VectorHit, ...]:
         """At most ``k`` products by ascending distance (ties by product id)."""
         ...

@@ -1,8 +1,9 @@
 """The code printed at the start of a receipt line (barcode-lookup plan R1, R2, A5).
 
-Pinned (test-cases.md PC-TC-01..08, 10): GS1 check digits, the OFF key, the classification of a
-leading code under the default profile and the Costco profile ("every code is a store item"),
-the organic PLU's identity vs its lookup key, the printed name, and the store search link. The
+Pinned (test-cases.md PC-TC-01..08, 10; TQ37): GS1 check digits, the OFF key, the classification
+of a leading code under the default profile and the Costco profile ("every code is a store item"),
+the organic PLU's identity vs its lookup key, the printed name, the store search link, and a
+bare code (``catalog add``/``remove``/``lookup``) read exactly as ``"<code> X"``. The
 codes are synthetic, quoted by the plan, or textbook barcodes.
 """
 
@@ -19,6 +20,7 @@ from paper_trail.domain.rules.item_codes import (
     is_valid_gtin,
     lookup_url,
     off_key,
+    parse_bare_code,
     parse_item_code,
     printed_name,
 )
@@ -300,3 +302,30 @@ def test_pc_tc_10_lookup_url(store_key: str, code: str, url: str | None) -> None
 
 def test_pc_tc_10_only_costco_has_a_search_url() -> None:
     assert STORE_SEARCH_URLS == {"costco": "https://www.costco.ca/CatalogSearch?keyword={code}"}
+
+
+@pytest.mark.parametrize(
+    ("code", "store_key"),
+    [
+        ("1362394", "costco"),
+        ("3101", "costco"),
+        ("3101", "loblaws"),
+        ("93101", "loblaws"),
+        ("06038306487", "loblaws"),
+        ("036000291452", "loblaws"),
+        ("2100580", "loblaws"),
+        ("51234567890", "loblaws"),
+        ("4006381333930", "loblaws"),
+        ("123456789", "loblaws"),
+        ("(1)05700001285", "loblaws"),
+        ("00012345600012", "walmart"),
+    ],
+)
+def test_tq37_a_bare_code_reads_as_the_code_of_a_line(code: str, store_key: str) -> None:
+    assert parse_bare_code(code, store_key) == parse_item_code(f"{code} X", store_key)
+    assert parse_bare_code(code, store_key) is not None
+
+
+@pytest.mark.parametrize("code", ["", "abc", "1362394 X", "12", "123", "123456789012345", " 3101"])
+def test_tq37_anything_but_a_bare_code_is_none(code: str) -> None:
+    assert parse_bare_code(code, "loblaws") is None

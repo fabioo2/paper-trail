@@ -9,15 +9,16 @@ from sqlalchemy import ColumnElement, Connection, delete, func, insert, select, 
 from paper_trail.adapters.sqlite.integrity import unique_violation_as_conflict
 from paper_trail.adapters.sqlite.keyset import newest_first_page
 from paper_trail.adapters.sqlite.mappers import (
+    line_item_from_row,
     line_item_values,
     receipt_from_row,
     receipt_summary_from_row,
     receipt_values,
 )
 from paper_trail.adapters.sqlite.schema import line_items, receipts
-from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
-from paper_trail.domain.models import ItemLink, LineItem, Receipt, ReceiptSummary
+from paper_trail.domain.models import ItemLink, LineItem, ProductLine, Receipt, ReceiptSummary
 from paper_trail.domain.paging import Page, PageRequest
 from paper_trail.ports.clock import Clock
 
@@ -149,6 +150,33 @@ class SqliteReceiptRepository:
             )
         _, updated_at = self._update(receipt_id, {})
         return replace(linked, updated_at=updated_at)
+
+    def item_lines(self, product_id: int) -> tuple[ProductLine, ...]:
+        rows = self._connection.execute(
+            select(
+                line_items,
+                receipts.c.store_key.label("receipt_store_key"),
+                receipts.c.purchased_on.label("receipt_purchased_on"),
+                receipts.c.currency.label("receipt_currency"),
+            )
+            .join(receipts, receipts.c.id == line_items.c.receipt_id)
+            .where(line_items.c.product_id == product_id, line_items.c.kind == LineKind.ITEM)
+            .order_by(
+                receipts.c.purchased_on.is_(None),
+                receipts.c.purchased_on,
+                receipts.c.id,
+                line_items.c.position,
+            )
+        ).mappings()
+        return tuple(
+            ProductLine(
+                receipt_id=row["receipt_id"],
+                store_key=row["receipt_store_key"],
+                purchased_on=row["receipt_purchased_on"],
+                line=line_item_from_row(row, row["receipt_currency"]),
+            )
+            for row in rows
+        )
 
     def _update(self, receipt_id: int, values: dict[str, object]) -> tuple[datetime, datetime]:
         """Apply ``values`` and stamp updated_at; returns (created_at, updated_at)."""

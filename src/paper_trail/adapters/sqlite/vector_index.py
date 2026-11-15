@@ -22,6 +22,7 @@ _DECLARATION = text(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'product_vectors'"
 )
 _DELETE = text("DELETE FROM product_vectors WHERE rowid = :product_id")
+_HAS = text("SELECT 1 FROM product_vectors WHERE rowid = :product_id")
 _INSERT = text("INSERT INTO product_vectors (rowid, embedding) VALUES (:product_id, :embedding)")
 _NEAREST = text(
     """
@@ -58,6 +59,9 @@ class SqliteVectorIndex:
 
     def delete(self, product_id: int) -> None:
         self._connection.execute(_DELETE, {"product_id": product_id})
+
+    def has(self, product_id: int) -> bool:
+        return self._connection.execute(_HAS, {"product_id": product_id}).first() is not None
 
     def nearest(self, vector: Sequence[float], *, k: int) -> tuple[VectorHit, ...]:
         rows = self._connection.execute(_NEAREST, {"embedding": self._serialized(vector), "k": k})

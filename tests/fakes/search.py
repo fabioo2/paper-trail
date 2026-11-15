@@ -69,6 +69,9 @@ class FakeVectorIndex:
     def delete(self, product_id: int) -> None:
         self._state.vectors.pop(product_id, None)
 
+    def has(self, product_id: int) -> bool:
+        return product_id in self._state.vectors
+
     def nearest(self, vector: Sequence[float], *, k: int) -> tuple[VectorHit, ...]:
         query = self._checked(vector)
         hits = sorted(

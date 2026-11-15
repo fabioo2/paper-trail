@@ -118,3 +118,13 @@ def test_s1_ac_10_delete_removes_the_vector(uow_factory: UnitOfWorkFactory) -> N
 def test_s1_ac_10_nearest_on_an_empty_index(uow_factory: UnitOfWorkFactory) -> None:
     """S1-AC-10: no vectors, no hits."""
     assert _nearest(uow_factory, _axis(1.0), k=3) == ()
+
+
+def test_has_tells_whether_a_product_has_a_vector(uow_factory: UnitOfWorkFactory) -> None:
+    """``has`` is how the backfill counts "vector deleted" honestly (PC-TC-125, 139)."""
+    _upsert(uow_factory, 1, _axis(1.0))
+
+    with uow_factory() as uow:
+        assert (uow.vectors.has(1), uow.vectors.has(2)) == (True, False)
+        uow.vectors.delete(1)
+        assert uow.vectors.has(1) is False

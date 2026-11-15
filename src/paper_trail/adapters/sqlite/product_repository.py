@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from sqlalchemy import Connection, RowMapping, insert, select, update
+from sqlalchemy import Connection, RowMapping, delete, insert, select, update
 
 from paper_trail.adapters.sqlite.mappers import (
     alias_from_row,
@@ -12,7 +12,7 @@ from paper_trail.adapters.sqlite.mappers import (
 )
 from paper_trail.adapters.sqlite.schema import product_aliases, products
 from paper_trail.domain.enums import AliasSource
-from paper_trail.domain.errors import NotFoundError
+from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import Product, ProductAlias, require_id
 
 
@@ -93,6 +93,41 @@ class SqliteProductRepository:
             .order_by(product_aliases.c.id)
         ).mappings()
         return tuple(alias_from_row(row) for row in rows)
+
+    def ids(self) -> tuple[int, ...]:
+        return tuple(
+            self._connection.execute(select(products.c.id).order_by(products.c.id)).scalars()
+        )
+
+    def all_aliases(self) -> tuple[ProductAlias, ...]:
+        rows = self._connection.execute(
+            select(product_aliases).order_by(product_aliases.c.id)
+        ).mappings()
+        return tuple(alias_from_row(row) for row in rows)
+
+    def update_alias(self, alias: ProductAlias) -> ProductAlias:
+        alias_id = require_id(alias.id)
+        holder = self._alias_row(alias.alias, alias.store_key)
+        if holder is not None and holder["id"] != alias_id:
+            msg = f"another alias already holds {alias.alias!r} at {alias.store_key!r}"
+            raise ConflictError(msg)
+        result = self._connection.execute(
+            update(product_aliases)
+            .where(product_aliases.c.id == alias_id)
+            .values(alias_values(alias))
+        )
+        if not result.rowcount:
+            msg = f"alias {alias_id} does not exist"
+            raise NotFoundError(msg)
+        return alias
+
+    def remove_alias(self, alias_id: int) -> None:
+        result = self._connection.execute(
+            delete(product_aliases).where(product_aliases.c.id == alias_id)
+        )
+        if not result.rowcount:
+            msg = f"alias {alias_id} does not exist"
+            raise NotFoundError(msg)
 
     def _alias_row(self, alias: str, store_key: str | None) -> RowMapping | None:
         """The row stored under exactly (alias, store_key); a NULL store key is a key too."""

@@ -15,6 +15,7 @@ from paper_trail.domain.models import (
     Product,
     ProductAlias,
     ProductCode,
+    ProductLine,
     Receipt,
     ReceiptSummary,
 )
@@ -68,6 +69,11 @@ class ReceiptRepository(Protocol):
         side that names no line; DomainValidationError for a link the domain refuses."""
         ...
 
+    def item_lines(self, product_id: int) -> tuple[ProductLine, ...]:
+        """The ITEM lines linked to the product, earliest first: by the receipt's
+        ``purchased_on`` (undated receipts last), then receipt id, then position."""
+        ...
+
 
 class ProductRepository(Protocol):
     def add(self, product: Product) -> Product: ...
@@ -96,6 +102,24 @@ class ProductRepository(Protocol):
 
     def aliases(self, product_id: int) -> tuple[ProductAlias, ...]:
         """The product's aliases, ordered by id."""
+        ...
+
+    def ids(self) -> tuple[int, ...]:
+        """Every product's id, ascending."""
+        ...
+
+    def all_aliases(self) -> tuple[ProductAlias, ...]:
+        """Every alias of every product, ordered by id."""
+        ...
+
+    def update_alias(self, alias: ProductAlias) -> ProductAlias:
+        """Replace the stored alias with this id (product, text, store, source and
+        ``created_at`` as given) and return it. NotFoundError for an unknown id; ConflictError
+        (nothing changed) when another alias already holds its (alias, store_key)."""
+        ...
+
+    def remove_alias(self, alias_id: int) -> None:
+        """Delete the alias; NotFoundError for an unknown id."""
         ...
 
 
@@ -131,6 +155,15 @@ class CorrectionRepository(Protocol):
     ) -> Correction | None:
         """The newest correction (created_at, then id) for exactly this kind, subject and store
         (``None`` matches only corrections recorded without a store)."""
+        ...
+
+    def list(self, kind: CorrectionKind | None = None) -> tuple[Correction, ...]:
+        """Every correction (of ``kind`` when given), ordered by id."""
+        ...
+
+    def update(self, correction: Correction) -> Correction:
+        """Replace the stored correction with this id (every field as given) and return it.
+        NotFoundError for an unknown id."""
         ...
 
 

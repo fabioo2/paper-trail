@@ -2,12 +2,13 @@
 
 from dataclasses import replace
 
-from sqlalchemy import Connection, insert, select
+from sqlalchemy import Connection, insert, select, update
 
 from paper_trail.adapters.sqlite.mappers import correction_from_row, correction_values
 from paper_trail.adapters.sqlite.schema import corrections
 from paper_trail.domain.enums import CorrectionKind
-from paper_trail.domain.models import Correction
+from paper_trail.domain.errors import NotFoundError
+from paper_trail.domain.models import Correction, require_id
 
 
 class SqliteCorrectionRepository:
@@ -40,3 +41,21 @@ class SqliteCorrectionRepository:
             .one_or_none()
         )
         return None if row is None else correction_from_row(row)
+
+    def list(self, kind: CorrectionKind | None = None) -> tuple[Correction, ...]:
+        query = select(corrections).order_by(corrections.c.id)
+        if kind is not None:
+            query = query.where(corrections.c.kind == kind)
+        return tuple(correction_from_row(row) for row in self._connection.execute(query).mappings())
+
+    def update(self, correction: Correction) -> Correction:
+        correction_id = require_id(correction.id)
+        result = self._connection.execute(
+            update(corrections)
+            .where(corrections.c.id == correction_id)
+            .values(correction_values(correction))
+        )
+        if not result.rowcount:
+            msg = f"correction {correction_id} does not exist"
+            raise NotFoundError(msg)
+        return correction

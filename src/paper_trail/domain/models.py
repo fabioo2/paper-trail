@@ -139,6 +139,16 @@ class ItemLink:
 
 
 @dataclass(frozen=True, slots=True)
+class ProductLine:
+    """A stored ITEM line linked to a product, with where and when its receipt was bought."""
+
+    receipt_id: int
+    store_key: str
+    purchased_on: date | None
+    line: LineItem
+
+
+@dataclass(frozen=True, slots=True)
 class ReceiptDraft:
     """Input to RecordReceipt: produced by the CLI import (Stage 1) and the graph (Stage 3).
 
@@ -251,6 +261,10 @@ class CodeIdentity:
     scheme: CodeScheme
     store_key: str
     code: str
+
+    def __str__(self) -> str:
+        """``store costco 1362394``, ``gtin 0060383064877``, ``plu 93101``."""
+        return " ".join(part for part in (self.scheme, self.store_key, self.code) if part)
 
 
 @dataclass(frozen=True, slots=True)

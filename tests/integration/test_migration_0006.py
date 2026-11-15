@@ -1,8 +1,12 @@
-"""Revision 0006, product codes (barcode-lookup plan R3, A9, Q1; PC-TC-13..17, 19..21).
+"""Revision 0006, product codes (barcode-lookup plan R3, A9, Q1; PC-TC-13..17, 19..21, 101,
+102).
 
 A real SQLite file in ``tmp_path``, seeded at 0005 with raw SQL. Expected lists are written out
-here, not read from the migration. The populated survival test and the mid-swap failures are
-PR 1b (PC-TC-101, 102).
+here, not read from the migration. PC-TC-101: a populated database (observations with discount
+fields, linked discount lines, every old ``match_source`` plus NULL, aliases, corrections) is
+unchanged after upgrade, downgrade and a second upgrade, with its indexes, foreign keys and FTS
+triggers. PC-TC-102: a failure after any step of the upgrade's swap, or of the downgrade, leaves
+the starting revision, schema and rows (no temporary column), and the same command then succeeds.
 """
 
 import json
@@ -11,6 +15,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+import alembic.op
 import pytest
 from alembic import command
 from sqlalchemy import Connection, Engine, text
@@ -463,3 +468,226 @@ def test_pc_tc_21_upgrade_downgrade_upgrade(
         **seeded,
         "product_codes": [],
     }
+
+
+POPULATED_TABLES = (
+    "receipts", "products", "line_items", "price_observations", "product_aliases", "corrections",
+)  # fmt: skip
+OLD_MATCH_SOURCES = ("memory", "alias", "vector", "llm", "new", None)
+FOREIGN_KEY_INDEXES = {
+    "ix_product_aliases_product_id",
+    "ix_price_observations_receipt_id",
+    "ix_jobs_receipt_id",
+    "ix_review_items_receipt_id",
+    "ix_corrections_receipt_id",
+    "ix_corrections_line_item_id",
+}
+FTS_HITS = "SELECT rowid FROM line_items_fts WHERE line_items_fts MATCH :query ORDER BY rowid"
+
+type LineTables = tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]
+
+
+def _observation(  # noqa: PLR0913 - one observation's fields
+    connection: Connection,
+    receipt_id: int,
+    line_id: int,
+    product_id: int,
+    *,
+    discount: int,
+    quantity: str = "1",
+) -> int:
+    total = 899
+    return _insert(
+        connection,
+        "price_observations",
+        {
+            "product_id": product_id,
+            "receipt_id": receipt_id,
+            "line_item_id": line_id,
+            "store_key": "costco",
+            "observed_on": "2026-11-01",
+            "quantity": quantity,
+            "unit_price_cents": total,
+            "line_total_cents": total,
+            "currency": "CAD",
+            "discount_cents": discount,
+            "unit_discount_cents": discount,
+            "paid_cents": total + discount,
+            "on_sale": discount < 0,
+        },
+    )
+
+
+def _seed_populated(database: Path, engine: Engine) -> Rows:
+    """At 0005: the STAMPS products; item lines 0-5 with each old ``match_source`` and NULL;
+    discount lines 6 and 7 linked to items 0 and 1; observations regular (line 2), discounted
+    and on sale (lines 0 and 1, one weighed); a MATCHED and a USER_CORRECTION alias; a
+    PRODUCT_LINK and a CATEGORY correction."""
+    command.upgrade(alembic_config(database), "0005")
+    with engine.begin() as connection:
+        receipt_id = _receipt(connection)
+        product_ids = [
+            _product(connection, f"Product {index}", **fields)
+            for index, (fields, _) in enumerate(STAMPS)
+        ]
+        lines = [
+            _line(connection, receipt_id, position, product_ids[position % 2], source)
+            for position, source in enumerate(OLD_MATCH_SOURCES)
+        ]
+        for position, target in ((6, 0), (7, 1)):
+            _insert(
+                connection,
+                "line_items",
+                {"receipt_id": receipt_id, "position": position, "kind": "discount",
+                 "raw_text": f"TPD/1362394 {target}", "description": "Instant savings",
+                 "quantity": "1", "line_total_cents": -400, "applies_to_position": target},
+            )  # fmt: skip
+        _observation(connection, receipt_id, lines[0], product_ids[0], discount=-400)
+        _observation(
+            connection, receipt_id, lines[1], product_ids[1], discount=-400, quantity="1.36"
+        )
+        _observation(connection, receipt_id, lines[2], product_ids[0], discount=0)
+        for alias, source in (("choc pistach 0", "matched"), ("choc pistach 1", "user_correction")):
+            _insert(
+                connection,
+                "product_aliases",
+                {"product_id": product_ids[0], "alias": alias, "store_key": "costco",
+                 "source": source, "created_at": NOW},
+            )  # fmt: skip
+        for kind, value, line_id in (("product_link", "1", lines[0]), ("category", "pantry", None)):
+            _insert(
+                connection,
+                "corrections",
+                {"kind": kind, "subject": "choc pistach 0", "old_value": None,
+                 "new_value": value, "store_key": "costco", "receipt_id": receipt_id,
+                 "line_item_id": line_id, "created_at": NOW},
+            )  # fmt: skip
+        return _all_rows(connection, POPULATED_TABLES)
+
+
+def _line_tables(connection: Connection) -> LineTables:
+    return (
+        [tuple(row) for row in connection.exec_driver_sql('PRAGMA index_list("line_items")')],
+        [tuple(row) for row in connection.exec_driver_sql('PRAGMA foreign_key_list("line_items")')],
+    )
+
+
+def _comparable(rows: Rows) -> Rows:
+    return {**rows, "products": _without_field_sources(rows["products"])}
+
+
+def _assert_survived(engine: Engine, seeded: Rows, line_tables: LineTables) -> None:
+    """PC-TC-101's equality: the seeded rows, the foreign-key indexes, the line table's indexes
+    and foreign keys, and the FTS index and its update trigger."""
+    with engine.begin() as connection:
+        rows = _all_rows(connection, POPULATED_TABLES)
+        indexes = set(
+            connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'index'"))
+            .scalars()
+            .all()
+        )
+        tables = _line_tables(connection)
+        found = connection.execute(text(FTS_HITS), {"query": "pistach"}).scalars().all()
+        connection.execute(text("UPDATE line_items SET raw_text = 'ZESTY WAFFLE' WHERE id = 2"))
+        renamed = connection.execute(text(FTS_HITS), {"query": "zesty"}).scalars().all()
+        old = connection.execute(text(FTS_HITS), {"query": "pistach"}).scalars().all()
+    assert _comparable(rows) == _comparable(seeded)
+    assert indexes >= FOREIGN_KEY_INDEXES
+    assert tables == line_tables
+    assert (found, renamed, old) == ([1, 2, 3, 4, 5, 6], [2], [1, 3, 4, 5, 6])
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [("head",), ("head", "0005"), ("head", "0005", "head")],
+    ids=["after upgrade", "after downgrade", "after second upgrade"],
+)
+def test_pc_tc_101_a_populated_database_survives_every_step(
+    database: Path, engine: Engine, steps: tuple[str, ...]
+) -> None:
+    seeded = _seed_populated(database, engine)
+    with engine.connect() as connection:
+        line_tables = _line_tables(connection)
+    config = alembic_config(database)
+
+    for target in steps:
+        if target == "head":
+            command.upgrade(config, target)
+        else:
+            command.downgrade(config, target)
+
+    assert current_revision(engine) == ("0005" if steps[-1] == "0005" else "0006")
+    _assert_survived(engine, seeded, line_tables)
+
+
+class InjectedFaultError(RuntimeError):
+    """The patched migration step failed on purpose."""
+
+
+@pytest.mark.parametrize(
+    ("direction", "failing_sql"),
+    [
+        ("upgrade", "ALTER TABLE line_items ADD COLUMN match_source_0006 TEXT"),
+        ("upgrade", "ALTER TABLE line_items DROP COLUMN match_source"),
+        ("upgrade", "UPDATE line_items SET match_source = match_source_0006"),
+        ("downgrade", "ALTER TABLE products DROP COLUMN field_sources"),
+        ("downgrade", "ALTER TABLE line_items DROP COLUMN applies_to_position"),
+    ],
+    ids=[
+        "upgrade after the temporary column",
+        "upgrade after the original is dropped",
+        "upgrade after the copy back",
+        "downgrade after field_sources is dropped",
+        "downgrade swap after the originals are dropped",
+    ],
+)
+def test_pc_tc_102_a_failure_mid_migration_leaves_the_previous_revision_and_retries(
+    database: Path,
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    failing_sql: str,
+) -> None:
+    seeded = _seed_populated(database, engine)
+    with engine.connect() as connection:
+        line_tables = _line_tables(connection)
+    config = alembic_config(database)
+    if direction == "downgrade":
+        command.upgrade(config, "head")
+    start = current_revision(engine)
+    with engine.connect() as connection:
+        before = (_schema(connection), _all_rows(connection, POPULATED_TABLES))
+    engine.dispose()
+    real_execute = alembic.op.execute
+
+    def failing(sql: Any, *args: Any, **kwargs: Any) -> None:
+        real_execute(sql, *args, **kwargs)
+        if str(sql) == failing_sql:
+            raise InjectedFaultError(failing_sql)
+
+    run = command.upgrade if direction == "upgrade" else command.downgrade
+    target = "head" if direction == "upgrade" else "0005"
+    monkeypatch.setattr(alembic.op, "execute", failing)
+
+    with pytest.raises(InjectedFaultError):
+        run(config, target)
+
+    monkeypatch.undo()
+    reopened = create_engine(database)
+    try:
+        with reopened.connect() as connection:
+            after = (_schema(connection), _all_rows(connection, POPULATED_TABLES))
+            columns = [
+                row["name"]
+                for row in connection.exec_driver_sql('PRAGMA table_info("line_items")').mappings()
+            ]
+        assert current_revision(reopened) == start
+        assert after == before
+        assert [name for name in columns if name.endswith("_0006")] == []
+
+        run(config, target)
+
+        assert current_revision(reopened) == ("0006" if direction == "upgrade" else "0005")
+        _assert_survived(reopened, seeded, line_tables)
+    finally:
+        reopened.dispose()
