@@ -10,11 +10,14 @@ from dataclasses import dataclass
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from paper_trail.adapters.catalog.composite import CompositeCatalog
+from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
 from paper_trail.adapters.mcp.gateway import McpToolGateway
 from paper_trail.adapters.ollama.embeddings import OllamaEmbeddings
 from paper_trail.adapters.ollama.llm import OllamaLlm
 from paper_trail.adapters.sqlite.checkpoints import sqlite_checkpointer
+from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
 from paper_trail.adapters.tesseract.ocr import TesseractOcr
 from paper_trail.adapters.trace.json_file import JsonTraceWriter
 from paper_trail.adapters.trace.memory import InMemoryTracer
@@ -81,6 +84,7 @@ def run_config(settings: Settings) -> RunConfig:
         max_text_attempts=limits.max_text_attempts,
         max_vision_attempts=limits.max_vision_attempts,
         enrichment=settings.graph.enrichment,
+        catalog=settings.catalog.enabled,
         transport=settings.tools.transport,
     )
 
@@ -102,8 +106,18 @@ def tool_registry(container: Container) -> ToolRegistry:
             record_receipt=container.record_receipt,
             tolerances=container.tolerances,
             embeddings=OllamaEmbeddings(settings.ollama),
+            catalog=product_catalog(container),
         )
     )
+
+
+def product_catalog(container: Container) -> CompositeCatalog:
+    """The store catalog (the container's ``product_codes``), then the PLU table."""
+    plu_path = container.settings.catalog.plu_path
+    if plu_path is None:
+        msg = "Settings fills in CATALOG__PLU_PATH"
+        raise ValueError(msg)
+    return CompositeCatalog(StoreCatalog(container.uow_factory), PluCatalog(plu_path))
 
 
 @contextmanager

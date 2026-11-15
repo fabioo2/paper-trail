@@ -49,3 +49,7 @@ A shared GPU sometimes answers slower than the request timeout, and a timeout st
 - No backoff: each try gets the full timeout. When every try times out the `LlmUnavailableError` counts them ("timed out N times").
 - Each retried try logs `llm.timeout_retry`. The call's count is `LlmResult.timeout_retries` (or `LlmError.timeout_retries` when it fails); the trace stores it in the LLM event's data and leads the row's summary with `↻N`. Error messages are unchanged, since they reach the model's next prompt.
 - One model call can now take (1 + retries) × 2 requests × the request timeout (1200 s at the defaults); a future job lease must outlast that.
+
+## Amendment (2026-11-15): matching and enrichment ask no model (ADR-0018)
+
+Product identity now comes from the code printed on a line, and descriptions only from a person or a data source. The `matching/v1` and `enrichment/v1` prompts stay on disk and still load, but no node uses them; `PAPER_TRAIL_PROMPTS__MATCHING_VERSION` and `__ENRICHMENT_VERSION` are unused. After extraction a receipt makes no chat request, and the embedding model is called only for new products named by a data source.

@@ -1,99 +1,124 @@
-"""Enrichment through the whole graph (PLAN 6, agent core slice D): AC-D-02 = S4-AC-05 at graph
-level, S4-AC-04 in full ("creates a new product, enriches it, stores its vector, and the next
-identical line hits the alias"), and S3-AC-10 for a GPU drop during enrichment.
+"""Enrichment by lookup only through the whole graph (barcode-lookup plan PR 1a: R9, A1, A6;
+PC-TC-66..71). Before PR 1a this stage asked the model for a name, brand, size and category;
+now no model is asked anywhere after the extraction.
 
-Scripted LLM (extraction, then one enrichment answer per new product, in line order), fake
-embeddings, in-process tools; the MCP transport is compared in ``test_transport_equivalence.py``.
+Scripted LLM holding the extraction reply only (any further request fails the run), the PLU
+table on a ``tmp_path`` file (``PluCatalog``, the production adapter: it tells an organic code
+from a conventional one), fake embeddings, in-process tools; the MCP transport is compared in
+``test_transport_equivalence.py``.
 
-Pinned (docs/tests/agent-core-D.md):
-- ``GRAPH__ENRICHMENT`` (``GraphSettings.enrichment``, default true) turns the stage on. Graph:
-  ``commit_matches -> enrich -> commit_enrichment -> END`` when it is on and this run's
-  ``save_matches`` linked a line with source ``new``; otherwise ``commit_matches -> END``.
-  ``enrich`` is the ENRICHMENT agent and only reads; ``commit_enrichment`` is the SUPERVISOR.
-- Only the products created by this receipt's matching are enriched: the distinct product ids
-  of its ``new`` lines, in line order; the first such line is the product's source line.
-  Products found by memory, alias, vector or confirmation, and products a person named in a
-  review, are not.
-- ``enrich`` makes one request per product: ``settings.ollama.text_model``, temperature 0, tag
-  ``enrichment/v1`` (``+noex`` without examples); the final user message holds the source line's
-  raw text and description inside ``<receipt_data>``. An answer that never validates (an
-  invented category included, S4-AC-05) or whose confidence is below ``GRAPH__MIN_CONFIDENCE``
-  leaves that product as it is: no ``save_enrichment`` for it, not retried, the run completes.
-- ``commit_enrichment`` calls ``save_enrichment`` once per enriched product, in the same order,
-  with ``alias`` the source line's raw text and ``store_key`` the receipt's store key. Every
-  enrichment request comes before the first ``save_enrichment`` (one model loaded at a time:
-  the text model's calls, then the embedding model's).
-- The receipt is COMPLETED/DONE once ``save_matches`` has run; enrichment changes products, not
-  the receipt. A GPU drop during enrichment raises ``ProcessingStoppedError``, keeps the
-  receipt COMPLETED/DONE and the checkpoint; ``--resume`` continues after ``commit_matches``.
-- Trace: enrichment LLM events have agent ENRICHMENT and a summary naming the category;
-  ``save_enrichment`` TOOL events have agent SUPERVISOR and a summary naming the stored category,
-  with ``memory`` when the correction memory chose it.
+Pinned (plan R9, A6; signatures "Agents"):
+- ``GRAPH__ENRICHMENT`` (default true) turns the stage on: ``commit_matches -> enrich ->
+  commit_enrichment``. ``enrich`` is the ENRICHMENT agent and calls no tool and no model: for the
+  first created line of each product it turns the ``catalog`` entry matching found
+  (``state["created"]``) into ``describe_from_catalog`` input; a product without an entry is
+  left as matching made it. ``commit_enrichment`` (SUPERVISOR) calls ``describe_from_catalog``
+  once per described product with the line's raw text as ``alias`` and the receipt's store key.
+- A PLU entry supplies name, category produce and, for an organic code, the tag ``organic``,
+  each with source ``plu``. A person's CATEGORY correction for the line's alias and store wins
+  (source ``person``), whether or not a source knows the product and whether or not the stage
+  runs (TQ11).
+- Only products this receipt created are described; a crash in ``commit_enrichment`` resumes
+  with the describes only.
 """
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 from structlog.testing import capture_logs
 
+from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.agents.graph import NODE_NAMES
-from paper_trail.application.process_receipt import ProcessingStoppedError, ProcessOutcome
+from paper_trail.agents.state import thread_id
+from paper_trail.application.process_receipt import ProcessOutcome
 from paper_trail.domain.enums import (
     AgentRole,
     Category,
     CorrectionKind,
+    FieldSource,
     MatchSource,
     ProcessingStage,
     ReceiptStatus,
-    Unit,
 )
-from paper_trail.domain.models import Product
+from paper_trail.domain.models import JsonValue, Product
 from paper_trail.domain.rules.normalization import normalize_alias
 from paper_trail.domain.trace import TraceEvent, TraceKind
-from paper_trail.ports.llm import LlmUnavailableError
 from paper_trail.ports.tools import ToolGateway
-from paper_trail.ports.unit_of_work import UnitOfWork
-from tests.agent_harness import (
-    TEXT_MODEL,
-    Harness,
-    agent_settings,
-    build_harness,
-)
+from tests.agent_harness import Harness, agent_settings, build_harness
 from tests.extractions import (
-    COSTCO_ENRICHMENTS,
+    C1,
     COSTCO_OCR,
-    EGGS_ALIAS,
+    L3,
+    L4,
+    LOBLAWS,
+    LOBLAWS_KEY,
+    NOW,
+    PLU_CSV,
     STORE_KEY,
     STORE_NAME,
+    U1,
+    coded_extraction,
     enrichment,
-    extraction,
-    one_line_extraction,
 )
-from tests.factories import correction, product
-from tests.fakes.embeddings import FakeEmbeddings, basis
+from tests.factories import correction
 from tests.fakes.llm import Reply, ScriptedLlm
-from tests.fakes.tools import MisroutedToolGateway, RecordingToolGateway
+from tests.fakes.tools import CrashAfterToolGateway, MisroutedToolGateway, RecordingToolGateway
 from tests.storage import in_unit
 from tests.support import require_id
 
 LLM = TraceKind.LLM
 TOOL = TraceKind.TOOL
-ENRICHMENT_TAG = "enrichment/v1"
-GPU_DOWN = "cannot reach the LLM host llm-host.test:11434"
-RAW_TEXTS = ("KS ORG EGGS 24CT", "KS 2% MILK 4L", "KS SOURDOUGH")
-DESCRIPTIONS = ("Kirkland Organic Eggs 24 ct", "Kirkland 2% Milk 4 L", "Kirkland Sourdough Bread")
+DESCRIBE = "describe_from_catalog"
+PLU = FieldSource.PLU
+PERSON = FieldSource.PERSON
+RECEIPT_TEXT = FieldSource.RECEIPT_TEXT
+
+TEST_APPLE_ENTRY: dict[str, JsonValue] = {
+    "source": "plu",
+    "key": "3101",
+    "name": "Test Apple",
+    "brand": None,
+    "size_value": None,
+    "size_unit": None,
+    "quantity_text": None,
+    "categories": [],
+    "category": "produce",
+    "tags": [],
+}
+
+
+@pytest.fixture
+def plu(tmp_path: Path) -> PluCatalog:
+    path = tmp_path / "catalog" / "plu.csv"
+    path.parent.mkdir()
+    path.write_text(PLU_CSV, encoding="utf-8")
+    return PluCatalog(path)
 
 
 def _harness(
+    plu: PluCatalog,
     *replies: Reply,
     enrichment_on: bool = True,
-    examples: bool = True,
-    embeddings: FakeEmbeddings | None = None,
+    harness: Harness | None = None,
+    wrap_tools: Any = None,
 ) -> Harness:
+    """A process on a fresh database, or on ``harness``'s data (a second process)."""
+    if harness is None:
+        return build_harness(
+            ScriptedLlm(*replies),
+            settings=agent_settings(enrichment=enrichment_on),
+            catalog=plu,
+            wrap_tools=wrap_tools,
+        )
     return build_harness(
         ScriptedLlm(*replies),
-        settings=agent_settings(enrichment=enrichment_on, examples=examples),
-        embeddings=embeddings,
+        settings=harness.settings,
+        checkpointer=harness.checkpointer,
+        uow_factory=harness.uow_factory,
+        images=harness.images,
+        catalog=plu,
+        wrap_tools=wrap_tools,
     )
 
 
@@ -104,7 +129,7 @@ def _completed(outcome: ProcessOutcome) -> int:
     return outcome.receipt_id
 
 
-def _costco(harness: Harness, name: str = "costco.txt") -> int:
+def _process(harness: Harness, name: str = "receipt.txt") -> int:
     return _completed(harness.process_text(COSTCO_OCR, name))
 
 
@@ -114,279 +139,276 @@ def _products(harness: Harness, receipt_id: int) -> list[Product]:
     ]
 
 
-def _enrichment_requests(harness: Harness) -> list[int]:
-    return [i for i, request in enumerate(harness.llm.requests) if request.tag == ENRICHMENT_TAG]
-
-
 def _events(harness: Harness, receipt_id: int, kind: TraceKind, name: str) -> list[TraceEvent]:
     return [
         event for event in harness.events(receipt_id) if event.kind is kind and event.name == name
     ]
 
 
-def _saved_ids(harness: Harness, receipt_id: int) -> list[int]:
-    """The product id of every ``save_enrichment`` output, in call order."""
-    ids: list[int] = []
-    for event in _events(harness, receipt_id, TOOL, "save_enrichment"):
-        output = event.data["output"]
-        assert isinstance(output, dict)
-        saved = output["product"]
-        assert isinstance(saved, dict)
-        product_id = saved["id"]
-        assert isinstance(product_id, int)
-        ids.append(product_id)
-    return ids
+def _assert_no_model_after_extraction(harness: Harness, receipt_id: int) -> None:
+    """Zero model requests (signatures "Tests"): the extraction is the only request."""
+    assert harness.llm.calls == 1
+    asked = [
+        event
+        for event in harness.events(receipt_id)
+        if event.kind is LLM and event.agent in {AgentRole.MATCHING, AgentRole.ENRICHMENT}
+    ]
+    assert asked == []
 
 
-def _enriched_text(answer: dict[str, Any]) -> str:
-    return normalize_alias(" ".join([answer["canonical_name"], *answer["tags"]]))
-
-
-def _nearest(harness: Harness, vector: tuple[float, ...]) -> tuple[int, float]:
-    with harness.uow_factory(read_only=True) as uow:
-        (hit,) = uow.vectors.nearest(vector, k=1)
-    return hit.product_id, round(hit.distance, 6)
+def _product(
+    product_id: int | None,
+    name: str,
+    sources: dict[str, FieldSource],
+    *,
+    category: Category | None = None,
+    tags: tuple[str, ...] = (),
+) -> Product:
+    return Product(product_id, name, None, None, None, category, tags, NOW, sources)
 
 
 def test_enrich_and_commit_enrichment_are_nodes_of_the_graph() -> None:
     assert NODE_NAMES[-3:] == ("commit_matches", "enrich", "commit_enrichment")
 
 
-# --- S4-AC-04 in full ---------------------------------------------------------------------------
+# --- PC-TC-66: a PLU hit fills what the source supplies ------------------------------------------
 
 
-def test_s4_ac_04_new_products_are_enriched_with_their_vectors() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
+@pytest.mark.parametrize(
+    ("raw_text", "expected"),
+    [
+        (
+            L4,
+            (
+                "Organic Test Apple",
+                Category.PRODUCE,
+                ("organic",),
+                {"canonical_name": PLU, "category": PLU, "tags": PLU},
+            ),
+        ),
+        (L3, ("Test Apple", Category.PRODUCE, (), {"canonical_name": PLU, "category": PLU})),
+    ],
+    ids=["organic", "conventional"],
+)
+def test_pc_tc_66_a_plu_hit_fills_what_the_source_supplies(
+    plu: PluCatalog,
+    raw_text: str,
+    expected: tuple[str, Category, tuple[str, ...], dict[str, FieldSource]],
+) -> None:
+    harness = _harness(plu, coded_extraction([raw_text]))
 
-    receipt_id = _costco(harness)
+    receipt_id = _process(harness)
 
-    eggs, milk, bread = _products(harness, receipt_id)
-    assert (eggs.canonical_name, eggs.brand, str(eggs.size_value), eggs.size_unit) == (
-        "Kirkland Signature Organic Eggs 24 ct",
-        "Kirkland Signature",
-        "24",
-        Unit.EACH,
+    (stored,) = _products(harness, receipt_id)
+    name, category, tags, sources = expected
+    assert stored == _product(stored.id, name, sources, category=category, tags=tags)
+    describes = _events(harness, receipt_id, TOOL, DESCRIBE)
+    assert [event.agent for event in describes] == [AgentRole.SUPERVISOR]
+    _assert_no_model_after_extraction(harness, receipt_id)
+    assert harness.embeddings.calls == 1  # the confirmed new product, in save_matches
+
+
+# --- PC-TC-67: a miss changes nothing -------------------------------------------------------------
+
+
+def test_pc_tc_67_a_miss_leaves_printed_text_products_as_they_are(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([C1, U1], store_name=STORE_NAME))
+
+    receipt_id = _process(harness)
+
+    choc, eggs = _products(harness, receipt_id)
+    assert [choc, eggs] == [
+        _product(choc.id, "CHOC PISTACH", {"canonical_name": RECEIPT_TEXT}),
+        _product(eggs.id, U1, {"canonical_name": RECEIPT_TEXT}),
+    ]
+    assert _events(harness, receipt_id, TOOL, DESCRIBE) == []
+    _assert_no_model_after_extraction(harness, receipt_id)
+    assert harness.embeddings.calls == 0
+
+
+# --- PC-TC-68: the entry comes from matching; only this receipt's new products ------------------
+
+
+def test_pc_tc_68_enrichment_uses_the_entry_matching_found(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([L3, C1]))
+
+    receipt_id = _process(harness)
+
+    lookups = _events(harness, receipt_id, TOOL, "catalog_lookup")
+    assert [event.agent for event in lookups] == [AgentRole.MATCHING] * 2
+    apple, choc = (require_id(product.id) for product in _products(harness, receipt_id))
+    saved = harness.checkpointer.get_tuple(
+        {"configurable": {"thread_id": thread_id(receipt_id), "checkpoint_ns": ""}}
     )
-    assert (eggs.category, eggs.tags) == (Category.DAIRY_EGGS, ("eggs", "organic", "breakfast"))
-    assert (milk.category, milk.size_unit) == (Category.DAIRY_EGGS, Unit.L)
-    assert (bread.category, bread.size_value, bread.size_unit) == (Category.BAKERY, None, None)
-    for stored, answer in zip((eggs, milk, bread), COSTCO_ENRICHMENTS, strict=True):
-        vector = harness.embeddings.vector(_enriched_text(answer))
-        assert _nearest(harness, vector) == (require_id(stored.id), 0.0)
-    assert harness.match_sources(receipt_id) == [MatchSource.NEW] * 3
+    assert saved is not None
+    assert saved.checkpoint["channel_values"]["created"] == [
+        {"position": 0, "product_id": apple, "catalog": TEST_APPLE_ENTRY},
+        {"position": 1, "product_id": choc, "catalog": None},
+    ]
+    assert len(_events(harness, receipt_id, TOOL, DESCRIBE)) == 1
 
 
-def test_s4_ac_04_the_next_identical_receipt_hits_the_alias_and_enriches_nothing() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS, extraction())
-    first = _costco(harness, "a.txt")
-    embeddings_before = harness.embeddings.calls
-    llm_before = harness.llm.calls
+def test_pc_tc_68_the_next_identical_receipt_describes_nothing(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([L3, C1]), coded_extraction([L3, C1]))
+    first = _process(harness, "a.txt")
 
-    second = _costco(harness, "b.txt")
+    second = _process(harness, "b.txt")
 
-    assert harness.match_sources(second) == [MatchSource.ALIAS] * 3
+    assert harness.match_sources(second) == [MatchSource.CATALOG] * 2
     assert _products(harness, second) == _products(harness, first)
-    assert harness.embeddings.calls == embeddings_before
-    assert harness.llm.calls == llm_before + 1  # the extraction only
-    assert "enrich" not in harness.node_runs(second)
-    assert harness.node_runs(second)[-1] == "commit_matches"
+    assert _events(harness, second, TOOL, DESCRIBE) == []
+    assert harness.llm.calls == 2  # the two extractions
 
 
-def test_enrichment_runs_after_matching_and_the_saves_come_after_every_request() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
+def test_pc_tc_68_two_lines_of_one_new_product_describe_it_once(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([L3, L3]))
 
-    receipt_id = _costco(harness)
-
-    runs = harness.node_runs(receipt_id)
-    assert runs[-4:] == ["match", "commit_matches", "enrich", "commit_enrichment"]
-    steps = harness.steps(receipt_id)
-    enrich_rows = [(LLM, ENRICHMENT_TAG)] * 3 + [(TOOL, "save_enrichment")] * 3
-    assert steps[-6:] == enrich_rows
-    assert steps[-7] == (TOOL, "save_matches")
-
-
-def test_the_enrichment_requests_name_each_new_products_line() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
-
-    _costco(harness)
-
-    indexes = _enrichment_requests(harness)
-    assert len(indexes) == 3
-    for index, raw_text, description in zip(indexes, RAW_TEXTS, DESCRIPTIONS, strict=True):
-        request = harness.llm.requests[index]
-        assert (request.model, request.temperature) == (TEXT_MODEL, 0.0)
-        final = harness.llm.last_user_message(index)
-        data = final[final.index("<receipt_data>") : final.index("</receipt_data>")]
-        assert raw_text in data
-        assert description in data
-
-
-def test_without_examples_the_tag_says_so() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS, examples=False)
-
-    _costco(harness)
-
-    assert {harness.llm.requests[i].tag for i in range(1, 4)} == {"enrichment/v1+noex"}
-
-
-def test_commit_enrichment_saves_each_product_with_its_line_alias_and_store() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
-
-    receipt_id = _costco(harness)
-
-    saves = _events(harness, receipt_id, TOOL, "save_enrichment")
-    assert [event.agent for event in saves] == [AgentRole.SUPERVISOR] * 3
-    ids = [require_id(product.id) for product in _products(harness, receipt_id)]
-    assert _saved_ids(harness, receipt_id) == ids
-    assert [event.summary.count("dairy_eggs") > 0 for event in saves] == [True, True, False]
-    assert "bakery" in saves[2].summary
-    assert all("memory" not in event.summary for event in saves)
-
-
-def test_the_enrichment_llm_events_belong_to_the_enrichment_agent() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
-
-    receipt_id = _costco(harness)
-
-    events = _events(harness, receipt_id, LLM, ENRICHMENT_TAG)
-    assert [event.agent for event in events] == [AgentRole.ENRICHMENT] * 3
-    assert "dairy_eggs" in events[0].summary
-    assert "bakery" in events[2].summary
-
-
-# --- only the products this receipt created -------------------------------------------------------
-
-
-def test_two_lines_of_one_new_product_enrich_it_once() -> None:
-    eggs_twice: dict[str, Any] = one_line_extraction("KS ORG EGGS 24CT", cents=1798)
-    line = dict(eggs_twice["items"][0], line_total_cents=899, unit_price_cents=899)
-    eggs_twice["items"] = [line, dict(line)]
-    harness = _harness(eggs_twice, enrichment())
-
-    receipt_id = _completed(harness.process_text("KS ORG EGGS 24CT 8.99\nKS ORG EGGS 24CT 8.99"))
+    receipt_id = _process(harness)
 
     first, second = harness.receipt(receipt_id).items
     assert first.product_id == second.product_id
-    assert len(_enrichment_requests(harness)) == 1
-    assert len(_events(harness, receipt_id, TOOL, "save_enrichment")) == 1
+    assert len(_events(harness, receipt_id, TOOL, DESCRIBE)) == 1
 
 
-def test_a_product_found_by_the_vector_index_is_not_enriched() -> None:
-    harness = _harness(
-        one_line_extraction("KS ORG EGGS 24CT"),
-        embeddings=FakeEmbeddings({EGGS_ALIAS: basis(0)}),
-    )
+# --- PC-TC-69: no model in enrich; the switch -----------------------------------------------------
 
-    def seed(uow: UnitOfWork) -> int:
-        product_id = require_id(uow.products.add(product(canonical_name="Organic Eggs")).id)
-        uow.vectors.upsert(product_id, basis(0))
-        return product_id
 
-    known = in_unit(harness.uow_factory, seed)
+def test_pc_tc_69_a_queued_enrichment_reply_is_never_asked_for(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([L3]), enrichment())
 
-    receipt_id = _completed(harness.process_text("KS ORG EGGS 24CT 8.99"))
+    receipt_id = _process(harness)
 
-    assert harness.line(receipt_id, 0).product_id == known
-    assert _enrichment_requests(harness) == []
+    _assert_no_model_after_extraction(harness, receipt_id)
+    assert "commit_enrichment" in harness.node_runs(receipt_id)
+
+
+def test_with_enrichment_off_the_stage_does_not_run(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_extraction([L3]), enrichment_on=False)
+
+    receipt_id = _process(harness)
+
     assert harness.node_runs(receipt_id)[-1] == "commit_matches"
+    (stored,) = _products(harness, receipt_id)
+    assert stored == _product(stored.id, "Test Apple", {"canonical_name": PLU})
+    _assert_no_model_after_extraction(harness, receipt_id)
 
 
-def test_with_enrichment_off_the_stage_does_not_run() -> None:
-    harness = _harness(extraction(), enrichment_on=False)
-
-    receipt_id = _costco(harness)
-
-    assert _enrichment_requests(harness) == []
-    assert harness.node_runs(receipt_id)[-1] == "commit_matches"
-    assert all(product.category is None for product in _products(harness, receipt_id))
+# --- PC-TC-70: a person's category correction, entry or not, stage on or off ---------------------
 
 
-# --- S4-AC-05 at graph level ----------------------------------------------------------------------
-
-
-def test_s4_ac_05_an_invented_category_leaves_the_product_unenriched() -> None:
-    harness = _harness(extraction(), enrichment(category="groceries"), *COSTCO_ENRICHMENTS[1:])
-
-    receipt_id = _costco(harness)
-
-    eggs, milk, _ = _products(harness, receipt_id)
-    assert (eggs.canonical_name, eggs.category, eggs.tags) == (DESCRIPTIONS[0], None, ())
-    assert milk.category is Category.DAIRY_EGGS
-    assert require_id(eggs.id) not in _saved_ids(harness, receipt_id)
-    assert harness.llm.calls == 4  # not retried
-
-
-def test_a_low_confidence_answer_leaves_the_product_unenriched() -> None:
-    harness = _harness(extraction(), enrichment(confidence=0.3), *COSTCO_ENRICHMENTS[1:])
-
-    receipt_id = _costco(harness)
-
-    eggs, milk, _ = _products(harness, receipt_id)
-    assert eggs.category is None
-    assert milk.category is Category.DAIRY_EGGS
-    assert len(_events(harness, receipt_id, TOOL, "save_enrichment")) == 2
-
-
-def test_s4_ac_05_a_category_correction_for_the_alias_overrides_the_model() -> None:
-    harness = _harness(extraction(), *COSTCO_ENRICHMENTS)
+def _remember_category(harness: Harness, raw_text: str, store_key: str) -> None:
     remembered = correction(
         kind=CorrectionKind.CATEGORY,
-        subject=EGGS_ALIAS,
+        subject=normalize_alias(raw_text),
         old_value=None,
-        new_value=Category.PANTRY.value,
-        store_key=STORE_KEY,
+        new_value=Category.DAIRY_EGGS.value,
+        store_key=store_key,
     )
     in_unit(harness.uow_factory, lambda uow: uow.corrections.add(remembered))
 
-    receipt_id = _costco(harness)
 
-    eggs, milk, _ = _products(harness, receipt_id)
-    assert eggs.category is Category.PANTRY
-    assert eggs.canonical_name == COSTCO_ENRICHMENTS[0]["canonical_name"]
-    assert milk.category is Category.DAIRY_EGGS
-    first_save = _events(harness, receipt_id, TOOL, "save_enrichment")[0]
-    assert "pantry" in first_save.summary
-    assert "memory" in first_save.summary
+@pytest.mark.parametrize("enrichment_on", [True, False], ids=["enrichment-on", "enrichment-off"])
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ((L3, LOBLAWS, LOBLAWS_KEY), ("Test Apple", PLU)),
+        ((C1, STORE_NAME, STORE_KEY), ("CHOC PISTACH", RECEIPT_TEXT)),
+    ],
+    ids=["plu-entry", "no-source"],
+)
+def test_pc_tc_70_a_persons_category_correction_reaches_every_new_product(
+    plu: PluCatalog,
+    line: tuple[str, str, str],
+    expected: tuple[str, FieldSource],
+    enrichment_on: bool,
+) -> None:
+    raw_text, store_name, store_key = line
+    harness = _harness(
+        plu, coded_extraction([raw_text], store_name=store_name), enrichment_on=enrichment_on
+    )
+    _remember_category(harness, raw_text, store_key)
+
+    receipt_id = _process(harness)
+
+    (stored,) = _products(harness, receipt_id)
+    name, name_source = expected
+    sources = {"canonical_name": name_source, "category": PERSON}
+    assert stored == _product(stored.id, name, sources, category=Category.DAIRY_EGGS)
+    _assert_no_model_after_extraction(harness, receipt_id)
 
 
-# --- failures -------------------------------------------------------------------------------------
+def test_pc_tc_70_a_correction_at_another_store_is_not_applied(
+    plu: PluCatalog,
+) -> None:
+    harness = _harness(plu, coded_extraction([L3]))
+    _remember_category(harness, L3, "walmart")
 
+    receipt_id = _process(harness)
 
-def test_a_gpu_drop_during_enrichment_keeps_the_receipt_and_resumes_enrichment_only() -> None:
-    first = _harness(extraction(), COSTCO_ENRICHMENTS[0], LlmUnavailableError(GPU_DOWN))
-    with pytest.raises(ProcessingStoppedError) as stopped:
-        first.process_text(COSTCO_OCR)
-    receipt_id = stopped.value.receipt_id
-    saved = first.receipt(receipt_id)
-    assert (saved.status, saved.stage) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
-    assert first.match_sources(receipt_id) == [MatchSource.NEW] * 3
-    assert all(product.category is None for product in _products(first, receipt_id))
-    second = build_harness(
-        ScriptedLlm(*COSTCO_ENRICHMENTS),
-        settings=first.settings,
-        checkpointer=first.checkpointer,
-        uow_factory=first.uow_factory,
-        images=first.images,
+    (stored,) = _products(harness, receipt_id)
+    assert stored == _product(
+        stored.id,
+        "Test Apple",
+        {"canonical_name": PLU, "category": PLU},
+        category=Category.PRODUCE,
     )
 
-    resumed = second.resume(receipt_id)
 
-    assert resumed.graph is not None
-    assert resumed.graph.resumed_from == "commit_matches"
-    assert resumed.graph.status is ReceiptStatus.COMPLETED
-    assert second.llm.calls == 3
-    assert {request.tag for request in second.llm.requests} == {ENRICHMENT_TAG}
-    categories = [product.category for product in _products(second, receipt_id)]
-    assert categories == [Category.DAIRY_EGGS, Category.DAIRY_EGGS, Category.BAKERY]
+# --- the describe payloads (PC-TC-62, 70: rewritten from the save_enrichment payload tests) ------
 
 
-def test_s5_ac_05_save_enrichment_called_by_the_enrichment_agent_is_denied() -> None:
-    harness = build_harness(
-        ScriptedLlm(extraction(), *COSTCO_ENRICHMENTS),
-        settings=agent_settings(enrichment=True),
-        wrap_tools=lambda gateway: MisroutedToolGateway(
-            gateway, "save_enrichment", AgentRole.ENRICHMENT
-        ),
+def test_commit_enrichment_describes_each_product_with_its_line_and_store(
+    plu: PluCatalog,
+) -> None:
+    recorder: list[RecordingToolGateway] = []
+
+    def record(gateway: ToolGateway) -> ToolGateway:
+        recorder.append(RecordingToolGateway(gateway))
+        return recorder[0]
+
+    harness = _harness(plu, coded_extraction([L3, L4]), wrap_tools=record)
+
+    receipt_id = _process(harness)
+
+    apple, organic = (require_id(product.id) for product in _products(harness, receipt_id))
+    assert recorder[0].payloads(DESCRIBE) == [
+        {
+            "product_id": apple,
+            "fields": {"name": "Test Apple", "category": "produce"},
+            "sources": {"canonical_name": "plu", "category": "plu"},
+            "alias": L3,
+            "store_key": LOBLAWS_KEY,
+        },
+        {
+            "product_id": organic,
+            "fields": {"name": "Organic Test Apple", "category": "produce", "tags": ["organic"]},
+            "sources": {"canonical_name": "plu", "category": "plu", "tags": "plu"},
+            "alias": L4,
+            "store_key": LOBLAWS_KEY,
+        },
+    ]
+    roles = {role for role, name, _ in recorder[0].calls if name == DESCRIBE}
+    assert roles == {AgentRole.SUPERVISOR}
+    assert harness.node_runs(receipt_id)[-4:] == [
+        "match",
+        "commit_matches",
+        "enrich",
+        "commit_enrichment",
+    ]
+    assert harness.steps(receipt_id)[-3:] == [
+        (TOOL, "save_matches"),
+        (TOOL, DESCRIBE),
+        (TOOL, DESCRIBE),
+    ]
+
+
+def test_describe_from_catalog_called_by_the_enrichment_agent_is_denied(
+    plu: PluCatalog,
+) -> None:
+    harness = _harness(
+        plu,
+        coded_extraction([L3]),
+        wrap_tools=lambda gateway: MisroutedToolGateway(gateway, DESCRIBE, AgentRole.ENRICHMENT),
     )
 
     with capture_logs() as logs:
@@ -394,36 +416,39 @@ def test_s5_ac_05_save_enrichment_called_by_the_enrichment_agent_is_denied() -> 
 
     assert outcome.graph is None
     assert outcome.failure is not None
-    assert "denied: role=enrichment tool=save_enrichment" in outcome.failure
+    assert f"denied: role=enrichment tool={DESCRIBE}" in outcome.failure
     denied = [entry for entry in logs if entry["event"] == "tool.denied"]
-    assert [(entry["role"], entry["tool"]) for entry in denied] == [
-        ("enrichment", "save_enrichment")
-    ]
-    assert all(product.category is None for product in _products(harness, outcome.receipt_id))
+    assert [(entry["role"], entry["tool"]) for entry in denied] == [("enrichment", DESCRIBE)]
+    (stored,) = _products(harness, outcome.receipt_id)
+    assert stored.category is None
 
 
-def test_commit_enrichment_sends_the_source_lines_alias_and_the_store_key() -> None:
-    recorder: list[RecordingToolGateway] = []
+# --- PC-TC-71: a crash during enrichment, then resume ---------------------------------------------
 
-    def record(gateway: ToolGateway) -> ToolGateway:
-        recorder.append(RecordingToolGateway(gateway))
-        return recorder[0]
 
-    harness = build_harness(
-        ScriptedLlm(extraction(), *COSTCO_ENRICHMENTS),
-        settings=agent_settings(enrichment=True),
-        wrap_tools=record,
+def test_pc_tc_71_a_crash_during_enrichment_resumes_the_describes_only(plu: PluCatalog) -> None:
+    twin = _harness(plu, coded_extraction([L3, L4]))
+    twin_id = _process(twin)
+    expected = _products(twin, twin_id)
+    first = _harness(
+        plu,
+        coded_extraction([L3, L4]),
+        wrap_tools=lambda gateway: CrashAfterToolGateway(gateway, DESCRIBE),
     )
+    crashed = first.process_text(COSTCO_OCR)
+    assert crashed.failure is not None
+    receipt_id = crashed.receipt_id
+    assert first.match_sources(receipt_id) == [MatchSource.NEW] * 2
+    second = _harness(plu, harness=first)
 
-    receipt_id = _costco(harness)
+    resumed = second.resume(receipt_id)
 
-    payloads = recorder[0].payloads("save_enrichment")
-    ids = [require_id(product.id) for product in _products(harness, receipt_id)]
-    assert [payload["product_id"] for payload in payloads] == ids
-    assert [normalize_alias(str(payload["alias"])) for payload in payloads] == [
-        normalize_alias(raw_text) for raw_text in RAW_TEXTS
-    ]
-    assert {payload["store_key"] for payload in payloads} == {STORE_KEY}
-    assert harness.receipt(receipt_id).store_name == STORE_NAME
-    roles = {role for role, name, _ in recorder[0].calls if name == "save_enrichment"}
-    assert roles == {AgentRole.SUPERVISOR}
+    assert resumed.graph is not None
+    assert resumed.graph.resumed_from == "enrich"
+    assert second.llm.calls == 0
+    assert second.node_runs(receipt_id) == ["commit_enrichment"]
+    assert len(_events(second, receipt_id, TOOL, DESCRIBE)) == 2
+    assert _products(second, receipt_id) == expected
+    assert second.match_sources(receipt_id) == twin.match_sources(twin_id)
+    stored = second.receipt(receipt_id)
+    assert (stored.status, stored.stage) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)

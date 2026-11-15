@@ -18,6 +18,8 @@ from paper_trail.adapters.sqlite.types import (
 from paper_trail.domain.enums import (
     AliasSource,
     Category,
+    CodeScheme,
+    CodeSource,
     CorrectionKind,
     JobKind,
     JobStatus,
@@ -64,6 +66,20 @@ products = Table(
     Column("category", StrEnumType(Category), nullable=True),
     Column("tags", JsonText, nullable=False, server_default="[]"),
     Column("created_at", UtcDateTime, nullable=False),
+    Column("field_sources", JsonText, nullable=False, server_default="{}"),
+)
+
+product_codes = Table(
+    "product_codes",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("product_id", Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False),
+    Column("scheme", StrEnumType(CodeScheme), nullable=False),
+    Column("store_key", Text, nullable=False, server_default=""),
+    Column("code", Text, nullable=False),
+    Column("source", StrEnumType(CodeSource), nullable=False),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("updated_at", UtcDateTime, nullable=False),
 )
 
 line_items = Table(

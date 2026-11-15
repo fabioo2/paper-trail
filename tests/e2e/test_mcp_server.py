@@ -45,7 +45,9 @@ from tests.fakes.llm import ScriptedLlm
 from tests.mcp_server import call_tool, list_tools, result_text, role_url, serve_mcp
 from tests.support import CopyMigrated, cli_command, free_port
 
-MATCHING_TOOLS = frozenset({"product_lookup", "product_similarity_search"})  # PLAN 7
+# PLAN 7, barcode-lookup PC-TC-44
+MATCHING_TOOLS = frozenset({"product_lookup", "product_similarity_search", "catalog_lookup"})
+WRITE_TOOLS = frozenset({"save_receipt", "open_review", "save_matches", "describe_from_catalog"})
 SUPERVISOR_SLICE_A_TOOLS = frozenset({"save_receipt", "open_review"})
 INITIALIZE = {
     "jsonrpc": "2.0",
@@ -87,28 +89,40 @@ def test_s5_ac_03_each_role_lists_exactly_its_tools(
 
 
 def test_s5_ac_03_matching_sees_only_its_read_tools(harness: Harness, server: str) -> None:
-    """PLAN 7: `product_lookup` and `product_similarity_search` (once slice C registers them),
-    never a write tool."""
-    registered = {spec.name for spec in harness.registry.specs}
-
+    """PLAN 7 and PC-TC-44: `product_lookup`, `product_similarity_search` and
+    `catalog_lookup`, never a write tool."""
     names = {tool.name for tool in list_tools(server, AgentRole.MATCHING)}
 
-    assert names == MATCHING_TOOLS & registered
-    assert not names & {"save_receipt", "open_review", "save_matches", "save_enrichment"}
+    assert names == MATCHING_TOOLS
+    assert not names & WRITE_TOOLS
 
 
-def test_s5_ac_03_save_receipt_at_the_matching_endpoint_is_denied_and_logged(
-    server: str,
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("save_receipt", {"receipt_id": 1, "draft": {"store_name": PRIVATE_STORE}}),
+        (
+            "describe_from_catalog",
+            {
+                "product_id": 1,
+                "fields": {"name": PRIVATE_STORE},
+                "sources": {"canonical_name": "plu"},
+                "alias": PRIVATE_STORE,
+                "store_key": "loblaws",
+            },
+        ),
+    ],
+)
+def test_s5_ac_03_a_write_at_the_matching_endpoint_is_denied_and_logged(
+    server: str, tool: str, arguments: dict[str, Any]
 ) -> None:
-    arguments: dict[str, Any] = {"receipt_id": 1, "draft": {"store_name": PRIVATE_STORE}}
-
     with capture_logs() as logs:
-        result = call_tool(server, AgentRole.MATCHING, "save_receipt", arguments)
+        result = call_tool(server, AgentRole.MATCHING, tool, arguments)
 
     assert result.is_error is True
-    assert "denied: role=matching tool=save_receipt" in result_text(result)
+    assert f"denied: role=matching tool={tool}" in result_text(result)
     denied = [entry for entry in logs if entry["event"] == "tool.denied"]
-    assert [(entry["role"], entry["tool"]) for entry in denied] == [("matching", "save_receipt")]
+    assert [(entry["role"], entry["tool"]) for entry in denied] == [("matching", tool)]
     assert PRIVATE_STORE not in repr(logs)
 
 

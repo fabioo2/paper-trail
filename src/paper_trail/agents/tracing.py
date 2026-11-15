@@ -282,13 +282,61 @@ def _matches_summary(result: Mapping[str, JsonValue]) -> str:
     return " · ".join(counts + tail) if counts else "no lines to match"
 
 
-def _enrichment_summary(result: Mapping[str, JsonValue]) -> str:
-    """The stored category first (``memory`` when a person's correction chose it)."""
+def _catalog_lookup_summary(result: Mapping[str, JsonValue]) -> str:
+    """The code as read, then ours or the source that knows it."""
+    code = result["code"]
+    if not isinstance(code, dict):
+        return "no code"
+    if code.get("scheme") is None:
+        return "not a product code"
+    read = f"{code['scheme']} {code['identity']}"
+    product, entry = result["product"], result["entry"]
+    if isinstance(product, dict):
+        return f"{read} · ours #{product['id']} {product['canonical_name']}"
+    if isinstance(entry, dict):
+        return f"{read} · {entry['source']} {entry['name']}"
+    return f"{read} · no source"
+
+
+def _describe_summary(result: Mapping[str, JsonValue]) -> str:
+    """The stored category first, then the product."""
     product = result["product"]
     if not isinstance(product, dict):
         return "ok"
-    memory = " (memory)" if result["category_source"] == "memory" else ""
-    return f"{product['category']}{memory} · #{product['id']} {product['canonical_name']}"
+    return f"{product['category'] or '-'} · #{product['id']} {product['canonical_name']}"
+
+
+_CATALOG_SCHEMES = ("store", "gtin", "plu")
+_NAME_SOURCES = {"receipt_text": "printed text", "plu": "plu"}
+
+
+def match_counts_summary(counts: Mapping[str, JsonValue]) -> str:
+    """The matching NOTE's text: each source in ``MatchSource`` order with its count, CATALOG
+    split by code scheme (store, gtin, plu) and NEW by name source (``receipt_text`` shown as
+    "printed text", then plu), zero parts left out, e.g. ``catalog 9 (store 5, gtin 3, plu 1) ·
+    alias 1 · new 4 (printed text 3, plu 1)``. ``counts`` maps a source to a count, or for
+    ``catalog`` and ``new`` to counts by scheme or name source."""
+    parts: list[str] = []
+    for source in MatchSource:
+        count = counts.get(source.value)
+        if isinstance(count, dict):
+            labels = (
+                {scheme: scheme for scheme in _CATALOG_SCHEMES}
+                if source is MatchSource.CATALOG
+                else _NAME_SOURCES
+            )
+            shown = [
+                (label, number)
+                for key, label in labels.items()
+                if isinstance(number := count.get(key), int) and number
+            ]
+            total = sum(number for _, number in shown)
+            if total:
+                inner = ", ".join(f"{label} {number}" for label, number in shown)
+                parts.append(f"{source.value} {total} ({inner})")
+        elif isinstance(count, int) and count:
+            parts.append(f"{source.value} {count}")
+    return " · ".join(parts)
 
 
 type _Note = tuple[str, str, dict[str, JsonValue]]
@@ -332,5 +380,6 @@ _TOOL_SUMMARIES: dict[str, Callable[[Mapping[str, JsonValue]], str]] = {
     "product_lookup": _lookup_summary,
     "product_similarity_search": _search_summary,
     "save_matches": _matches_summary,
-    "save_enrichment": _enrichment_summary,
+    "catalog_lookup": _catalog_lookup_summary,
+    "describe_from_catalog": _describe_summary,
 }

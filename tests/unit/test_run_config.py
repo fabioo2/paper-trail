@@ -5,7 +5,7 @@ graph actually runs with. ``max_vision_attempts`` is the effective limit,
 ``graph_limits(settings).max_vision_attempts``, which since slice D is
 ``GRAPH__MAX_VISION_ATTEMPTS`` (docs/tests/agent-core-D.md); ``transport`` is
 ``settings.tools.transport``. Slice D adds ``enrichment`` (``GRAPH__ENRICHMENT``) and the
-enrichment prompt's version.
+enrichment prompt's version; product codes add ``catalog`` (``CATALOG__ENABLED``, PC-TC-84).
 """
 
 from typing import Literal
@@ -14,7 +14,7 @@ import pytest
 
 from paper_trail.agents.nodes.supervisor import graph_limits
 from paper_trail.bootstrap.agents import run_config
-from paper_trail.config import GraphSettings, Settings, ToolsSettings
+from paper_trail.config import CatalogSettings, GraphSettings, Settings, ToolsSettings
 
 
 @pytest.mark.parametrize("configured", [0, 1, 3])
@@ -64,3 +64,10 @@ def test_slice_d_whether_products_are_enriched_is_recorded(enrichment: bool) -> 
     settings = Settings(env="test", graph=GraphSettings(enrichment=enrichment))
 
     assert run_config(settings).enrichment is enrichment
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_pc_tc_84_whether_the_catalog_is_on_is_recorded(enabled: bool) -> None:
+    settings = Settings(env="test", catalog=CatalogSettings(enabled=enabled))
+
+    assert run_config(settings).catalog is enabled

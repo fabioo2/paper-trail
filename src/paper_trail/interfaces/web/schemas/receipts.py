@@ -4,7 +4,13 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from paper_trail.domain.enums import Category, LineKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import (
+    Category,
+    LineKind,
+    MatchSource,
+    ProcessingStage,
+    ReceiptStatus,
+)
 from paper_trail.domain.models import LineItem, Receipt, ReceiptSummary, require_id
 from paper_trail.domain.money import Money
 from paper_trail.domain.paging import Page
@@ -70,6 +76,7 @@ class LineItemOut(BaseModel):
     product_id: int | None
     category: Category | None
     applies_to_position: int | None
+    match_source: MatchSource | None
 
     @classmethod
     def from_domain(cls, item: LineItem) -> "LineItemOut":
@@ -85,6 +92,7 @@ class LineItemOut(BaseModel):
             product_id=item.product_id,
             category=item.category,
             applies_to_position=item.applies_to_position,
+            match_source=item.match_source,
         )
 
 

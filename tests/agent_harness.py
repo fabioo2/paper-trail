@@ -4,7 +4,8 @@ Every graph-level test (unit, integration, contract) builds its system under tes
 production constructors are named in exactly one test module:
 
 - ``RecordReceipt(uow_factory, clock, tolerances)`` (Stage 1, gains ``replace``)
-- ``build_tool_registry(ToolServices(...))`` and ``InProcessToolGateway(registry)``
+- ``build_tool_registry(ToolServices(...))`` and ``InProcessToolGateway(registry)``; the
+  tools' catalog is ``CompositeCatalog(StoreCatalog(uow_factory), catalog)``
 - ``LangGraphReceiptRunner(AgentDeps(...), checkpointer)``: applies the tracing decorators itself;
   slice D adds ``AgentDeps.images`` (the image store the vision attempt reads the photo from)
 - ``ProcessReceiptFile(image_store, uow_factory, runner, tracer, clock)``
@@ -31,7 +32,9 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
+from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.mcp.gateway import McpToolGateway
+from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
 from paper_trail.agents.graph import AgentDeps
 from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
@@ -61,12 +64,14 @@ from paper_trail.domain.models import (
 from paper_trail.domain.paging import PageRequest
 from paper_trail.domain.rules.arithmetic import Tolerances
 from paper_trail.domain.trace import TraceEvent, TraceKind
+from paper_trail.ports.catalog import ProductCatalog
 from paper_trail.ports.tools import ToolGateway
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from paper_trail.tools.handlers import ToolServices
 from paper_trail.tools.inprocess import InProcessToolGateway
 from paper_trail.tools.registry import ToolRegistry, build_tool_registry
 from tests.extractions import COSTCO_OCR, NOW
+from tests.fakes.catalog import FakeCatalog
 from tests.fakes.clock import FakeClock
 from tests.fakes.embeddings import FakeEmbeddings
 from tests.fakes.images import FakeImageStore, fake_png
@@ -129,6 +134,7 @@ def agent_settings(  # noqa: PLR0913 - a test builder: keyword-only overrides wi
     enrichment: bool = False,
     extraction_version: str = "v1",
     vision_first_below: float | None = TEXT_FIRST_BELOW,
+    catalog: bool = True,
 ) -> Settings:
     """Settings for graph tests. The slice D stages are off unless a test turns them on
     (``max_vision_attempts=1`` or 2, and ``enrichment=True``), so the slice A-C suites keep
@@ -143,7 +149,8 @@ def agent_settings(  # noqa: PLR0913 - a test builder: keyword-only overrides wi
     is ``GRAPH__VISION_FIRST_BELOW``: ``TEXT_FIRST_BELOW`` (0.65, the default until
     2026-11-08) unless a test passes another value, or None for the production default (1.0:
     every photo vision first). ``FakeOcr``'s confidence (0.87) is above 0.65, so in the suites
-    written for the text-first fallback a photo still starts with the text attempts."""
+    written for the text-first fallback a photo still starts with the text attempts.
+    ``catalog`` is ``CATALOG__ENABLED``."""
     graph: dict[str, object] = {
         "max_text_attempts": max_text_attempts,
         "max_vision_attempts": max_vision_attempts,
@@ -163,6 +170,7 @@ def agent_settings(  # noqa: PLR0913 - a test builder: keyword-only overrides wi
                 "auto_link_max_distance": auto_link_max_distance,
                 "review_max_distance": review_max_distance,
             },
+            "catalog": {"enabled": catalog},
         }
     )
 
@@ -303,9 +311,13 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
     images: FakeImageStore | None = None,
     wrap_tools: Callable[[ToolGateway], ToolGateway] | None = None,
     embeddings: FakeEmbeddings | None = None,
+    catalog: ProductCatalog | None = None,
 ) -> Harness:
     """The graph over fakes. Pass the same ``uow_factory``, ``checkpointer`` and ``images`` to a
-    second harness to stand for a second process on the same data (resume, review)."""
+    second harness to stand for a second process on the same data (resume, review).
+    ``catalog`` is the reference catalog asked after the store catalog (``product_codes`` of
+    ``uow_factory``), as ``bootstrap`` puts the PLU table there; an empty ``FakeCatalog`` by
+    default."""
     clock = clock or FakeClock(NOW)
     settings = settings or agent_settings()
     uow_factory = uow_factory or fake_uow_factory(FakeDatabase(), clock)
@@ -323,6 +335,7 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
             record_receipt=record,
             tolerances=tolerances,
             embeddings=embeddings,
+            catalog=CompositeCatalog(StoreCatalog(uow_factory), catalog or FakeCatalog()),
         )
     )
     tools = _TRANSPORT.gateway(registry)

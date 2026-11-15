@@ -35,6 +35,7 @@ PROCESS_FLAGS = (
     "--interrupt-after",  # slice C
     "--resume",
     "--reprocess",
+    "--no-catalog",  # product codes (barcode-lookup PC-TC-78)
 )
 
 
@@ -150,8 +151,16 @@ def test_review_note_3_process_flags_apply_the_transport_the_same_way() -> None:
         ("--no-feedback",),
         ("--max-text-attempts", "3"),
         ("--no-vision",),
+        ("--no-catalog",),
     ],
-    ids=["prompt-version", "no-examples", "no-feedback", "max-text-attempts", "no-vision"],
+    ids=[
+        "prompt-version",
+        "no-examples",
+        "no-feedback",
+        "max-text-attempts",
+        "no-vision",
+        "no-catalog",
+    ],
 )
 def test_review_note_5_resume_refuses_flags_that_would_change_the_run(
     flags: tuple[str, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -179,3 +188,16 @@ def test_slice_d_with_flags_turns_vision_off_and_keeps_enrichment() -> None:
     assert flagged.graph.max_vision_attempts == 0
     assert flagged.graph.enrichment is settings.graph.enrichment
     assert with_flags(settings, ProcessOptions()).graph.max_vision_attempts == 2  # EA default
+
+
+def test_no_catalog_turns_the_catalog_off_and_nothing_else() -> None:
+    """PC-TC-78: ``--no-catalog`` sets ``CATALOG__ENABLED`` false; without it nothing changes."""
+    settings = Settings(env="test")
+
+    flagged = with_flags(settings, ProcessOptions(catalog=False))
+
+    assert flagged.catalog.enabled is False
+    assert flagged.model_copy(update={"catalog": settings.catalog}) == with_flags(
+        settings, ProcessOptions()
+    )
+    assert with_flags(settings, ProcessOptions()).catalog == settings.catalog

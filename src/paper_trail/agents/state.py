@@ -6,8 +6,14 @@ is always masked: OCR text is masked by the ``ocr_read`` tool or before a text i
 
 from typing import Any, TypedDict
 
+# The shape of the state below. A thread saved without ``state_version`` (before product codes)
+# cannot be resumed past ``match``: its matches and created products lack codes and entries.
+STATE_VERSION = 2
+OUTDATED_BEFORE = frozenset({"commit_matches", "enrich", "commit_enrichment"})
+
 
 class ReceiptState(TypedDict, total=False):
+    state_version: int  # STATE_VERSION; absent in threads saved before it
     receipt_id: int
     source_name: str
     image_path: str | None  # of the stored image; None for a text input
@@ -33,13 +39,14 @@ class ReceiptState(TypedDict, total=False):
     status: str | None  # the receipt's status once saved
     saved: bool
     # The matching agent's decisions, one per matched line: {position, source, product_id,
-    # new_product_name}, the ``save_matches`` tool's input (slice C).
+    # new_product_name, code, name_source, catalog}, the ``save_matches`` tool's input.
     matches: list[dict[str, Any]]
-    # The lines ``save_matches`` linked to a product created for them, {position, product_id},
-    # in line order: the products the enrichment agent describes (slice D).
+    # The lines ``save_matches`` linked to a product created for them, {position, product_id,
+    # catalog}, in line order: the products the enrichment agent describes, with the source
+    # entry matching named each from (``catalog`` None or absent: none).
     created: list[dict[str, Any]]
-    # The enrichment agent's answers, one per product it described: {product_id, alias,
-    # store_key, enrichment}, the ``save_enrichment`` tool's input (slice D).
+    # What the enrichment agent describes, one per product: {product_id, fields, sources,
+    # alias, store_key}, the ``describe_from_catalog`` tool's input.
     enrichments: list[dict[str, Any]]
 
 

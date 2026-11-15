@@ -23,7 +23,7 @@ INDEX_HTML = (
 HASHED_ASSET = "assets/index-3f9a1c2b.js"
 
 # The newest Alembic revision; bump it with every migration (agent core A adds 0003_agent_core).
-SCHEMA_HEAD = "0005"
+SCHEMA_HEAD = "0006"
 
 MakeSettings = Callable[..., Settings]
 CopyMigrated = Callable[[Path], Path]

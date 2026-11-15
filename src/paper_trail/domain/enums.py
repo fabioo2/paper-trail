@@ -128,7 +128,53 @@ class MatchSource(StrEnum):
     """How a line was linked to its product, in matching order (PLAN 6)."""
 
     MEMORY = auto()  # a person's correction
+    CATALOG = auto()  # the code printed on the line names a product (ADR-0018)
     ALIAS = auto()
     VECTOR = auto()
     LLM = auto()
     NEW = auto()
+
+
+class CodeKind(StrEnum):
+    """What the leading code of a receipt line is (barcode-lookup plan section 2)."""
+
+    GTIN = auto()
+    PLU = auto()
+    IN_STORE = auto()  # a store's own scale or counter code, or a GS1 restricted-circulation one
+    STORE_ITEM = auto()  # a store's item number (every Costco code)
+    NONE = auto()  # digits that are no product code (a coupon, a 9-10 digit number)
+
+
+class CodeScheme(StrEnum):
+    """How a code is stored in ``product_codes``: barcodes and PLUs name one product at every
+    store; store codes only at their store."""
+
+    GTIN = auto()
+    PLU = auto()
+    STORE = auto()
+
+
+class CodeSource(StrEnum):
+    """Who attached a code to a product. A person's source replaces another product's mapping;
+    a machine's never does (``PERSON_CODE_SOURCES``)."""
+
+    MANUAL = auto()
+    IMPORT = auto()
+    ADOPTED = auto()
+    CORRECTION = auto()
+    REVIEW = auto()
+    RECEIPT = auto()
+    OFF = auto()
+    PLU = auto()
+    BACKFILL = auto()
+
+
+class FieldSource(StrEnum):
+    """Where a product's name, brand, size, category or tags came from (ADR-0018)."""
+
+    RECEIPT_TEXT = auto()
+    PERSON = auto()
+    PLU = auto()
+    OFF = auto()
+    OFF_LLM = auto()
+    LEGACY_MODEL = auto()  # written by a model before 0006; never confirmed

@@ -11,6 +11,7 @@ from paper_trail.adapters.sqlite.correction_repository import SqliteCorrectionRe
 from paper_trail.adapters.sqlite.engine import begin_immediate, begin_read_only
 from paper_trail.adapters.sqlite.job_queue import SqliteJobQueue
 from paper_trail.adapters.sqlite.price_repository import SqlitePriceRepository
+from paper_trail.adapters.sqlite.product_code_repository import SqliteProductCodeRepository
 from paper_trail.adapters.sqlite.product_repository import SqliteProductRepository
 from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.adapters.sqlite.review_queue import SqliteReviewQueue
@@ -21,6 +22,7 @@ from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
     CorrectionRepository,
     PriceRepository,
+    ProductCodeRepository,
     ProductRepository,
     ReceiptRepository,
 )
@@ -39,6 +41,7 @@ class SqliteUnitOfWork:
 
     receipts: ReceiptRepository
     products: ProductRepository
+    product_codes: ProductCodeRepository
     prices: PriceRepository
     corrections: CorrectionRepository
     jobs: JobQueue
@@ -64,6 +67,7 @@ class SqliteUnitOfWork:
         self._connection = connection
         self.receipts = SqliteReceiptRepository(connection, self._clock)
         self.products = SqliteProductRepository(connection)
+        self.product_codes = SqliteProductCodeRepository(connection)
         self.prices = SqlitePriceRepository(connection)
         self.corrections = SqliteCorrectionRepository(connection)
         self.jobs = SqliteJobQueue(connection, self._clock)

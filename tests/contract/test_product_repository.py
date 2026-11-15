@@ -11,7 +11,7 @@ from decimal import Decimal
 
 import pytest
 
-from paper_trail.domain.enums import AliasSource, Unit
+from paper_trail.domain.enums import AliasSource, FieldSource, Unit
 from paper_trail.domain.models import Product, ProductAlias
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.factories import at, product, product_alias
@@ -69,6 +69,31 @@ def test_s1_ac_10_product_optional_fields_round_trip(uow_factory: UnitOfWorkFact
     saved = _add_product(uow_factory, original)
 
     assert _get(uow_factory, saved) == replace(original, id=saved.id)
+
+
+@pytest.mark.parametrize(
+    ("added", "updated"),
+    [
+        ({"canonical_name": FieldSource.PERSON, "category": FieldSource.PLU}, {}),
+        ({}, {"canonical_name": FieldSource.PERSON, "category": FieldSource.PLU}),
+    ],
+    ids=["add with sources", "update to sources"],
+)
+def test_pc_tc_29_field_sources_round_trip(
+    uow_factory: UnitOfWorkFactory,
+    added: dict[str, FieldSource],
+    updated: dict[str, FieldSource],
+) -> None:
+    """Barcode-lookup R4/R5: ``field_sources`` survives add, update and get."""
+    saved = _add_product(uow_factory, product(field_sources=added))
+    loaded_added = _get(uow_factory, saved)
+    changed = replace(saved, field_sources=updated)
+
+    returned = in_unit(uow_factory, lambda uow: uow.products.update(changed))
+
+    assert loaded_added == saved
+    assert saved.field_sources == added
+    assert returned == _get(uow_factory, saved) == changed
 
 
 def test_s1_ac_10_get_missing_product_is_none(uow_factory: UnitOfWorkFactory) -> None:

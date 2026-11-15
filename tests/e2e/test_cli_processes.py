@@ -25,7 +25,7 @@ from alembic import command
 
 from paper_trail.adapters.sqlite.migrations import alembic_config
 from tests.e2e.agent_cli import invoke, receipt_status, run_database, trace_files
-from tests.extractions import COSTCO_ENRICHMENTS, COSTCO_OCR, printed_extraction
+from tests.extractions import COSTCO_OCR, printed_extraction
 from tests.fakes.ollama_server import FakeOllama, serve_fake_ollama
 from tests.support import SCHEMA_HEAD, cli_command, free_port, run_cli
 
@@ -260,18 +260,26 @@ def test_ac_a_10_process_runs_a_receipt_through_the_agents_in_a_real_process(
 ) -> None:
     """AC-A-10: `paper-trail process` as the `cli` container runs it: the real composition root,
     SQLite, Ollama adapter and trace writer, against a scripted fake Ollama on 127.0.0.1. With
-    the production defaults, so the three new products are enriched too (slice D)."""
-    receipt = tmp_path / "costco.txt"
-    receipt.write_text(COSTCO_OCR, encoding="utf-8")
+    the production defaults: after the extraction no model and no embedding is asked for
+    (PC-TC-89), and the same receipt again is matched by alias."""
+    receipts = [tmp_path / "costco.txt", tmp_path / "costco-again.txt"]
+    for receipt in receipts:
+        receipt.write_text(COSTCO_OCR, encoding="utf-8")
 
-    with serve_fake_ollama(FakeOllama(printed_extraction(), *COSTCO_ENRICHMENTS)) as fake:
+    outputs: list[str] = []
+    with serve_fake_ollama(FakeOllama(printed_extraction(), printed_extraction())) as fake:
         env = {**cli_env, "PAPER_TRAIL_OLLAMA__BASE_URL": fake.url}
-        result = run_cli(
-            cli_command("process", "--no-color", "--run", "e2e", "--text-file", str(receipt)), env
-        )
+        for receipt in receipts:
+            result = run_cli(
+                cli_command("process", "--no-color", "--run", "e2e", "--text-file", str(receipt)),
+                env,
+            )
+            assert result.returncode == 0, result.stderr
+            outputs.append(result.stdout)
 
-    assert result.returncode == 0, result.stderr
-    assert "COMPLETED" in result.stdout
-    assert fake.calls == 4  # one extraction, three enrichments
+    assert "COMPLETED" in outputs[0]
+    assert fake.calls == 2  # the two extractions only
+    assert fake.embed_requests == []
+    assert "alias 3" in outputs[1]
     assert receipt_status(run_database(data_dir, "e2e"), 1) == "completed"
-    assert len(trace_files(data_dir, "e2e")) == 1
+    assert len(trace_files(data_dir, "e2e")) == 2

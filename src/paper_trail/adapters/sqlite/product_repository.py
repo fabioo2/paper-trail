@@ -65,6 +65,10 @@ class SqliteProductRepository:
                 return self.get(match["product_id"])
         return None
 
+    def alias_at(self, alias: str, store_key: str | None) -> ProductAlias | None:
+        row = self._alias_row(alias, store_key)
+        return None if row is None else alias_from_row(row)
+
     def add_alias(self, alias: ProductAlias) -> ProductAlias:
         existing = self._alias_row(alias.alias, alias.store_key)
         if existing is None:

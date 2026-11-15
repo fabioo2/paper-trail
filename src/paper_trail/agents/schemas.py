@@ -229,5 +229,6 @@ class EnrichmentOutput(ProductEnrichment):
     confidence: float = Field(ge=0.0, le=1.0)
 
     def enrichment_json(self) -> dict[str, Any]:
-        """The answer without the confidence: the ``save_enrichment`` tool's ``enrichment``."""
+        """The answer without the confidence: what the retired ``save_enrichment`` tool took
+        (``enrichment/v1`` is kept on disk, unused)."""
         return self.model_dump(mode="json", exclude={"confidence"})

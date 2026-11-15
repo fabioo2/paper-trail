@@ -17,14 +17,14 @@ from langgraph.types import Command, StateSnapshot
 from paper_trail.agents.deps import AgentDeps
 from paper_trail.agents.drafts import extraction_draft
 from paper_trail.agents.graph import ReceiptGraph, build_receipt_graph
-from paper_trail.agents.state import ReceiptState, thread_id
+from paper_trail.agents.state import OUTDATED_BEFORE, STATE_VERSION, ReceiptState, thread_id
 from paper_trail.agents.tracing import TracingLlm, TracingToolGateway
 from paper_trail.application.payloads import DraftPayload
 from paper_trail.domain.enums import AgentRole, ReceiptStatus, ReviewReason
 from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import ReceiptDraft
 from paper_trail.domain.trace import TraceKind
-from paper_trail.ports.agents import GraphOutcome, NothingToResumeError
+from paper_trail.ports.agents import GraphOutcome, NothingToResumeError, OutdatedCheckpointError
 
 REVIEW_NODE = "review"
 _START = "__start__"
@@ -51,6 +51,7 @@ class LangGraphReceiptRunner:
             "source_name": source_name,
             "image_path": image_path,
             "ocr_text": ocr_text,
+            "state_version": STATE_VERSION,
             "text_attempts": 0,
             "vision_attempts": 0,
             "approved": False,
@@ -76,6 +77,9 @@ class LangGraphReceiptRunner:
             state = "has finished" if snapshot.values else "does not exist"
             msg = f"nothing to resume: the agents' run of receipt {receipt_id} {state}"
             raise NothingToResumeError(msg)
+        if "state_version" not in snapshot.values and OUTDATED_BEFORE.intersection(snapshot.next):
+            msg = f"run {receipt_id} was saved by an older version; reprocess the receipt"
+            raise OutdatedCheckpointError(msg)
         # LangGraph continues a paused or failed thread from None, not Command(resume=...).
         return self._run(receipt_id, None, resumed_from=_last_completed(graph, snapshot))
 

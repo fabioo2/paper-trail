@@ -12,7 +12,10 @@ from decimal import Decimal
 from paper_trail.domain.enums import (
     AliasSource,
     Category,
+    CodeScheme,
+    CodeSource,
     CorrectionKind,
+    FieldSource,
     JobKind,
     JobStatus,
     LineKind,
@@ -204,8 +207,27 @@ class ReceiptSummary:
     created_at: datetime
 
 
+# The keys of ``Product.field_sources``; ``size`` covers ``size_value`` and ``size_unit``.
+FIELD_SOURCE_KEYS = ("canonical_name", "brand", "size", "category", "tags")
+# A product is confirmed when one of these named it: a person or a data source, never a model.
+CONFIRMING_SOURCES = frozenset(
+    {FieldSource.PERSON, FieldSource.PLU, FieldSource.OFF, FieldSource.OFF_LLM}
+)
+PERSON_CODE_SOURCES = frozenset(
+    {
+        CodeSource.MANUAL,
+        CodeSource.IMPORT,
+        CodeSource.ADOPTED,
+        CodeSource.CORRECTION,
+        CodeSource.REVIEW,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Product:
+    """``field_sources`` maps a filled field (``FIELD_SOURCE_KEYS``) to where it came from."""
+
     id: int | None
     canonical_name: str
     brand: str | None
@@ -214,6 +236,39 @@ class Product:
     category: Category | None
     tags: tuple[str, ...]
     created_at: datetime
+    field_sources: Mapping[str, FieldSource] = field(default_factory=dict)
+
+
+def is_confirmed(product: Product) -> bool:
+    """Whether a person or a data source named the product (its ``canonical_name`` source)."""
+    return product.field_sources.get("canonical_name") in CONFIRMING_SOURCES
+
+
+@dataclass(frozen=True, slots=True)
+class CodeIdentity:
+    """What a code is stored under: ``store_key`` is ``""`` unless the scheme is STORE."""
+
+    scheme: CodeScheme
+    store_key: str
+    code: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProductCode:
+    """A code that names one product (``product_codes``, unique on its identity)."""
+
+    id: int | None
+    product_id: int
+    scheme: CodeScheme
+    store_key: str  # "" unless scheme is STORE
+    code: str
+    source: CodeSource
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def identity(self) -> CodeIdentity:
+        return CodeIdentity(self.scheme, self.store_key, self.code)
 
 
 @dataclass(frozen=True, slots=True)

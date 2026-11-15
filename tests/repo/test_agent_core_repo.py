@@ -80,6 +80,25 @@ def test_the_receipts_dir_is_documented() -> None:
     assert line == "#PAPER_TRAIL_RECEIPTS_DIR=/path/to/your/receipts"
 
 
+def _comment_above(lines: list[str], setting: str) -> str:
+    """The comment lines directly above ``setting``'s line, joined."""
+    index = next(i for i, line in enumerate(lines) if line.startswith(f"{setting}="))
+    comment: list[str] = []
+    while index > 0 and lines[index - 1].startswith("#"):
+        index -= 1
+        comment.insert(0, lines[index])
+    return " ".join(comment)
+
+
+def test_the_catalog_settings_are_documented() -> None:
+    """Barcode-lookup PC-TC-79: both catalog settings, and the enrichment prompt unused (R9)."""
+    lines = read_text(".env.example").splitlines()
+
+    assert "PAPER_TRAIL_CATALOG__ENABLED=true" in lines
+    assert [line for line in lines if re.match(r"^#\s*PAPER_TRAIL_CATALOG__PLU_PATH=", line)]
+    assert "unused" in _comment_above(lines, "PAPER_TRAIL_PROMPTS__ENRICHMENT_VERSION")
+
+
 def _stage(dockerfile: str, stage: str) -> str:
     match = re.search(
         rf"^FROM\s+\S+\s+AS\s+{re.escape(stage)}\s*$(.*?)(?=^FROM\s|\Z)",

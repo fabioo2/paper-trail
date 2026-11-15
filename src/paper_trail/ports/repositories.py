@@ -7,13 +7,14 @@ transaction. Methods that stamp times use the injected clock.
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
-from paper_trail.domain.enums import CorrectionKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import CodeScheme, CorrectionKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.models import (
     Correction,
     ItemLink,
     PriceObservation,
     Product,
     ProductAlias,
+    ProductCode,
     Receipt,
     ReceiptSummary,
 )
@@ -74,14 +75,18 @@ class ProductRepository(Protocol):
     def get(self, product_id: int) -> Product | None: ...
 
     def update(self, product: Product) -> Product:
-        """Replace the stored product's name, brand, size, category and tags (enrichment);
-        its id, ``created_at``, aliases, vector and prices are kept. Returns it as stored;
-        NotFoundError (nothing changed) for an unknown id."""
+        """Replace the stored product's name, brand, size, category, tags and field sources;
+        its id, ``created_at``, aliases, codes, vector and prices are kept. Returns it as
+        stored; NotFoundError (nothing changed) for an unknown id."""
         ...
 
     def find_by_alias(self, alias: str, store_key: str | None) -> Product | None:
         """Exact match on a normalized alias: the store's own alias first, then a global one.
         ``store_key=None`` looks at global aliases only."""
+        ...
+
+    def alias_at(self, alias: str, store_key: str | None) -> ProductAlias | None:
+        """The alias stored under exactly (alias, store_key); ``None`` is a key too (global)."""
         ...
 
     def add_alias(self, alias: ProductAlias) -> ProductAlias:
@@ -126,4 +131,38 @@ class CorrectionRepository(Protocol):
     ) -> Correction | None:
         """The newest correction (created_at, then id) for exactly this kind, subject and store
         (``None`` matches only corrections recorded without a store)."""
+        ...
+
+
+class ProductCodeRepository(Protocol):
+    """``product_codes``: a code names at most one product (unique on scheme, store, code)."""
+
+    def find(self, scheme: CodeScheme, store_key: str, code: str) -> ProductCode | None:
+        """Exact on all three parts (no zero-stripping, ``""`` is the store of GTIN and PLU)."""
+        ...
+
+    def for_product(self, product_id: int) -> tuple[ProductCode, ...]:
+        """The product's codes, ordered by id."""
+        ...
+
+    def list(
+        self, *, store_key: str | None = None, scheme: CodeScheme | None = None
+    ) -> tuple[ProductCode, ...]:
+        """Every code, filtered by store and scheme when given, ordered by id."""
+        ...
+
+    def upsert(self, code: ProductCode, *, replace: bool) -> ProductCode:
+        """Store ``code`` (its ``id`` is ignored) and return the row as stored.
+
+        No row yet: inserted with the code's ``created_at`` and ``updated_at``. A row naming the
+        same product: unchanged when the source is the same or ``replace`` is false; else its
+        source and ``updated_at`` are updated. A row naming another product: with ``replace``
+        (a person's source) it is moved to the code's product with its source and
+        ``updated_at`` (``created_at`` kept); without, nothing is written and one
+        ``catalog.code_conflict`` warning is logged with scheme, store_key, code,
+        existing_product_id and refused_product_id."""
+        ...
+
+    def remove(self, scheme: CodeScheme, store_key: str, code: str) -> bool:
+        """Delete the code (its product is kept); False when there was none."""
         ...

@@ -190,6 +190,7 @@ export interface components {
             id: number;
             kind: components["schemas"]["LineKind"];
             line_total: components["schemas"]["MoneyOut"];
+            match_source: components["schemas"]["MatchSource"] | null;
             /** Position */
             position: number;
             /** Product Id */
@@ -206,6 +207,12 @@ export interface components {
          * @enum {string}
          */
         LineKind: "item" | "discount" | "deposit" | "fee";
+        /**
+         * MatchSource
+         * @description How a line was linked to its product, in matching order (PLAN 6).
+         * @enum {string}
+         */
+        MatchSource: "memory" | "catalog" | "alias" | "vector" | "llm" | "new";
         /** MoneyOut */
         MoneyOut: {
             /** Amount Cents */

@@ -10,8 +10,11 @@ Pinned (docs/tests/agent-core-C.md):
   category (Typer); 1 an unknown receipt, line or product, or the main database not migrated
   (the ``db upgrade`` hint).
 - The terminal row of the ``save_matches`` step counts the sources (``alias 3``).
+- Product codes (PC-TC-75): a new product is stamped ``canonical_name: person``; ``--category``
+  with ``--product-id`` writes the product's category with source ``person``.
 """
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -82,7 +85,7 @@ def test_ac_c_03_the_second_receipt_matched_by_alias(
     database = run_database(data_dir, RUN)
     assert _sources(database, 1) == ["new", "new", "new"]
     assert _sources(database, 2) == ["alias", "alias", "alias"]
-    assert len(fake.embed_requests) == 4  # receipt 1 only: 3 searches, 1 batch of vectors
+    assert fake.embed_requests == []  # printed-text products are not embedded (PC-TC-52)
     assert fake.calls == 2
     assert "alias 3" in outputs[1]
     assert "save_matches" in outputs[1]
@@ -100,6 +103,10 @@ def test_s4_ac_06_correct_with_a_new_product_then_memory(
         " WHERE l.receipt_id = 2 AND l.position = 0",
     )
     assert name == "Kirkland Organic Eggs 24"
+    ((sources,),) = rows(
+        two_receipts, "SELECT field_sources FROM products WHERE id = ?", product_id
+    )
+    assert json.loads(sources) == {"canonical_name": "person"}
     assert f"product {product_id}" in output
     assert name in output
     assert _sources(two_receipts, 2)[0] == "memory"
@@ -141,6 +148,13 @@ def test_correct_with_an_existing_product_and_a_category(two_receipts: Path) -> 
     assert rows(two_receipts, "SELECT new_value FROM corrections WHERE kind = 'category'") == [
         ("dairy_eggs",)
     ]
+    ((category, sources),) = rows(
+        two_receipts, "SELECT category, field_sources FROM products WHERE id = ?", milk
+    )
+    assert (category, json.loads(sources)) == (
+        "dairy_eggs",
+        {"canonical_name": "receipt_text", "category": "person"},
+    )
 
 
 @pytest.mark.parametrize(

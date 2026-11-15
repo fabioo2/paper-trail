@@ -12,13 +12,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from paper_trail.domain import enums
-from paper_trail.domain.enums import LineKind
+from paper_trail.domain.enums import FieldSource, LineKind
 from paper_trail.domain.errors import (
     CurrencyMismatchError,
     DomainValidationError,
     InvalidQuantityError,
 )
-from paper_trail.domain.models import LineItem, Receipt, ReceiptDraft, require_id
+from paper_trail.domain.models import LineItem, Receipt, ReceiptDraft, is_confirmed, require_id
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import IssueCode
 from paper_trail.ports.search import HitKind
@@ -32,6 +32,7 @@ from tests.factories import (
     line_item,
     price_observation,
     printed_lines,
+    product,
     receipt,
     receipt_draft,
     simple_lines,
@@ -434,3 +435,27 @@ def test_tc_54_paid_is_the_line_total_plus_the_discount(
     assert observation.on_sale is (discount < 0)
     assert observation.unit_discount == cad(discount).divided_by(quantity)
     assert observation.unit_discount.amount_cents <= 0
+
+
+@pytest.mark.parametrize(
+    ("field_sources", "confirmed"),
+    [
+        ({"canonical_name": FieldSource.PERSON}, True),
+        ({"canonical_name": FieldSource.PLU}, True),
+        ({"canonical_name": FieldSource.OFF}, True),
+        ({"canonical_name": FieldSource.OFF_LLM}, True),
+        ({"canonical_name": FieldSource.RECEIPT_TEXT}, False),
+        ({"canonical_name": FieldSource.LEGACY_MODEL}, False),
+        ({}, False),
+        ({"canonical_name": FieldSource.RECEIPT_TEXT, "brand": FieldSource.PERSON}, False),
+    ],
+)
+def test_pc_tc_12_a_product_is_confirmed_by_its_names_source(
+    field_sources: dict[str, FieldSource], confirmed: bool
+) -> None:
+    """Barcode-lookup R4: only the canonical name's source counts."""
+    assert is_confirmed(product(field_sources=field_sources)) is confirmed
+
+
+def test_pc_tc_12_a_product_has_no_field_sources_by_default() -> None:
+    assert product().field_sources == {}

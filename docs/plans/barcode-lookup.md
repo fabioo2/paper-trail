@@ -331,6 +331,8 @@ class ProductCatalog(Protocol):
 
 ### 3.2 Migration 0006 (`0006_product_codes.py`, `down_revision = "0005"`)
 
+> **Amended 2026-11-15 (as built, ADR-0018).** A GTIN or PLU is stored with `store_key = ''` and names one product at every store; only a store's own item or in-store code is store-scoped. An organic PLU is its own identity: `product_codes.code` holds `94046`, while the PLU table is asked for `4046`, so organic and conventional never share a product. `product_groups` and `products.group_id` are not created (comparison groups are a later change). A 12-digit UPC-A with number system `2`/`4` is an in-store code and `5` a coupon, as for 11 digits.
+
 ```sql
 CREATE TABLE product_codes (
   id INTEGER PRIMARY KEY,
@@ -440,6 +442,8 @@ class CatalogLookupOutput(_Model):
 ## 4. Pipeline integration
 
 ### 4.1 Matching within a store (`agents/nodes/matching.py`), no model
+
+> **Amended 2026-11-15 (as built, ADR-0018).** A coded line is matched in this order: the code's product, then a person's correction for the line at that store (which attaches the code), then a source entry (PLU), then a new printed-text product; a MATCHED alias never links a coded line. An uncoded line uses a person's correction, then an exact alias **at that store**; global aliases and other stores' aliases are not used, so products are never linked across stores by their text. A line is read as stored (card numbers masked): a code that masking hid is no code.
 
 Per ITEM line, in order:
 

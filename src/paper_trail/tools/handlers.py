@@ -1,30 +1,36 @@
 """The tools themselves: plain functions over the ports and use cases (agent-core plan 2.3).
 
 Specialists only read (``ocr_read``, ``check_arithmetic``, ``product_lookup``,
-``product_similarity_search``); every write is a supervisor tool (``save_receipt``,
-``open_review``, ``save_matches``, ``save_enrichment``). Domain errors such as NotFoundError,
-and the embedding host's LlmUnavailableError, propagate unchanged.
+``product_similarity_search``, ``catalog_lookup``); every write is a supervisor tool
+(``save_receipt``, ``open_review``, ``save_matches``, ``describe_from_catalog``). Domain errors
+such as NotFoundError, and the embedding host's LlmUnavailableError, propagate unchanged.
 """
 
 from dataclasses import dataclass
 
-from paper_trail.application.enrichment import save_enrichment as record_enrichment
+from paper_trail.application.catalog import describe_product
 from paper_trail.application.matching import find_product
-from paper_trail.application.payloads import IssuePayload
+from paper_trail.application.payloads import CatalogEntryPayload, IssuePayload
 from paper_trail.application.receipts import RecordReceipt
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
 from paper_trail.domain.models import require_id
 from paper_trail.domain.rules.arithmetic import Tolerances, check_arithmetic
+from paper_trail.domain.rules.item_codes import parse_item_code
 from paper_trail.domain.rules.masking import mask_pans
-from paper_trail.domain.rules.normalization import normalize_alias
+from paper_trail.ports.catalog import ProductCatalog
 from paper_trail.ports.embeddings import EmbeddingPort
 from paper_trail.ports.images import ImageStore
 from paper_trail.ports.ocr import OcrPort
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from paper_trail.tools.models import (
     CandidateOut,
+    CatalogLookupInput,
+    CatalogLookupOutput,
     CheckArithmeticInput,
     CheckArithmeticOutput,
+    DescribeFromCatalogInput,
+    DescribeFromCatalogOutput,
+    ItemCodeOut,
     LinkedLineOut,
     OcrReadInput,
     OcrReadOutput,
@@ -34,8 +40,6 @@ from paper_trail.tools.models import (
     ProductLookupOutput,
     ProductOut,
     ReceiptLevelDiscountOut,
-    SaveEnrichmentInput,
-    SaveEnrichmentOutput,
     SaveMatchesInput,
     SaveMatchesOutput,
     SaveReceiptInput,
@@ -56,6 +60,7 @@ class ToolServices:
     record_receipt: RecordReceipt
     tolerances: Tolerances
     embeddings: EmbeddingPort
+    catalog: ProductCatalog  # the store catalog, then the reference sources
 
 
 def ocr_read(services: ToolServices, request: OcrReadInput) -> OcrReadOutput:
@@ -131,10 +136,11 @@ def open_review(services: ToolServices, request: OpenReviewInput) -> OpenReviewO
 
 
 def product_lookup(services: ToolServices, request: ProductLookupInput) -> ProductLookupOutput:
-    """The product an alias names at a store: correction memory first, then an exact alias
-    (the store's, then a global one). The alias is normalized here."""
+    """The product a line's text names at a store: a person's correction first, then an exact
+    alias at that store (a global one only when no store is given). The text may be raw: both
+    of its alias keys are tried (``find_product``)."""
     with services.uow_factory(read_only=True) as uow:
-        found = find_product(uow, normalize_alias(request.alias), request.store_key)
+        found = find_product(uow, request.alias, request.store_key)
     if found is None:
         return ProductLookupOutput(product=None, source=None)
     product, source = found
@@ -180,17 +186,35 @@ def save_matches(services: ToolServices, request: SaveMatchesInput) -> SaveMatch
     )
 
 
-def save_enrichment(services: ToolServices, request: SaveEnrichmentInput) -> SaveEnrichmentOutput:
-    """Describe a product (name, brand, size, category, tags) and re-embed it; a person's
-    category for the alias at the store wins over the model's (idempotent)."""
-    saved = record_enrichment(
+def catalog_lookup(services: ToolServices, request: CatalogLookupInput) -> CatalogLookupOutput:
+    """What the line's leading code names at the store: the code as parsed, our product when
+    the code is ours (with its field sources), and the entry of the first catalog that knows
+    it. A line without a code, or whose code is kind ``none``, asks no catalog. Reads only."""
+    code = parse_item_code(request.raw_text, request.store_key)
+    if code is None:
+        return CatalogLookupOutput(code=None, product=None, entry=None)
+    found = None if code.scheme is None else services.catalog.lookup(code, request.store_key)
+    product = None
+    if found is not None and found.product_id is not None:
+        with services.uow_factory(read_only=True) as uow:
+            product = uow.products.get(found.product_id)
+    return CatalogLookupOutput(
+        code=ItemCodeOut.of(code),
+        product=None if product is None else ProductOut.of(product),
+        entry=None if found is None else CatalogEntryPayload.of(found),
+    )
+
+
+def describe_from_catalog(
+    services: ToolServices, request: DescribeFromCatalogInput
+) -> DescribeFromCatalogOutput:
+    """Write the fields a source gave a product (``describe_product``); never embeds."""
+    product = describe_product(
         services.uow_factory,
-        services.embeddings,
         request.product_id,
+        fields=request.fields,
+        sources=request.sources,
         alias=request.alias,
         store_key=request.store_key,
-        enrichment=request.enrichment,
     )
-    return SaveEnrichmentOutput(
-        product=ProductOut.of(saved.product), category_source=saved.category_source
-    )
+    return DescribeFromCatalogOutput(product=ProductOut.of(product))

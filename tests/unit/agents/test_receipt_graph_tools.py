@@ -38,8 +38,11 @@ from tests.agent_harness import (
     build_harness,
 )
 from tests.extractions import (
+    C1,
     E4_BREAKOUT_OCR,
     E4_INJECTION,
+    STORE_NAME,
+    coded_extraction,
     extraction,
     inconsistent_extraction,
 )
@@ -63,8 +66,15 @@ DATA_TAG = re.compile(r"</?receipt_data>")
         ("open_review", AgentRole.ENRICHMENT, (inconsistent_extraction(),), 1, 1),
         # Slice C: the matching agent's read tools and the supervisor's save_matches.
         ("product_lookup", AgentRole.SUPERVISOR, (extraction(),), 2, 1),
-        ("product_similarity_search", AgentRole.ENRICHMENT, (extraction(),), 2, 1),
         ("save_matches", AgentRole.MATCHING, (extraction(),), 2, 1),
+        # Product codes (PC-TC-63): describe_from_catalog's row is in test_enrichment_graph.py.
+        (
+            "catalog_lookup",
+            AgentRole.SUPERVISOR,
+            (coded_extraction([C1], store_name=STORE_NAME),),
+            2,
+            1,
+        ),
     ],
 )
 def test_s5_ac_05_an_out_of_role_call_fails_the_run_loudly(

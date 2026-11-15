@@ -316,3 +316,44 @@ def printed_fixture(name: str) -> dict[str, Any]:
     multi-buy whose one amount covers two products, stretch S1)."""
     loaded: dict[str, Any] = json.loads((PRINTED_DATA / f"{name}.json").read_text("utf-8"))
     return loaded
+
+
+# --- product codes (barcode-lookup plan, PR 1a) --------------------------------------------------
+# The reference lines of the test cases (test-cases.md "Conventions"): C = Costco, L = Loblaws
+# (default profile), U = no code. Codes are synthetic, quoted by the plan, or textbook barcodes.
+
+LOBLAWS = "LOBLAWS #1520"
+LOBLAWS_KEY = "loblaws"
+
+C1 = "1362394 CHOC PISTACH"
+C2 = "1543210 GOLD KIWI"
+L1 = "06038306487 PC UNS BABYWIPES HMRJ"
+L2 = "(1)05700001285 CRV CHKKN PBLN BR MRJ"
+L3 = "3101 TST APPLE MRJ"
+L4 = "93101 ORG TST APPLE MRJ"
+L5 = "2100580 CHKN BRST MRJ"
+U1 = "KS ORG EGGS 24CT"
+
+# The normalized file PluCatalog reads (synthetic rows).
+PLU_CSV = "code,name,organic\n3101,Test Apple,0\n4321,Sample Kiwi,0\n"
+
+
+def coded_extraction(
+    raw_texts: tuple[str, ...] | list[str],
+    *,
+    store_name: str = LOBLAWS,
+    cents: int = 499,
+    purchased_on: str = "11/02/2026",
+) -> dict[str, Any]:
+    """A consistent receipt of ITEM lines, one per raw text, each costing ``cents``."""
+    return {
+        "store_name": store_name,
+        "purchased_on": purchased_on,
+        "currency": "CAD",
+        "subtotal_cents": None,
+        "tax_cents": None,
+        "total_cents": cents * len(raw_texts),
+        "payment_last4": None,
+        "items": [_line(text, text.title(), "1", cents, cents) for text in raw_texts],
+        "confidence": 0.9,
+    }

@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import RowMapping
 
+from paper_trail.domain.enums import FieldSource
 from paper_trail.domain.models import (
     Correction,
     Job,
@@ -17,6 +18,7 @@ from paper_trail.domain.models import (
     PriceObservation,
     Product,
     ProductAlias,
+    ProductCode,
     Receipt,
     ReceiptSummary,
     ReviewItem,
@@ -135,6 +137,7 @@ def product_values(product: Product) -> Values:
         "category": product.category,
         "tags": list(product.tags),
         "created_at": product.created_at,
+        "field_sources": {key: source.value for key, source in product.field_sources.items()},
     }
 
 
@@ -148,6 +151,32 @@ def product_from_row(row: RowMapping) -> Product:
         category=row["category"],
         tags=tuple(row["tags"]),
         created_at=row["created_at"],
+        field_sources={key: FieldSource(value) for key, value in row["field_sources"].items()},
+    )
+
+
+def product_code_values(code: ProductCode) -> Values:
+    return {
+        "product_id": code.product_id,
+        "scheme": code.scheme,
+        "store_key": code.store_key,
+        "code": code.code,
+        "source": code.source,
+        "created_at": code.created_at,
+        "updated_at": code.updated_at,
+    }
+
+
+def product_code_from_row(row: RowMapping) -> ProductCode:
+    return ProductCode(
+        id=row["id"],
+        product_id=row["product_id"],
+        scheme=row["scheme"],
+        store_key=row["store_key"],
+        code=row["code"],
+        source=row["source"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 

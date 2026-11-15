@@ -280,6 +280,16 @@
           "line_total": {
             "$ref": "#/components/schemas/MoneyOut"
           },
+          "match_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "position": {
             "title": "Position",
             "type": "integer"
@@ -325,7 +335,8 @@
           "line_total",
           "product_id",
           "category",
-          "applies_to_position"
+          "applies_to_position",
+          "match_source"
         ],
         "title": "LineItemOut",
         "type": "object"
@@ -339,6 +350,19 @@
           "fee"
         ],
         "title": "LineKind",
+        "type": "string"
+      },
+      "MatchSource": {
+        "description": "How a line was linked to its product, in matching order (PLAN 6).",
+        "enum": [
+          "memory",
+          "catalog",
+          "alias",
+          "vector",
+          "llm",
+          "new"
+        ],
+        "title": "MatchSource",
         "type": "string"
       },
       "MoneyOut": {

@@ -108,7 +108,7 @@ def test_s1_ac_09_head_is_the_newest_revision() -> None:
 
 def test_s1_ac_09_upgrade_creates_every_table(database: Path, engine: Engine) -> None:
     """S1-AC-09: the eight regular tables and three virtual tables of PLAN 3.5 exist."""
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0002")
 
     with engine.connect() as connection:
         tables = _objects(connection, "table")

@@ -13,7 +13,12 @@ from paper_trail.application.matching import (
     record_matches,
 )
 from paper_trail.application.payloads import IssuePayload
-from paper_trail.application.products import new_product, price_observation, remember_alias
+from paper_trail.application.products import (
+    new_product,
+    person_named,
+    price_observation,
+    remember_alias,
+)
 from paper_trail.domain.enums import (
     AliasSource,
     CorrectionKind,
@@ -175,14 +180,15 @@ class RecordReceipt:
     ) -> MatchesRecorded:
         """Link a saved receipt's lines to their products (the ``save_matches`` tool).
 
-        The aliases of the new products are embedded first, in one call and outside any
-        transaction (a slow or absent embedding host must not hold the write lock), then
-        everything is written in one unit of work. A failure writes nothing.
+        The new products that will be confirmed are embedded first, in one call (none when
+        there are none) and outside any transaction (a slow or absent embedding host must not
+        hold the write lock), then everything is written in one unit of work. A failure writes
+        nothing.
         """
         with self._uow_factory(read_only=True) as uow:
             plan = plan_matches(uow, receipt_id, choices)
-        aliases = plan.aliases_to_embed
-        vectors = dict(zip(aliases, embeddings.embed(aliases), strict=True))
+        texts = plan.to_embed
+        vectors = dict(zip(texts, embeddings.embed(list(texts.values())), strict=True))
         with self._uow_factory() as uow:
             recorded = record_matches(
                 uow, plan_matches(uow, receipt_id, choices), choices, vectors, self._clock.now()
@@ -441,7 +447,9 @@ def _linked(
         return line
     product = uow.products.find_by_alias(name_alias, None)
     if product is None:
-        product = new_product(uow, product_name, line.category, now)
+        product = new_product(
+            uow, product_name, line.category, now, field_sources=person_named(line.category)
+        )
         remember_alias(
             uow,
             require_id(product.id),

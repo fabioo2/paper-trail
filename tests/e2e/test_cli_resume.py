@@ -21,13 +21,17 @@ Pinned (docs/tests/agent-core-C.md):
   text; with ``--text-file`` it is exit 2 (a text is never deduplicated, so never reprocessed).
 """
 
+import copy
 import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 
+from paper_trail.adapters.sqlite.checkpoints import sqlite_checkpointer
+from paper_trail.agents.state import thread_id
 from tests.e2e.agent_cli import (
     StartOllama,
     configure_cli,
@@ -111,7 +115,7 @@ def test_ac_c_04_interrupt_after_extraction_then_resume_without_a_new_extraction
     assert code == 0, output
     assert "COMPLETED" in output
     assert second.calls == 0
-    assert second.embed_requests  # matching ran in the resumed process
+    assert second.embed_requests == []  # printed-text products are not embedded (PC-TC-52)
     assert receipt_status(database, 1) == "completed"
     outcome = _latest_outcome(data_dir)
     assert (outcome["status"], outcome["resumed_from"]) == ("completed", "extract_text")
@@ -234,6 +238,41 @@ def test_resume_of_a_receipt_waiting_for_review_points_to_review_resolve(
     assert code == 1, output
     assert "review resolve" in output
     assert receipt_status(run_database(data_dir, RUN), 1) == "needs_review"
+
+
+def _strip_state_version(database: Path, receipt_id: int) -> None:
+    """Rewrite the receipt's latest checkpoint without ``state_version``: what a version from
+    before product codes saved (PC-TC-72)."""
+    config: RunnableConfig = {
+        "configurable": {"thread_id": thread_id(receipt_id), "checkpoint_ns": ""}
+    }
+    with sqlite_checkpointer(database) as saver:
+        saved = saver.get_tuple(config)
+        assert saved is not None
+        checkpoint = copy.copy(saved.checkpoint)
+        values = {k: v for k, v in checkpoint["channel_values"].items() if k != "state_version"}
+        versions = {k: v for k, v in checkpoint["channel_versions"].items() if k in values}
+        checkpoint["channel_values"] = values
+        checkpoint["channel_versions"] = versions
+        saver.put(saved.parent_config or config, checkpoint, saved.metadata, versions)
+
+
+def test_pc_tc_72_resume_of_a_run_saved_by_an_older_version_is_exit_2(
+    data_dir: Path, ollama: StartOllama, receipt_text: Path
+) -> None:
+    ollama(extraction())
+    assert _process("--text-file", str(receipt_text), "--interrupt-after", "match")[0] == 0
+    database = run_database(data_dir, RUN)
+    _strip_state_version(database, 1)
+    fake = ollama()
+
+    code, output = _process("--resume", "1")
+
+    assert code == 2, output
+    assert "run 1 was saved by an older version; reprocess the receipt" in output
+    assert fake.calls == 0
+    assert receipt_status(database, 1) == "processing"
+    assert rows(database, "SELECT count(*) FROM products") == [(0,)]
 
 
 # --- --reprocess --------------------------------------------------------------------------------

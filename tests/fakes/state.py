@@ -16,6 +16,7 @@ from paper_trail.domain.models import (
     PriceObservation,
     Product,
     ProductAlias,
+    ProductCode,
     Receipt,
     ReviewItem,
 )
@@ -28,6 +29,7 @@ class FakeState:
     receipts: dict[int, Receipt] = field(default_factory=dict)
     products: dict[int, Product] = field(default_factory=dict)
     aliases: dict[int, ProductAlias] = field(default_factory=dict)
+    product_codes: dict[int, ProductCode] = field(default_factory=dict)
     prices: dict[int, PriceObservation] = field(default_factory=dict)
     corrections: dict[int, Correction] = field(default_factory=dict)
     jobs: dict[int, Job] = field(default_factory=dict)

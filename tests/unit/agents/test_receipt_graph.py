@@ -20,9 +20,11 @@ In-process tools; the MCP transport is compared in ``test_transport_equivalence.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
+from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.application.process_receipt import ProcessOutcome
 from paper_trail.domain.enums import (
     AgentRole,
@@ -43,17 +45,22 @@ from tests.agent_harness import (
     build_harness,
 )
 from tests.extractions import (
+    C1,
     COSTCO_OCR,
     GENERIC_RETRY_LINE,
     INJECTED_OCR,
     INJECTION,
+    L3,
+    L4,
     LINE1_ISSUE,
     LINE3_ISSUE,
     MASKED_PAN,
+    PLU_CSV,
     PURCHASED_ON,
     STORE_NAME,
     SUBTOTAL_ISSUE,
     TEST_PAN_DIGITS,
+    coded_extraction,
     extraction,
     inconsistent_extraction,
 )
@@ -67,9 +74,11 @@ LLM = TraceKind.LLM
 TOOL = TraceKind.TOOL
 ROUTE = TraceKind.ROUTE
 INTERRUPT = TraceKind.INTERRUPT
-# Slice C: the three new lines on a fresh database, each looked up then searched, then committed.
+# Slice C, barcode lookup PC-TC-62: the three uncoded new lines on a fresh database, each looked
+# up by its text (no catalog lookup, no similarity search), the match counts, then the commit.
 MATCHING_STEPS = [
-    *[(TOOL, "product_lookup"), (TOOL, "product_similarity_search")] * 3,
+    *[(TOOL, "product_lookup")] * 3,
+    (TraceKind.NOTE, "matching"),
     (TOOL, "save_matches"),
 ]
 
@@ -441,3 +450,26 @@ def test_s5_ac_05_a_denied_tool_fails_the_run_loudly_without_retrying() -> None:
     assert denied[0].agent is AgentRole.SUPERVISOR
     assert events[-1].kind is TraceKind.ERROR
     assert "denied" in events[-1].summary
+
+
+def test_pc_tc_62_a_coded_receipts_tool_sequence(tmp_path: Path) -> None:
+    """Barcode lookup PC-TC-62: each coded line is looked up by code, then (no product of ours)
+    by a person's correction; the two PLU-named products are described from their entries."""
+    plu = tmp_path / "plu.csv"
+    plu.write_text(PLU_CSV, encoding="utf-8")
+    harness = build_harness(
+        ScriptedLlm(coded_extraction([C1, L3, L4])),
+        settings=agent_settings(enrichment=True),
+        catalog=PluCatalog(plu),
+    )
+
+    receipt_id = _graph(harness.process_text("coded")).receipt_id
+
+    tools = [name for kind, name in harness.steps(receipt_id) if kind is TOOL]
+    assert tools[tools.index("save_receipt") + 1 :] == [
+        *["catalog_lookup", "product_lookup"] * 3,
+        "save_matches",
+        "describe_from_catalog",
+        "describe_from_catalog",
+    ]
+    assert harness.llm.calls == 1

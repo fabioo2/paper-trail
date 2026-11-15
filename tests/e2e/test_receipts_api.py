@@ -16,9 +16,9 @@ from sqlalchemy import text
 from paper_trail.application.receipts import GetReceipt, ListReceipts, RecordReceipt
 from paper_trail.bootstrap import Container
 from paper_trail.config import Settings
-from paper_trail.domain.enums import Category, LineKind
-from paper_trail.domain.models import Receipt
-from tests.factories import cad, line_item, receipt_draft, simple_draft
+from paper_trail.domain.enums import Category, LineKind, MatchSource
+from paper_trail.domain.models import ItemLink, Receipt
+from tests.factories import cad, line_item, product, receipt_draft, simple_draft
 from tests.support import require_id
 
 PROBLEM_JSON = "application/problem+json"
@@ -44,6 +44,7 @@ LINE_KEYS = {
     "product_id",
     "category",
     "applies_to_position",
+    "match_source",
 }
 ISSUE_KEYS = {"code", "message", "expected", "actual", "position"}
 
@@ -128,6 +129,7 @@ def test_s1_ac_22_detail_shape(migrated_client: TestClient, weighed: Receipt) ->
         "product_id": None,
         "category": "produce",
         "applies_to_position": None,
+        "match_source": None,
     }
     assert savings["kind"] == "discount"
     assert savings["unit_price"] is None
@@ -327,3 +329,32 @@ def test_tc_105_detail_names_the_item_a_discount_reduces(
     body = migrated_client.get(f"/api/receipts/{stored.id}").json()
 
     assert [item["applies_to_position"] for item in body["items"]] == [None, None, None, None, 0]
+
+
+def test_a_line_linked_by_its_code_shows_match_source_catalog(
+    migrated_client: TestClient, migrated_container: Container
+) -> None:
+    """Barcode-lookup PC-TC-82 (R13, ruling I2): ``LineItemOut.match_source`` carries
+    ``catalog``; an unlinked line carries null."""
+    stored = _record(migrated_container)
+    receipt_id = require_id(stored.id)
+    with migrated_container.uow_factory() as uow:
+        product_id = require_id(uow.products.add(product()).id)
+        uow.receipts.link_items(receipt_id, [ItemLink(0, product_id, MatchSource.CATALOG)])
+        uow.commit()
+
+    body = migrated_client.get(f"/api/receipts/{receipt_id}").json()
+
+    assert [(item["product_id"], item["match_source"]) for item in body["items"]] == [
+        (product_id, "catalog"),
+        *[(None, None)] * (len(body["items"]) - 1),
+    ]
+
+
+def test_the_match_source_enum_lists_the_six_sources(app: FastAPI) -> None:
+    """PC-TC-82: the spec's ``match_source`` is a required, nullable enum of every source."""
+    schemas = app.openapi()["components"]["schemas"]
+    line = schemas["LineItemOut"]
+
+    assert "match_source" in line["required"]
+    assert schemas["MatchSource"]["enum"] == ["memory", "catalog", "alias", "vector", "llm", "new"]

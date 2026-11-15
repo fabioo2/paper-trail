@@ -20,8 +20,10 @@ Pinned (docs/tests/agent-core-A.md and agent-core-B.md):
   ``PLAN_ALLOWLIST`` (already there for the planned tools) and one in ``SAMPLE_PAYLOADS``.
 - Slice C registers ``product_lookup``, ``product_similarity_search`` and ``save_matches``
   (docs/tests/agent-core-C.md; their behaviour is in ``tests/contract/test_matching_tools.py``).
-- Slice D registers ``save_enrichment`` (docs/tests/agent-core-D.md; its behaviour is in
-  ``tests/contract/test_enrichment_tools.py``).
+- Slice D registered ``save_enrichment``; product codes (barcode-lookup PR 1a, PC-TC-43) remove
+  it (``UnknownToolError``) and register ``catalog_lookup`` (MATCHING, ENRICHMENT, read-only) and
+  ``describe_from_catalog`` (SUPERVISOR, a write); their behaviour is in
+  ``tests/contract/test_catalog_tools.py``.
 """
 
 import itertools
@@ -49,7 +51,7 @@ from paper_trail.tools.models import (
 )
 from paper_trail.tools.registry import ToolRegistry, ToolSpec
 from tests.agent_harness import Harness, build_harness
-from tests.extractions import enrichment, extraction, without_confidence
+from tests.extractions import extraction, without_confidence
 from tests.factories import product, receipt, receipt_draft
 from tests.fakes.images import fake_png
 from tests.fakes.llm import ScriptedLlm
@@ -71,12 +73,13 @@ PLAN_ALLOWLIST: dict[str, frozenset[AgentRole]] = {
     "save_receipt": frozenset({SUPERVISOR}),
     "open_review": frozenset({SUPERVISOR}),
     "save_matches": frozenset({SUPERVISOR}),
-    "save_enrichment": frozenset({SUPERVISOR}),
+    "catalog_lookup": frozenset({MATCHING, ENRICHMENT}),
+    "describe_from_catalog": frozenset({SUPERVISOR}),
 }
-WRITE_TOOLS = frozenset({"save_receipt", "open_review", "save_matches", "save_enrichment"})
+WRITE_TOOLS = frozenset({"save_receipt", "open_review", "save_matches", "describe_from_catalog"})
 SLICE_A_TOOLS = frozenset({"ocr_read", "check_arithmetic", "save_receipt", "open_review"})
 SLICE_C_TOOLS = frozenset({"product_lookup", "product_similarity_search", "save_matches"})
-SLICE_D_TOOLS = frozenset({"save_enrichment"})
+CATALOG_TOOLS = frozenset({"catalog_lookup", "describe_from_catalog"})
 
 REGISTERED = tuple(spec.name for spec in build_harness(ScriptedLlm()).registry.specs)
 
@@ -129,15 +132,19 @@ def _save_matches(harness: Harness) -> dict[str, JsonValue]:
     return {"receipt_id": receipt_id, "decisions": [decision]}
 
 
-def _save_enrichment(harness: Harness) -> dict[str, JsonValue]:
+def _catalog_lookup(_: Harness) -> dict[str, JsonValue]:
+    return {"raw_text": "1362394 CHOC PISTACH", "store_key": "costco"}
+
+
+def _describe_from_catalog(harness: Harness) -> dict[str, JsonValue]:
     stored = product(category=None, tags=())
     product_id = require_id(in_unit(harness.uow_factory, lambda uow: uow.products.add(stored)).id)
-    answer = {key: value for key, value in enrichment().items() if key != "confidence"}
     return {
         "product_id": product_id,
-        "alias": "KS ORG EGGS 24CT",
-        "store_key": "costco",
-        "enrichment": answer,
+        "fields": {"category": "produce"},
+        "sources": {"category": "plu"},
+        "alias": "3101 TST APPLE MRJ",
+        "store_key": "loblaws",
     }
 
 
@@ -150,7 +157,8 @@ SAMPLE_PAYLOADS: dict[str, Callable[[Harness], dict[str, JsonValue]]] = {
     "product_lookup": _product_lookup,
     "product_similarity_search": _product_similarity_search,
     "save_matches": _save_matches,
-    "save_enrichment": _save_enrichment,
+    "catalog_lookup": _catalog_lookup,
+    "describe_from_catalog": _describe_from_catalog,
 }
 
 ALLOWED = [
@@ -184,7 +192,7 @@ def test_s5_ac_01_every_registered_tool_is_planned_with_exactly_its_roles(
     declared = {spec.name: spec.roles for spec in registry.specs}
 
     assert set(declared) <= set(PLAN_ALLOWLIST), "a tool that PLAN 7 does not list"
-    assert set(declared) >= SLICE_A_TOOLS | SLICE_C_TOOLS | SLICE_D_TOOLS
+    assert set(declared) >= SLICE_A_TOOLS | SLICE_C_TOOLS | CATALOG_TOOLS
     assert declared == {name: PLAN_ALLOWLIST[name] for name in declared}
 
 
@@ -235,9 +243,10 @@ def test_s5_ac_01_every_other_pair_is_denied_logged_and_raised(
     assert denied[0]["log_level"] == "warning"
 
 
-def test_unknown_tools_are_reported(registry: ToolRegistry) -> None:
-    with pytest.raises(UnknownToolError, match="no_such_tool"):
-        registry.for_role(SUPERVISOR).call("no_such_tool", {})
+@pytest.mark.parametrize("tool", ["no_such_tool", "save_enrichment"])
+def test_unknown_tools_are_reported(registry: ToolRegistry, tool: str) -> None:
+    with pytest.raises(UnknownToolError, match=tool):
+        registry.for_role(SUPERVISOR).call(tool, {})
 
 
 # --- S5-AC-02: input and output validated ---------------------------------------------------------

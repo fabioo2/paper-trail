@@ -22,6 +22,8 @@ from paper_trail.adapters.sqlite.schema import metadata
 from paper_trail.domain.enums import (
     AliasSource,
     Category,
+    CodeScheme,
+    CodeSource,
     CorrectionKind,
     JobKind,
     JobStatus,
@@ -61,6 +63,12 @@ ENUM_COLUMNS: list[tuple[str, str, type[StrEnum]]] = [
     ("review_items", "reason", ReviewReason),
     ("review_items", "status", ReviewStatus),
     ("corrections", "kind", CorrectionKind),
+    ("product_codes", "source", CodeSource),  # barcode-lookup migration 0006
+]
+# Checked as a list only: a scheme is tied to its store_key by another CHECK, so updating the
+# seeded row through every value is not possible (PC-TC-16 exercises it row by row).
+CHECK_LIST_ONLY: list[tuple[str, str, type[StrEnum]]] = [
+    ("product_codes", "scheme", CodeScheme),
 ]
 
 NOW = "2026-01-01T12:00:00.000000+00:00"
@@ -95,6 +103,9 @@ SEED_ROWS: list[tuple[str, dict[str, Any]]] = [
     ("corrections", {"kind": "category", "subject": "eggs", "old_value": None,
                      "new_value": "dairy_eggs", "store_key": None, "receipt_id": 1,
                      "line_item_id": 1, "created_at": NOW}),
+    ("product_codes", {"product_id": 1, "scheme": "store", "store_key": "costco",
+                       "code": "1362394", "source": "manual", "created_at": NOW,
+                       "updated_at": NOW}),
 ]  # fmt: skip
 
 
@@ -168,6 +179,7 @@ def test_s1_ac_09_metadata_declares_exactly_the_regular_tables() -> None:
         "jobs",
         "review_items",
         "corrections",
+        "product_codes",
     }
 
 
@@ -193,7 +205,9 @@ def _check_values(engine: Engine, table: str, column: str) -> set[str]:
 
 
 @pytest.mark.parametrize(
-    ("table", "column", "enum"), ENUM_COLUMNS, ids=[f"{t}.{c}" for t, c, _ in ENUM_COLUMNS]
+    ("table", "column", "enum"),
+    ENUM_COLUMNS + CHECK_LIST_ONLY,
+    ids=[f"{t}.{c}" for t, c, _ in ENUM_COLUMNS + CHECK_LIST_ONLY],
 )
 def test_s1_ac_09_enum_check_lists_equal_the_enum_values(
     migrated_engine: Engine, table: str, column: str, enum: type[StrEnum]
@@ -237,6 +251,8 @@ def test_s1_ac_09_enum_check_constraints_match_the_enums(
         ("jobs", "max_attempts", None),
         ("review_items", "details", None),
         ("corrections", "new_value", None),
+        ("products", "field_sources", None),
+        ("product_codes", "code", None),
     ],
 )
 def test_s1_ac_09_other_constraints(

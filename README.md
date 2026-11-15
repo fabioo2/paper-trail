@@ -308,10 +308,10 @@ person (`review`). OCR text without a photo (`--text-file`, `--reprocess`) goes 
 instead (`extract_text`, `PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`); setting
 `PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW` below 1.0 sends only photos with a poor OCR read straight
 to vision. Then `match` finds each line's product and `commit_matches` (the supervisor) links
-them, with a price observation per line, and completes the receipt. Finally `enrich` asks the
-text model to describe each product this receipt created (`enrichment/v1`: full name, brand,
-size, one category of the fixed list, tags) and `commit_enrichment` saves the answers and
-re-embeds the products (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal shows one
+them, with a price observation per line, and completes the receipt. Finally `enrich` takes each product this receipt created
+from a catalog entry (the PLU table) and `commit_enrichment` writes what that entry says (name,
+category, tags) with its source; no model is asked, and a product named by its printed text is
+left as it is (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal shows one
 block per receipt: every tool call, model call and routing decision, with times; the same trace,
 with the prompts and answers, is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`,
 and a batch summary to `/data/runs/<run>/summary.json`.
@@ -341,25 +341,42 @@ and a batch summary to `/data/runs/<run>/summary.json`.
 
 ### Matching, corrections and resuming
 
-Every ITEM line is matched to a product, in this order: a person's correction for that text at
-that store (`memory`), an exact alias (`alias`), the nearest product by embedding
-(`nomic-embed-text`) within `PAPER_TRAIL_MATCHING__AUTO_LINK_MAX_DISTANCE` (`vector`), the
-model's confirmation among the three nearest within `PAPER_TRAIL_MATCHING__REVIEW_MAX_DISTANCE`
-(`llm`, prompt `matching/v1`), else a new product named after the line (`new`). Deposit, fee and
-discount lines, and generic texts such as `PRODUCE`, are never matched, and neither is a line
-a person named a product for when resolving a review. The `save_matches` row of the trace
-counts the sources (`alias 3 · 3 prices`), and each line's source is stored in
-`line_items.match_source`. Only `new` products are enriched; a category a person gave the same
-line at the same store (a `category` correction) wins over the model's, and the
-`save_enrichment` row then says `(memory)`.
+Every ITEM line is matched to a product within its store, and no model is asked (ADR-0018). A
+line that starts with a product code (a barcode, a PLU, or a store's own item number such as
+Costco's) is identified by that code:
+
+1. the code already names one of our products (`catalog`; `product_codes`);
+2. a person's correction for that text at that store (`memory`), which also teaches the code;
+3. a reference source knows the code (the PLU table, `<data_dir>/catalog/plu.csv`): a new
+   product named by it (`new`, the name's source `plu`);
+4. else a new product named by the printed text without its code and tax flags (`new`,
+   `receipt_text`).
+
+A line without a code is matched by a person's correction (`memory`), then an exact alias at
+that store (`alias`), else it is a new product named by its printed text. An alias of another
+store, or a global one, never links a line, so products are not linked across stores by their
+text; a shared barcode or PLU is the same product at every store, while a store's own codes
+belong to that store. Linking products across stores (comparison groups) is planned, not built.
+`PAPER_TRAIL_CATALOG__ENABLED=false` (or `process --no-catalog`) matches coded lines by their
+text instead, still without a model. Products created that way get no code, so with the catalog
+on again the same line is not found by its code and makes a second product (`catalog backfill`,
+still to come, attaches the codes). Deposit, fee and discount lines, and generic texts such as
+`PRODUCE`, are never matched, and neither is a line a person named a product for when resolving
+a review. A NOTE per receipt counts the sources (`catalog 9 (store 5, gtin 3, plu 1) · alias 1 ·
+new 4 (printed text 3, plu 1)`), and each line's source is stored in
+`line_items.match_source`. A product created from a source entry is then described from that
+entry (`describe_from_catalog`: PLU name, category `produce`, tag `organic`); every product
+field records its source (`products.field_sources`), a person's value is never overwritten, and
+a category a person gave the same line at the same store (a `category` correction) wins. The
+prompts `matching/v1` and `enrichment/v1` stay on disk, unused.
 
 ```sh
 make process RECEIPTS=costco-1.jpg RUN_NAME=e2     # new products
-make process RECEIPTS=costco-2.jpg RUN_NAME=e2     # the same items: alias hits, no model call
+make process RECEIPTS=costco-2.jpg RUN_NAME=e2     # the same items: linked by their codes, no model call
 docker compose run --rm -e PAPER_TRAIL_DATABASE_PATH=/data/runs/e2/paper_trail.db \
   cli receipts show 2                               # the lines and their positions
 make pt ARGS="items correct 2 0 --run e2 --new-product 'Kirkland Organic Eggs 24'"
-make process RECEIPTS=costco-2.jpg RUN_NAME=e2 ARGS="--reprocess"   # line 0 now from memory
+make process RECEIPTS=costco-2.jpg RUN_NAME=e2 ARGS="--reprocess"   # line 0 now by its code
 make process RECEIPTS=costco-3.jpg RUN_NAME=e2 ARGS="--interrupt-after extract_text"
 make pt ARGS="process --run e2 --resume 3"          # continues after extract_text
 ```
@@ -367,8 +384,10 @@ make pt ARGS="process --run e2 --resume 3"          # continues after extract_te
 - `items correct RECEIPT_ID POSITION (--product-id N | --new-product NAME) [--category C]
   [--run NAME]` relinks one line (`POSITION` is the line's 0-based `position`, as `receipts
   show` prints it), moves its price observation and remembers the correction, so the next line
-  with that text at that store links to the product without a search. It calls no model. Exit
-  1 for an unknown receipt, line or product, 2 for a usage error.
+  with that text at that store links to the product without a search. When the line starts with
+  a product code, the code now names that product (`catalog.learned`), replacing a wrong
+  mapping. `--new-product` and `--category` are a person's values (source `person`). It calls
+  no model. Exit 1 for an unknown receipt, line or product, 2 for a usage error.
 - `--interrupt-after NODE` pauses each receipt after a node of the graph (`read`,
   `extract_text`, `extract_vision`, `validate`, `supervisor`, `review`, `persist`, `match`,
   `commit_matches`, `enrich`, `commit_enrichment`) and prints the resume command; the checkpoint
@@ -379,9 +398,12 @@ make pt ARGS="process --run e2 --resume 3"          # continues after extract_te
   `resumed_from`. It takes no PATH (so it goes through `make pt`, not `make process`), and the
   `--run` the receipt was processed in, but none of the flags that would change the run's
   configuration (`--max-text-attempts`, `--no-feedback`, `--no-vision`, `--no-examples`,
-  `--prompt-version`: exit 2). A receipt waiting for a person is answered with `review
-  resolve`, not resumed. If the LLM host goes away while products are being described, the
-  receipt is already completed; `--resume` describes the rest.
+  `--no-catalog`, `--prompt-version`: exit 2). A receipt saved by the version before product
+  codes and stopped after matching cannot be resumed (`run N was saved by an older version;
+  reprocess the receipt`, exit 2): process it again with `--reprocess`. A receipt
+  waiting for a person is answered with `review resolve`, not resumed. A run that fails while
+  products are being described leaves the receipt `failed` with its lines, codes and prices
+  saved; `--resume` describes the rest and completes it.
 - `--reprocess` runs an already stored photo's receipt again, from its stored OCR text, on a new
   thread (a pending review is dismissed). Without it the same photo is reported as a duplicate.
   It does not apply to `--text-file` (a text is never stored).
@@ -396,18 +418,19 @@ example, Costco's gold kiwis bought on two receipts (three lines):
 {
   "product": {
     "id": 24,
-    "canonical_name": "Gold Kiwi",
+    "canonical_name": "GOLD KIWI",
     "brand": null,
     "size_value": null,
     "size_unit": null,
-    "category": "produce",
-    "tags": ["kiwi", "gold kiwi"],
-    "aliases": [{ "alias": "gold kiwi", "store_key": "costco", "source": "matched" }]
+    "category": null,
+    "tags": [],
+    "field_sources": { "canonical_name": "receipt_text" },
+    "codes": [{ "scheme": "store", "store_key": "costco", "code": "3139415", "source": "receipt" }]
   },
   "price_history": [
     {
       "observed_on": "2026-09-24", "store_name": "Costco Wholesale", "receipt_id": 4,
-      "line_item_id": 53, "raw_text": "3139415 GOLD KIWI", "match_source": "alias",
+      "line_item_id": 53, "raw_text": "3139415 GOLD KIWI", "match_source": "catalog",
       "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
       "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
     },
@@ -427,8 +450,9 @@ example, Costco's gold kiwis bought on two receipts (three lines):
 }
 ```
 
-The second receipt's line was linked by the alias the first one left (`match_source` `alias`),
-without a model call. Each of these lines was followed by a `-4.00` instant-savings line naming
+The other receipt's line was linked by the code the first one attached (`match_source`
+`catalog`), without a model call; nothing named the product but its printed text, so it keeps
+that name and no category until a person or a data source names it. Each of these lines was followed by a `-4.00` instant-savings line naming
 the kiwi's code (`0000399102 / 3139415`), stored as its own `discount` line and linked to the
 item above it with that code: the regular 15.99 is the price history; 11.99 is what was paid. A
 discount that cannot be tied to one item (`0000398549 / MULTIPLE`, or a line without a code)
@@ -462,10 +486,16 @@ erDiagram
   and the stored photo.
 - `line_items`: each printed line in order: raw text, kind (`item`, `discount`, `deposit`,
   `fee`), quantity, unit price, line total, and the product it was matched to, with how
-  (`memory`, `alias`, `vector`, `llm`, `new`); a `discount` line's `applies_to_position` names the
+  (`memory`, `catalog`, `alias`, `new`; `vector` and `llm` only on lines matched before product
+  codes); a `discount` line's `applies_to_position` names the
   item line it reduces.
-- `products`: the enriched product: name, brand, size, category and tags; its embedding lives
-  in the `product_vectors` (sqlite-vec) table and its names in `product_aliases`.
+- `products`: name, brand, size, category and tags, each with its source in `field_sources`
+  (`receipt_text`, `person`, `plu`, `legacy_model` for values a model wrote before 0006); a
+  product named by a person or a data source has an embedding in `product_vectors`
+  (sqlite-vec), and its names are in `product_aliases`.
+- `product_codes`: the codes that name a product: a barcode or PLU at every store, a store's own
+  code at that store, with who attached it (`receipt`, `plu`, `correction`, ...). A person's
+  mapping replaces another product's; a machine's never does.
 - `price_observations`: one row per purchased item line on a dated receipt: product, receipt,
   line, store, date, quantity, the regular unit price and total, and the discount applied to the
   line (per line and per unit), what was paid and whether it was on sale. The regular prices are
@@ -567,7 +597,8 @@ most important ones:
   `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above the OCR and model request
   timeouts, since one tool call waits for them.
 - `PAPER_TRAIL_MATCHING__AUTO_LINK_MAX_DISTANCE` / `__REVIEW_MAX_DISTANCE` (defaults `0.15` /
-  `0.30`, cosine distances): link a product by embedding, or ask the model to confirm it.
+  `0.30`, cosine distances): unused since product codes (ADR-0018); they come back with linking
+  products across stores.
 
 ## Data and privacy
 
