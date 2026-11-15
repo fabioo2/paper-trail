@@ -8,7 +8,7 @@ import pytest
 
 from paper_trail.domain.enums import Category, LineKind, MatchSource, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
-from paper_trail.domain.models import ItemLink, LineItem, Receipt, ReceiptSummary
+from paper_trail.domain.models import ItemLink, LineItem, ProductLine, Receipt, ReceiptSummary
 from paper_trail.domain.money import Money
 from paper_trail.domain.paging import PageRequest
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
@@ -487,3 +487,47 @@ def test_tc_121_set_discount_links_never_changes_an_existing_link(
     again = in_unit(uow_factory, lambda uow: uow.receipts.set_discount_links(receipt_id, {6: 3}))
 
     assert (unchanged, again, _get(uow_factory, receipt_id)) == (saved, saved, saved)
+
+
+def test_item_lines_are_a_products_item_lines_earliest_first(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """By the receipt's date (undated last), then receipt id, then position; a DISCOUNT line
+    carrying the product is no item line (PC-TC-106, 126)."""
+    mine, other = (
+        require_id(in_unit(uow_factory, lambda uow: uow.products.add(product())).id)
+        for _ in range(2)
+    )
+
+    def stored(day: int | None, store_key: str, *lines: LineItem) -> Receipt:
+        purchased_on = None if day is None else date(2026, 11, day)
+        return _add(
+            uow_factory, receipt(store_key=store_key, purchased_on=purchased_on, items=lines)
+        )
+
+    late = stored(
+        3,
+        "costco",
+        line_item(position=0, product_id=mine),
+        line_item(position=1, product_id=other),
+        line_item(position=2, product_id=mine),
+        line_item(position=3, kind=LineKind.DISCOUNT, line_total=cad(-100), product_id=mine),
+    )
+    undated = stored(None, "costco", line_item(position=0, product_id=mine))
+    early = stored(1, "loblaws", line_item(position=0, product_id=mine))
+    tied = stored(1, "walmart", line_item(position=0, product_id=mine))
+
+    def at_line(found: Receipt, position: int) -> ProductLine:
+        return ProductLine(
+            require_id(found.id), found.store_key, found.purchased_on, found.items[position]
+        )
+
+    with uow_factory() as uow:
+        assert uow.receipts.item_lines(mine) == (
+            at_line(early, 0),
+            at_line(tied, 0),
+            at_line(late, 0),
+            at_line(late, 2),
+            at_line(undated, 0),
+        )
+        assert uow.receipts.item_lines(999) == ()

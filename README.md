@@ -359,8 +359,9 @@ text; a shared barcode or PLU is the same product at every store, while a store'
 belong to that store. Linking products across stores (comparison groups) is planned, not built.
 `PAPER_TRAIL_CATALOG__ENABLED=false` (or `process --no-catalog`) matches coded lines by their
 text instead, still without a model. Products created that way get no code, so with the catalog
-on again the same line is not found by its code and makes a second product (`catalog backfill`,
-still to come, attaches the codes). Deposit, fee and discount lines, and generic texts such as
+on again the same line is not found by its code and makes a second product (`catalog backfill`
+attaches the code to the first one and lists the pair as a merge candidate; see "Naming products
+by their codes"). Deposit, fee and discount lines, and generic texts such as
 `PRODUCE`, are never matched, and neither is a line a person named a product for when resolving
 a review. A NOTE per receipt counts the sources (`catalog 9 (store 5, gtin 3, plu 1) · alias 1 ·
 new 4 (printed text 3, plu 1)`), and each line's source is stored in
@@ -407,6 +408,84 @@ make pt ARGS="process --run e2 --resume 3"          # continues after extract_te
 - `--reprocess` runs an already stored photo's receipt again, from its stored OCR text, on a new
   thread (a pending review is dismissed). Without it the same photo is reported as a duplicate.
   It does not apply to `--text-file` (a text is never stored).
+
+### Naming products by their codes
+
+Nothing names a Costco item number or an unknown barcode for you: a new coded product keeps its
+printed text until a person names it. The `catalog` commands do that, and they never call a
+model or the network. Every command except `plu-import` takes `--run NAME` (that run's database;
+without it the main one, which must be migrated).
+
+The Costco workflow:
+
+1. `catalog todo --store costco` lists the coded products nobody has named yet, most bought
+   first: code | printed name | times bought | last paid | last date | a costco.ca search link.
+2. Open the link in your own browser. The app only prints it; it never requests the link.
+3. `catalog add costco 1362394 "Choc Pistachio Bars" --brand Kirkland --size "1.36 kg"
+   --category snacks_candy` names the product (shown before and after, then `y` to save;
+   `--yes` skips the question). The product the code already names is filled in place, so
+   every past line keeps pointing at it; the next receipt links to it by its code.
+
+Its limits: (a) a warehouse item number often matches the costco.ca item number, but not always:
+a search may find nothing or a different pack size, so check the page against the printed text;
+(b) warehouse-only items (produce, bakery, many fresh items) are usually not online: name them
+from the shelf tag, the receipt or a fan site, by hand; (c) the link is a convenience only:
+the app copies nothing from the page.
+
+- `catalog todo [--store S] [--limit N] [--json] [--run NAME]`: the list above.
+- `catalog add STORE CODE ("NAME" | --product ID) [--brand B] [--size "1.36 kg"] [--category C]
+  [--replace] [--yes] [--run NAME]`: the code is read with the store's profile (a barcode or a
+  PLU names the product at every store, a store's own code only at that store); what you give
+  is stamped `person`. Renaming a product a person already named needs `--replace`.
+  `--product ID` makes the code name an existing product instead (its old product and lines
+  are left as they are, and reported). Exit 2 for an unreadable code or size, 1 for `n`.
+- `catalog list [--store S] [--scheme gtin|plu|store] [--json] [--run NAME]`: the stored codes,
+  their products and who attached them.
+- `catalog remove --store S --code C [--run NAME]`: forgets what a code names; the product and
+  its lines stay.
+- `catalog lookup "<line or code>" --store S [--run NAME]`: how a line's code is read and which
+  source knows it (our product, the PLU table, or none). Writes nothing.
+- `catalog plu-import FILE`: writes the PLU table, `<data_dir>/catalog/plu.csv`
+  (`PAPER_TRAIL_CATALOG__PLU_PATH`), from the IFPS PLU database export (ifpsglobal.com, "Export all"
+  -> .csv). Keep the export under the git-ignored `data/` of the checkout or outside it; it is never
+  committed. The `cli` container does not see the checkout, so mount the file for the one run:
+  `docker compose run --rm -v "$PWD/data/ifps-plu.csv:/import/ifps-plu.csv:ro" cli catalog
+  plu-import /import/ifps-plu.csv`. Each code is named `<Commodity>, <Variety>, <size>` (`4046` ->
+  `Avocados, Hass, small`; an empty or `Retailer Assigned` variety and an empty or `All Sizes` size
+  are left out), and an organic `9xxxx` code reads as `Organic ` + that name. It prints e.g. `1435
+  imported, 113 skipped (111 retailer assigned, 2 duplicate)`: retailer-assigned blocks name no
+  product, a repeated code keeps its first row, and rows with an invalid PLU or no commodity are
+  skipped too. The file is replaced in one step (a failed import leaves the old one); exit 1 when
+  nothing is importable. A running MCP server (`make mcp-up`) reads `plu.csv` once, so restart it
+  after an import (`make mcp-down mcp-up`); `process` and the other commands read it fresh each run,
+  and `web` and `worker` do not use it.
+- `catalog backfill [--apply] [--run NAME]` (a dry run by default): turns the products stored before
+  codes (migration 0006 marks their model-written fields `legacy_model`) into coded, printed-text
+  ones. It learns codes from your corrections and decides which product keeps each code (the one
+  with the most lines of it), then per product: moves lines whose code belongs to another product
+  (lines you linked yourself stay and are reported as conflicts), attaches the code most of its
+  lines carry, resets the model's name, brand, size, category and tags to the printed text, keeps a
+  name or category a person gave, fills what the PLU table knows and drops the vectors of unnamed
+  products. Last, it re-keys stored corrections and aliases after the tax-flag change. Two products
+  with the same code are reported as merge candidates, never merged. Each product is one
+  transaction: if one fails the command exits 1 naming it, the ones before it stay applied, and
+  running it again finishes the rest; a second `--apply` reports 0 changes. It is a deploy step, not
+  a routine command: a product with no receipt line left is not touched (its model-written fields
+  stay `legacy_model`), and a code you removed with `catalog remove` is attached again to the
+  product whose lines carry it. To point a code at another product, use `catalog add STORE CODE
+  --product ID` instead.
+
+**Deploying product codes:** migrate the live database only once the `catalog` commands are
+merged, and run the backfill before restarting the services. Import the PLU table first, so the
+backfill names PLU products in the same run:
+
+1. `make build`: the images with the migration and the `catalog` commands.
+2. `make down`, then back up the database (with its `-wal`/`-shm` files).
+3. `make migrate`.
+4. `catalog plu-import` with the export mounted, as above.
+5. `make pt ARGS="catalog backfill"`: read the dry run.
+6. `make pt ARGS="catalog backfill --apply"`, then once more: it reports 0 changes.
+7. `make up` (and `make mcp-up` if you use the MCP server).
 
 ### What gets saved: a product and its price history
 

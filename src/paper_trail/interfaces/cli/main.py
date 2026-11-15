@@ -1,6 +1,7 @@
 """``paper-trail``: serve the API, run the worker, migrate the database, import and show
 receipts, process receipts through the agents and resolve their reviews, correct lines, backfill
-paid prices, call the agents' tools or serve them over MCP, export the API spec.
+paid prices, name products by their codes, call the agents' tools or serve them over MCP, export
+the API spec.
 
 This is the composition boundary of every process: the only module that reads the
 environment (through ``Settings``) and configures logging. Commands whose stdout is their
@@ -35,7 +36,7 @@ from paper_trail.bootstrap import (
     upgrade_database,
 )
 from paper_trail.config import Settings, env_var_name
-from paper_trail.domain.enums import AgentRole, Category
+from paper_trail.domain.enums import AgentRole, Category, CodeScheme
 from paper_trail.interfaces.cli.options import Transport, with_transport
 from paper_trail.interfaces.cli.receipts import (
     EXIT_INVALID_INPUT,
@@ -76,6 +77,11 @@ prices_app = typer.Typer(
     help="Price observations: apply discounts to receipts stored before.", no_args_is_help=True
 )
 app.add_typer(prices_app, name="prices")
+catalog_app = typer.Typer(
+    help="Product codes: name the products receipts print codes for, fix stored codes.",
+    no_args_is_help=True,
+)
+app.add_typer(catalog_app, name="catalog")
 
 RunOption = Annotated[
     str | None,
@@ -85,6 +91,14 @@ RunOption = Annotated[
         help="An isolated run: its own database and traces under DATA_DIR/runs/NAME.",
     ),
 ]
+
+StoreOption = Annotated[
+    str | None,
+    typer.Option(
+        "--store", metavar="S", help="Only this store (a name or its key).", show_default=False
+    ),
+]
+JsonOption = Annotated[bool, typer.Option("--json", help="Print JSON instead of a table.")]
 
 TransportOption = Annotated[
     Transport | None,
@@ -499,6 +513,157 @@ def prices_backfill(
     settings = load_settings()
     configure_agent_logging(settings)
     backfill_prices(settings, run, receipt_id, apply=apply)
+
+
+@catalog_app.command("todo")
+def catalog_todo(
+    store: StoreOption = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", metavar="N", min=1, help="At most N rows.", show_default=False),
+    ] = None,
+    as_json: JsonOption = False,
+    run: RunOption = None,
+) -> None:
+    """List the coded products nobody has named yet, most bought first, with a link to open."""
+    from paper_trail.interfaces.cli.catalog import catalog_todo as todo
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    todo(settings, run, store, limit, as_json=as_json)
+
+
+@catalog_app.command("add")
+def catalog_add(  # noqa: PLR0913 - one parameter per command-line option
+    store: Annotated[str, typer.Argument(metavar="STORE", help="The store (a name or its key).")],
+    code: Annotated[str, typer.Argument(metavar="CODE", help="The code as printed.")],
+    name: Annotated[
+        str | None,
+        typer.Argument(metavar="NAME", help="The product's name.", show_default=False),
+    ] = None,
+    *,
+    product_id: Annotated[
+        int | None,
+        typer.Option(
+            "--product", metavar="ID", help="Make the code name this product.", show_default=False
+        ),
+    ] = None,
+    brand: Annotated[
+        str | None, typer.Option("--brand", metavar="B", help="Its brand.", show_default=False)
+    ] = None,
+    size: Annotated[
+        str | None,
+        typer.Option(
+            "--size", metavar="SIZE", help='Its size, e.g. "1.36 kg".', show_default=False
+        ),
+    ] = None,
+    category: Annotated[
+        Category | None,
+        typer.Option("--category", metavar="C", help="Its category.", show_default=False),
+    ] = None,
+    replace: Annotated[
+        bool, typer.Option("--replace", help="Rename a product a person already named.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Save without asking.")] = False,
+    run: RunOption = None,
+) -> None:
+    """Name the product of a code at a store, or make the code name an existing product."""
+    from paper_trail.interfaces.cli.catalog import add_code
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    add_code(
+        settings,
+        run,
+        store,
+        code,
+        name,
+        product_id=product_id,
+        brand=brand,
+        size=size,
+        category=category,
+        replace=replace,
+        yes=yes,
+    )
+
+
+@catalog_app.command("list")
+def catalog_list(
+    store: StoreOption = None,
+    scheme: Annotated[
+        CodeScheme | None,
+        typer.Option("--scheme", help="Only codes of this scheme.", show_default=False),
+    ] = None,
+    as_json: JsonOption = False,
+    run: RunOption = None,
+) -> None:
+    """List the stored codes and the products they name."""
+    from paper_trail.interfaces.cli.catalog import list_codes
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    list_codes(settings, run, store, scheme, as_json=as_json)
+
+
+@catalog_app.command("remove")
+def catalog_remove(
+    store: Annotated[
+        str, typer.Option("--store", metavar="S", help="The store (a name or its key).")
+    ],
+    code: Annotated[str, typer.Option("--code", metavar="C", help="The code as printed.")],
+    run: RunOption = None,
+) -> None:
+    """Forget what a code names; the product and its lines are kept."""
+    from paper_trail.interfaces.cli.catalog import remove_code
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    remove_code(settings, run, store, code)
+
+
+@catalog_app.command("lookup")
+def catalog_lookup(
+    raw_text: Annotated[str, typer.Argument(metavar="RAW_TEXT", help="A receipt line as printed.")],
+    store: Annotated[
+        str, typer.Option("--store", metavar="S", help="The store (a name or its key).")
+    ],
+    run: RunOption = None,
+) -> None:
+    """Show how a line's code is read and which source knows it. Writes nothing."""
+    from paper_trail.interfaces.cli.catalog import lookup_code
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    lookup_code(settings, run, raw_text, store)
+
+
+@catalog_app.command("plu-import")
+def catalog_plu_import(
+    file: Annotated[
+        Path, typer.Argument(metavar="FILE", help="An IFPS PLU export (.csv).", show_default=False)
+    ],
+) -> None:
+    """Write the PLU table (CATALOG__PLU_PATH) from an IFPS export. Opens no database."""
+    from paper_trail.interfaces.cli.catalog import import_plu_file
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    import_plu_file(settings, file)
+
+
+@catalog_app.command("backfill")
+def catalog_backfill(
+    run: RunOption = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write the changes (default: dry run).")
+    ] = False,
+) -> None:
+    """Give the products stored before codes their code and printed name; a dry run by default."""
+    from paper_trail.interfaces.cli.catalog import backfill_catalog
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    backfill_catalog(settings, run, apply=apply)
 
 
 @app.command("mcp")

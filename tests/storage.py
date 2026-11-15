@@ -9,8 +9,10 @@ from pathlib import Path
 
 from sqlalchemy import Engine
 
+from paper_trail.application.products import price_observation as observed
 from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.models import LineItem, Receipt
+from paper_trail.domain.rules.normalization import normalize_store_name
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from tests.factories import (
@@ -19,6 +21,7 @@ from tests.factories import (
     SIMPLE_SUBTOTAL,
     SIMPLE_TAX,
     SIMPLE_TOTAL,
+    STORE_NAME,
     cad,
     price_observation,
     product,
@@ -140,6 +143,42 @@ def seed_pre_feature(  # noqa: PLR0913 - a test builder: keyword-only overrides 
                     )
                     for item in stored.items
                     if item.product_id is not None
+                ]
+            )
+        return stored
+
+    return in_unit(factory, store)
+
+
+def seed_purchase(
+    factory: UnitOfWorkFactory,
+    lines: Sequence[LineItem],
+    *,
+    store_name: str = STORE_NAME,
+    purchased_on: date | None = PURCHASED_ON,
+    created_at: datetime = CREATED_AT,
+) -> Receipt:
+    """A COMPLETED receipt at ``store_name`` with ``lines`` stored as given (link a line with
+    ``product_id=`` and ``match_source=``), and, when dated, an observation per linked ITEM line
+    at its regular price with the discount of the DISCOUNT line that applies to it."""
+
+    def store(uow: UnitOfWork) -> Receipt:
+        stored = uow.receipts.add(
+            receipt(
+                store_name=store_name,
+                store_key=normalize_store_name(store_name),
+                purchased_on=purchased_on,
+                items=tuple(lines),
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+        if purchased_on is not None:
+            uow.prices.add_many(
+                [
+                    observed(stored, item, purchased_on)
+                    for item in stored.items
+                    if item.kind is LineKind.ITEM and item.product_id is not None
                 ]
             )
         return stored

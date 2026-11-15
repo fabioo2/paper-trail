@@ -40,3 +40,46 @@ Rewritten:
 Kept unedited: `test_matching_prompt.py`, `test_enrichment_prompt.py`, `test_graph_shape.py`, `tests/e2e/test_cli_graph.py`, `tests/contract/test_vector_index.py`, the `product_similarity_search` tool tests, `test_config_agent_core_c.py`.
 
 The case-by-requirement index is in the implementation plan's test cases (`PC-TC-01`...`93`, "Requirement -> cases").
+
+## PR 1b: the `catalog` commands and the backfill
+
+Cases PC-TC-101...171 (revision 3), from requirements R15-R19, amendments A3, A4, A7, A8, A11-A16 and the defaults taken for TQ33-TQ41. Synthetic codes and PLU rows only; the owner's IFPS export is never a fixture.
+
+| Suite | Cases |
+|---|---|
+| `tests/integration/test_migration_0006.py` | 101, 102 (populated upgrade/downgrade/upgrade; a failure at each step of the swap) |
+| `tests/unit/domain/rules/test_item_codes.py` | TQ37 (a bare code reads as `<code> X`) |
+| `tests/unit/application/test_catalog.py` | 103, 104, 109-115, 120, 151, 152, 154-156 (todo, add, remove on the fakes; `product_code_at`, `parse_size`) |
+| `tests/integration/test_catalog_sqlite.py` | 106, 117 (150, the A1 re-read, is structural: `add` takes the request, not its preview; owned by `test_pc_tc_113_a_persons_name_needs_replace`) |
+| `tests/unit/application/test_plu_import.py` | 122-124, 164-167 |
+| `tests/unit/application/test_catalog_backfill.py` | 125-137, 139 (`link_items` not called), 142, 158, 171 |
+| `tests/integration/test_catalog_backfill_sqlite.py` | 139-141, 143, 159, 160, 163 |
+| `tests/e2e/test_cli_catalog.py` | 104, 105, 107, 110, 113, 114, 116, 118-121, 124, 138, 144, 145, 153, 168, 169 |
+| `tests/unit/test_catalog_offline.py`, `tests/repo/test_catalog_no_network.py` | 108 (the CLI module is now a mandatory part of the scan) |
+| `tests/contract/test_receipt_repository.py`, `test_product_repository.py`, `test_correction_repository.py`, `test_vector_index.py` | the repository methods the backfill and `todo` add (`item_lines`, `ids`, `all_aliases`, `update_alias`, `remove_alias`, corrections `list`/`update`, `vectors.has`), on the fake and SQLite |
+| `tests/unit/test_cli_agent_core.py` | the `catalog` help listing |
+
+No 1a test is removed or weakened by 1b; the edits above only add tests.
+
+### Manual checks (not automated)
+
+**PC-TC-146 README (docs review).** The README has: `catalog todo` -> open the link in your own browser -> `catalog add`; the limits of design section 1.6 (a-c); one line per `catalog` command with `--run`; "the app never requests the link"; the deploy rule (migrate the live DB only after 1b, run `catalog backfill --apply` before restarting the services); for `plu-import`: where the file comes from (IFPS "Export all -> .csv"), that it is never committed (`/data/` is git-ignored), the name format with one example, the summary line with its reasons, and that running services read `plu.csv` once, so they are restarted after an import. The 1a sentence "`catalog backfill`, still to come, attaches the codes" is updated.
+
+**PC-TC-147 Backfill on a copy of the live DB.**
+1. Stop the services. Copy the DB (with `-wal`/`-shm`) to a dated backup, and work on a second copy through `--run`.
+2. `db upgrade`. Record the counts: 48 products, 53 aliases, 0 corrections, lines by `match_source`.
+3. `catalog backfill` (dry run): read the report; note the splits (the 4 `llm` and 1 `vector` links are the likely ones) and the merge candidates.
+4. `catalog backfill --apply`: its report equals the dry run's. `--apply` again -> "0 changes".
+5. `PRAGMA integrity_check` = `ok`; `PRAGMA foreign_key_check` empty; line and observation counts equal the recorded ones; no product that has an ITEM line has `legacy_model` left on a field (a product with no line keeps it, by design): `SELECT id FROM products WHERE field_sources LIKE '%legacy_model%' AND id IN (SELECT product_id FROM line_items WHERE kind = 'item')` is empty.
+6. Interruption: on another copy, kill the process mid-apply (Ctrl-C), rerun -> it completes; the next run reports 0 changes; the final counts equal the uninterrupted copy's.
+
+**PC-TC-148 Costco codes in `catalog todo`.** On the backfilled copy: `catalog todo --store costco` lists the Costco items most-bought first. Open three of the printed links in a browser by hand: each search shows the product bought (or nothing: limits a-c). `catalog add costco <code> "<name>"` for one, answer `y`; `todo` no longer lists it; `catalog list --store costco` shows it with source `manual`. Network check: no request to costco.ca from the container (for example, run it with the network disabled).
+
+**PC-TC-149 Live deploy.** After 1b merges: backup, `db upgrade`, `catalog backfill` (dry), `--apply`, `--apply` again = 0 changes, start the services, reprocess one receipt (PC-TC-90). Keep the backup until the next successful run.
+
+**PC-TC-170 The owner's IFPS export.** With the real export (kept outside the checkout or under the git-ignored `/data/`; never committed, never a fixture):
+1. `catalog plu-import <file>` prints exactly `1435 imported, 113 skipped (111 retailer assigned, 2 duplicate)`; `plu.csv` has 1,435 data rows.
+2. With `--run scratch`, `catalog lookup` of `4046` -> `Avocados, Hass, small`; `94046` -> `Organic Avocados, Hass, small`; `4011` -> `Bananas, Yellow (includes Cavendish)`; `3093` -> `Grapes`; `3170` -> a PLU with no source.
+3. `grep -ci ', all sizes' plu.csv` -> 0, and no name ends in `, Retailer Assigned`.
+4. Import again -> the same summary and a byte-identical `plu.csv`.
+5. `git status` in the checkout shows no new file. Restart the services afterwards (they read the table once).

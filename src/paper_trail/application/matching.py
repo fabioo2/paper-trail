@@ -51,7 +51,7 @@ type NewProductKey = CodeIdentity | str  # a coded line's code identity, else th
 # Where matching may take a new product's name from: never a person (that is ``items correct``).
 NEW_NAME_SOURCES = frozenset({FieldSource.RECEIPT_TEXT, FieldSource.PLU})
 # Aliases a person taught (an import or review answer, a correction) beat a machine's.
-_PERSON_ALIASES = frozenset({AliasSource.USER_CORRECTION, AliasSource.IMPORT})
+PERSON_ALIASES = frozenset({AliasSource.USER_CORRECTION, AliasSource.IMPORT})
 
 
 def latest_correction(
@@ -89,7 +89,7 @@ def find_product(
     ]
     best = max(
         aliases,
-        key=lambda row: (row.source in _PERSON_ALIASES, row.created_at, require_id(row.id)),
+        key=lambda row: (row.source in PERSON_ALIASES, row.created_at, require_id(row.id)),
         default=None,
     )
     aliased = None if best is None else uow.products.get(best.product_id)
@@ -270,7 +270,7 @@ def _group_links(
 ) -> dict[int, _Link]:
     """One target product for every line of one code (see ``plan_matches``), chosen without
     regard to line order; a line keeps MEMORY only when its own correction names it."""
-    stored = _stored_code(uow, members[0].code, identity)
+    stored = stored_code(uow, members[0].code, identity)
     person_row = stored is not None and stored.source in PERSON_CODE_SOURCES
     target = (
         stored.product_id
@@ -366,7 +366,7 @@ def _created(member: _Coded, product_id: int | None) -> bool:
     )
 
 
-def _stored_code(uow: UnitOfWork, code: ItemCode, identity: CodeIdentity) -> ProductCode | None:
+def stored_code(uow: UnitOfWork, code: ItemCode, identity: CodeIdentity) -> ProductCode | None:
     """The row that names the code (its identities in order), if any."""
     for candidate in code.identities:
         found = uow.product_codes.find(identity.scheme, identity.store_key, candidate)

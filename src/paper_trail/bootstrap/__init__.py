@@ -10,11 +10,22 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine
 
+from paper_trail.adapters.catalog.composite import CompositeCatalog
+from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.clock import SystemClock
 from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.adapters.sqlite.health import DatabaseHealthProbe
 from paper_trail.adapters.sqlite.migrations import current_revision, head_revision, upgrade_to_head
+from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
 from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
+from paper_trail.application.catalog import (
+    AddCatalogCode,
+    BackfillCatalog,
+    CatalogTodo,
+    ListCatalogCodes,
+    LookupCatalogCode,
+    RemoveCatalogCode,
+)
 from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
 from paper_trail.application.prices import BackfillPrices
@@ -46,6 +57,12 @@ class Container:
     correct_line_item: CorrectLineItem
     get_product: GetProduct
     backfill_prices: BackfillPrices
+    catalog_todo: CatalogTodo
+    add_catalog_code: AddCatalogCode
+    list_catalog_codes: ListCatalogCodes
+    remove_catalog_code: RemoveCatalogCode
+    lookup_catalog_code: LookupCatalogCode
+    backfill_catalog: BackfillCatalog
     tolerances: Tolerances
 
 
@@ -57,6 +74,11 @@ def build_container(settings: Settings) -> Container:
 
     def uow_factory(*, read_only: bool = False) -> SqliteUnitOfWork:
         return SqliteUnitOfWork(engine, clock, read_only=read_only)
+
+    if settings.catalog.plu_path is None:
+        msg = "Settings fills in CATALOG__PLU_PATH"
+        raise ValueError(msg)
+    plu = PluCatalog(settings.catalog.plu_path)
 
     return Container(
         settings=settings,
@@ -70,6 +92,12 @@ def build_container(settings: Settings) -> Container:
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
         backfill_prices=BackfillPrices(uow_factory),
+        catalog_todo=CatalogTodo(uow_factory),
+        add_catalog_code=AddCatalogCode(uow_factory, clock),
+        list_catalog_codes=ListCatalogCodes(uow_factory),
+        remove_catalog_code=RemoveCatalogCode(uow_factory),
+        lookup_catalog_code=LookupCatalogCode(CompositeCatalog(StoreCatalog(uow_factory), plu)),
+        backfill_catalog=BackfillCatalog(uow_factory, clock, plu),
         tolerances=tolerances,
     )
 

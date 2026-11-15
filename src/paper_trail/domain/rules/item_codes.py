@@ -20,13 +20,14 @@ STORE_ITEM_STORES = frozenset({"costco"})
 STORE_SEARCH_URLS = {"costco": "https://www.costco.ca/CatalogSearch?keyword={code}"}
 
 _DIGITS = re.compile(r"[0-9]+")
+_BARE_CODE = re.compile(r"(?:\([0-9]{1,2}\)\s*)?[0-9]+")
 _GTIN_LENGTHS = frozenset({8, 12, 13, 14})
 _PLU = 4
 _ORGANIC_PLU = 5
 _EAN_8 = 8
 _UPC_A = 12
 _EAN_13 = 13
-_PLU_RANGE = range(3000, 5000)  # IFPS produce codes; a leading 9 marks the organic one
+PLU_RANGE = range(3000, 5000)  # IFPS produce codes; a leading 9 marks the organic one
 _ORGANIC_PREFIX = "9"
 # GS1 restricted circulation: prefixes 02, 04 and 20-29 are a store's own (in-store) codes.
 _RESTRICTED_PREFIXES = ("02", "04", *(f"2{digit}" for digit in range(10)))
@@ -106,6 +107,15 @@ def parse_item_code(raw_text: str, store_key: str) -> ItemCode | None:
     if store_key in STORE_ITEM_STORES:
         return _store(CodeKind.STORE_ITEM, printed)
     return _default_profile(printed)
+
+
+def parse_bare_code(code: str, store_key: str) -> ItemCode | None:
+    """A code typed alone (``catalog add``/``remove``/``lookup``) read exactly as the line
+    ``"<code> X"`` would be (``parse_item_code``); None when ``code`` is not only digits (a
+    ``(N)`` marker in front allowed) as the splitter accepts them."""
+    if not _BARE_CODE.fullmatch(code):
+        return None
+    return parse_item_code(f"{code} X", store_key)
 
 
 def printed_name(raw_text: str) -> str:
@@ -188,7 +198,7 @@ def _short(printed: str) -> ItemCode:
     """4-6 digits: an IFPS PLU (organic with the 9 prefix), else a store's own code."""
     organic = len(printed) == _ORGANIC_PLU and printed[0] == _ORGANIC_PREFIX
     plain = printed[1:] if organic else printed
-    if len(plain) == _PLU and int(plain) in _PLU_RANGE:
+    if len(plain) == _PLU and int(plain) in PLU_RANGE:
         return ItemCode(CodeKind.PLU, printed, (plain,), CodeScheme.PLU, organic=plain != printed)
     return _store(CodeKind.STORE_ITEM, printed)
 
