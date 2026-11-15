@@ -63,3 +63,9 @@ def test_paid_prices_schema_is_revision_0004_after_0003() -> None:
     """Discounts and paid prices (R6, TC-78): migrations/versions/0004_paid_prices.py is
     revision "0004", revising "0003"."""
     assert _revision_ids("0004_paid_prices.py") == ("0004", "0003")
+
+
+def test_pc_tc_23_product_codes_is_revision_0006_after_0005() -> None:
+    """Barcode lookup (R3): migrations/versions/0006_product_codes.py is revision "0006",
+    revising "0005" (its no-application-import row comes from the parametrized test above)."""
+    assert _revision_ids("0006_product_codes.py") == ("0006", "0005")

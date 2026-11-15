@@ -1,5 +1,5 @@
 """``paper-trail process`` with the slice D stages on (the production defaults): the vision
-attempt (AC-D-01, AC-D-03, ``--no-vision``) and enrichment, end to end.
+attempt (AC-D-01, AC-D-03, ``--no-vision``) and enrichment by lookup, end to end.
 
 Real composition root, SQLite, Tesseract for the photo, the real Ollama adapters for chat and
 embeddings; the model is a scripted fake Ollama on 127.0.0.1, so the vision request is checked
@@ -12,8 +12,9 @@ Pinned (docs/tests/agent-core-D.md):
   ``enrichment``; ``totals.vision_attempts`` counts the vision attempts.
 - The vision request's image is the photo as stored by the image store (EXIF stripped), read
   back from ``<data dir>/images/<receipts.image_path>``. The trace file never holds it.
-- The terminal shows the enrichment rows: one ``llm enrichment/v1`` row per new product (agent
-  ``enrichment``) and one ``tool save_enrichment`` row each (agent ``supervisor``).
+- Product codes (PC-TC-89): enrichment asks no model. For a receipt of PLU lines the terminal
+  shows the matching NOTE (``new 2 (plu 2)``) and one ``tool describe_from_catalog`` row per new
+  product (agent ``supervisor``); the only model request is the extraction.
 """
 
 import base64
@@ -35,8 +36,11 @@ from tests.e2e.agent_cli import (
     trace_files,
 )
 from tests.extractions import (
-    COSTCO_ENRICHMENTS,
     COSTCO_OCR,
+    L3,
+    L4,
+    LOBLAWS,
+    PLU_CSV,
     extraction,
     printed_extraction,
     printed_inconsistent_extraction,
@@ -148,27 +152,54 @@ def test_ac_d_03_a_text_file_never_gets_a_vision_attempt(
     assert document["totals"]["vision_attempts"] == 0
 
 
-def test_new_products_are_enriched_and_shown_on_the_terminal(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
-) -> None:
-    fake = ollama(printed_extraction(), *COSTCO_ENRICHMENTS)
+def _plu_line(raw_text: str, amount: str) -> dict[str, Any]:
+    return {
+        "raw_text": raw_text,
+        "description": raw_text.title(),
+        "quantity": "1",
+        "unit_price": amount,
+        "amount": amount,
+        "kind": "item",
+    }
 
-    code, output = _process("--text-file", str(receipt_text))
+
+def test_new_products_are_described_from_the_plu_table_and_shown_on_the_terminal(
+    data_dir: Path, ollama: StartOllama, tmp_path: Path
+) -> None:
+    plu = data_dir / "catalog" / "plu.csv"
+    plu.parent.mkdir(parents=True, exist_ok=True)
+    plu.write_text(PLU_CSV, encoding="utf-8")
+    receipt = tmp_path / "loblaws.txt"
+    receipt.write_text(f"{LOBLAWS}\n{L3} 2.49\n{L4} 2.50\nTOTAL 4.99\n", encoding="utf-8")
+    answer = printed_extraction(
+        store_name=LOBLAWS,
+        subtotal=None,
+        taxes=[],
+        total="4.99",
+        items=[_plu_line(L3, "2.49"), _plu_line(L4, "2.50")],
+    )
+    fake = ollama(answer)
+
+    code, output = _process("--text-file", str(receipt))
 
     assert code == 0, output
-    assert fake.calls == 4
-    enrichment_rows = [line for line in output.splitlines() if "enrichment/v1" in line]
-    assert len(enrichment_rows) == 3
-    assert all("enrichment" in line.split("enrichment/v1")[0] for line in enrichment_rows)
-    save_rows = [line for line in output.splitlines() if "save_enrichment" in line]
-    assert len(save_rows) == 3
-    assert all("supervisor" in line for line in save_rows)
-    categories = rows(run_database(data_dir, RUN), "SELECT category FROM products ORDER BY id")
-    assert categories == [("dairy_eggs",), ("dairy_eggs",), ("bakery",)]
+    assert fake.calls == 1
+    assert "enrichment/v1" not in output
+    assert "new 2 (plu 2)" in output
+    describe_rows = [line for line in output.splitlines() if "describe_from_catalog" in line]
+    assert len(describe_rows) == 2
+    assert all("supervisor" in line for line in describe_rows)
+    products = rows(
+        run_database(data_dir, RUN),
+        "SELECT canonical_name, category, tags FROM products ORDER BY id",
+    )
+    assert products == [
+        ("Test Apple", "produce", "[]"),
+        ("Organic Test Apple", "produce", '["organic"]'),
+    ]
     _, document = _trace(data_dir)
     assert document["config"]["enrichment"] is True
-    assert document["config"]["prompt_versions"]["enrichment"] == "v1"
-    assert len(fake.embed_requests) >= 3  # the enriched vectors were embedded
+    assert len(fake.embed_requests) == 1  # the two confirmed new products, in save_matches
 
 
 # --- EA-AC-11: v2 by default, v1 still runs end to end (experiment E1's comparison) --------------
@@ -182,7 +213,7 @@ def _status(data_dir: Path) -> str:
 def test_ea_ac_11_the_default_extraction_prompt_is_v2(
     data_dir: Path, ollama: StartOllama, receipt_text: Path
 ) -> None:
-    fake = ollama(printed_extraction(), *COSTCO_ENRICHMENTS)
+    fake = ollama(printed_extraction())
 
     code, output = _process("--text-file", str(receipt_text))
 
@@ -196,7 +227,7 @@ def test_ea_ac_11_the_default_extraction_prompt_is_v2(
 def test_ea_ac_11_prompt_version_v1_still_runs_the_v1_schema(
     data_dir: Path, ollama: StartOllama, receipt_text: Path
 ) -> None:
-    fake = ollama(extraction(), *COSTCO_ENRICHMENTS)
+    fake = ollama(extraction())
 
     code, output = _process("--prompt-version", "v1", "--text-file", str(receipt_text))
 

@@ -11,7 +11,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from paper_trail.domain.enums import AgentRole, MatchSource
+from paper_trail.domain.enums import (
+    AgentRole,
+    CodeKind,
+    CodeScheme,
+    CodeSource,
+    FieldSource,
+    MatchSource,
+)
 from paper_trail.domain.errors import DomainError, DomainValidationError, UnsupportedMediaError
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from tests.factories import line_item, receipt
@@ -29,8 +36,35 @@ def test_agent_roles_are_the_five_of_the_allowlist() -> None:
 
 
 def test_match_sources_are_the_matching_order() -> None:
-    """PLAN 6: memory, alias, vector, llm, new (stored in line_items.match_source)."""
-    assert [source.value for source in MatchSource] == ["memory", "alias", "vector", "llm", "new"]
+    """PLAN 6, barcode-lookup PC-TC-11 (TQ3): ``catalog`` follows ``memory`` (stored in
+    line_items.match_source)."""
+    assert [source.value for source in MatchSource] == [
+        "memory",
+        "catalog",
+        "alias",
+        "vector",
+        "llm",
+        "new",
+    ]
+    assert json.dumps(MatchSource.CATALOG) == '"catalog"'
+
+
+def test_pc_tc_11_code_and_field_source_enums() -> None:
+    """Barcode-lookup R4: the schemes a code is stored under, the kinds a leading code is read
+    as, and where a product's field came from."""
+    assert [scheme.value for scheme in CodeScheme] == ["gtin", "plu", "store"]
+    assert {kind.name for kind in CodeKind} == {"GTIN", "PLU", "IN_STORE", "STORE_ITEM", "NONE"}
+    assert [source.value for source in FieldSource] == [
+        "receipt_text",
+        "person",
+        "plu",
+        "off",
+        "off_llm",
+        "legacy_model",
+    ]
+    assert {source.value for source in CodeSource} == {
+        "manual", "import", "adopted", "correction", "review", "receipt", "off", "plu", "backfill",
+    }  # fmt: skip
 
 
 def test_trace_kinds_serialise_to_lowercase() -> None:

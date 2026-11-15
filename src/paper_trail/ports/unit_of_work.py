@@ -6,6 +6,7 @@ from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
     CorrectionRepository,
     PriceRepository,
+    ProductCodeRepository,
     ProductRepository,
     ReceiptRepository,
 )
@@ -25,6 +26,7 @@ class UnitOfWork(Protocol):
 
     receipts: ReceiptRepository
     products: ProductRepository
+    product_codes: ProductCodeRepository
     prices: PriceRepository
     corrections: CorrectionRepository
     jobs: JobQueue

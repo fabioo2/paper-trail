@@ -25,26 +25,29 @@ from paper_trail.ports.tools import (
 )
 from paper_trail.tools.handlers import (
     ToolServices,
+    catalog_lookup,
     check_arithmetic_tool,
+    describe_from_catalog,
     ocr_read,
     open_review,
     product_lookup,
     product_similarity_search,
-    save_enrichment,
     save_matches,
     save_receipt,
 )
 from paper_trail.tools.models import (
+    CatalogLookupInput,
+    CatalogLookupOutput,
     CheckArithmeticInput,
     CheckArithmeticOutput,
+    DescribeFromCatalogInput,
+    DescribeFromCatalogOutput,
     OcrReadInput,
     OcrReadOutput,
     OpenReviewInput,
     OpenReviewOutput,
     ProductLookupInput,
     ProductLookupOutput,
-    SaveEnrichmentInput,
-    SaveEnrichmentOutput,
     SaveMatchesInput,
     SaveMatchesOutput,
     SaveReceiptInput,
@@ -209,14 +212,25 @@ def build_tool_registry(services: ToolServices) -> ToolRegistry:
                 roles=frozenset({AgentRole.SUPERVISOR}),
             ),
             ToolSpec(
-                name="save_enrichment",
+                name="catalog_lookup",
                 description=(
-                    "Describe a product (name, brand, size, category, tags) and replace its"
-                    " embedding; a person's category for the line at that store wins."
+                    "Read the code a receipt line starts with at a store: our product when the"
+                    " code is ours, else what a reference catalog (PLU) says it is."
                 ),
-                input_model=SaveEnrichmentInput,
-                output_model=SaveEnrichmentOutput,
-                handler=partial(save_enrichment, services),
+                input_model=CatalogLookupInput,
+                output_model=CatalogLookupOutput,
+                handler=partial(catalog_lookup, services),
+                roles=frozenset({AgentRole.MATCHING, AgentRole.ENRICHMENT}),
+            ),
+            ToolSpec(
+                name="describe_from_catalog",
+                description=(
+                    "Describe a product with the fields a catalog gave it, each with its source;"
+                    " a person's fields and category for the line at that store win."
+                ),
+                input_model=DescribeFromCatalogInput,
+                output_model=DescribeFromCatalogOutput,
+                handler=partial(describe_from_catalog, services),
                 roles=frozenset({AgentRole.SUPERVISOR}),
             ),
         )

@@ -45,6 +45,7 @@ class RunConfig:
     max_text_attempts: int
     max_vision_attempts: int
     enrichment: bool  # new products are described after matching (GRAPH__ENRICHMENT)
+    catalog: bool  # coded lines are matched by their code (CATALOG__ENABLED)
     transport: str  # how tools are called ("inprocess")
 
 

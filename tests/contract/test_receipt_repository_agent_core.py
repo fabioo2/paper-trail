@@ -12,10 +12,10 @@ import pytest
 
 from paper_trail.domain.enums import MatchSource
 from paper_trail.domain.errors import ConflictError
-from paper_trail.domain.models import Receipt
+from paper_trail.domain.models import ItemLink, Receipt
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.factories import line_item, receipt
-from tests.storage import in_unit
+from tests.storage import in_unit, seed_product_and_receipt
 from tests.support import require_id
 
 SHA = "0123456789abcdef" * 4
@@ -73,3 +73,23 @@ def test_replace_contents_keeps_the_image_and_stores_match_sources(
     assert stored.items[0].match_source is MatchSource.NEW
     with uow_factory(read_only=True) as uow:
         assert uow.receipts.find_by_image_sha256(SHA) == stored
+
+
+def test_pc_tc_29_a_catalog_link_reads_back(uow_factory: UnitOfWorkFactory) -> None:
+    """Barcode-lookup R4: ``MatchSource.CATALOG`` is stored like every other source."""
+    product_id, receipt_id, _ = seed_product_and_receipt(uow_factory)
+
+    in_unit(
+        uow_factory,
+        lambda uow: uow.receipts.link_items(
+            receipt_id, [ItemLink(0, product_id, MatchSource.CATALOG)]
+        ),
+    )
+
+    with uow_factory(read_only=True) as uow:
+        loaded = uow.receipts.get(receipt_id)
+    assert loaded is not None
+    assert (loaded.items[0].product_id, loaded.items[0].match_source) == (
+        product_id,
+        MatchSource.CATALOG,
+    )

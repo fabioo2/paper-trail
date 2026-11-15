@@ -10,7 +10,11 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from paper_trail.domain.rules.normalization import normalize_alias, normalize_store_name
+from paper_trail.domain.rules.normalization import (
+    legacy_alias,
+    normalize_alias,
+    normalize_store_name,
+)
 
 # Letters, digits, punctuation, whitespace and a few characters NFKC changes (ligature,
 # full-width letter, no-break space, accents).
@@ -54,6 +58,22 @@ def test_s1_ac_06_alias_variants_normalize_to_the_same_string(raw: str) -> None:
 def test_s1_ac_06_alias_keeps_size_tokens_and_words(raw: str, expected: str) -> None:
     """S1-AC-06: size tokens, units and digits inside the name are kept."""
     assert normalize_alias(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "alias", "legacy"),
+    [
+        ("PC UNS BABYWIPES HMRJ", "pc uns babywipes", "pc uns babywipes hmrj"),
+        ("CRV CHKKN PBLN BR MRJ", "crv chkkn pbln br", "crv chkkn pbln br mrj"),
+        ("TH 2PC PJ", "th 2pc pj", "th 2pc pj"),
+        ("MRJ COOKIES", "mrj cookies", "mrj cookies"),
+        ("KS ORG EGGS 24CT H", "ks org eggs 24ct", "ks org eggs 24ct"),
+    ],
+)
+def test_pc_tc_09_mrj_and_hmrj_are_trailing_tax_flags(raw: str, alias: str, legacy: str) -> None:
+    """Barcode-lookup R2, A8: only trailing MRJ/HMRJ are dropped; ``legacy_alias`` is the key
+    as it was before them."""
+    assert (normalize_alias(raw), legacy_alias(raw)) == (alias, legacy)
 
 
 @given(text=_text)

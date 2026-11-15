@@ -12,6 +12,11 @@ class NothingToResumeError(ConflictError):
     """The receipt has no graph thread, or its thread has finished."""
 
 
+class OutdatedCheckpointError(ConflictError):
+    """The receipt's thread was saved by a version whose state the next node cannot read (no
+    ``state_version``, past ``match``); the receipt must be processed again."""
+
+
 @dataclass(frozen=True, slots=True)
 class GraphOutcome:
     receipt_id: int
@@ -47,7 +52,9 @@ class ReceiptGraphRunner(Protocol):
         """Continue the thread: at a review, ``draft`` is the person's answer (None accepts the
         pending extraction); after a pause or a run that raised, from its last checkpoint
         (``draft`` must be None, else ConflictError). NothingToResumeError when the receipt
-        has no thread or its thread has finished."""
+        has no thread or its thread has finished; OutdatedCheckpointError, before any write,
+        when its saved state has no ``state_version`` and its next node is
+        ``commit_matches``, ``enrich`` or ``commit_enrichment``."""
         ...
 
     def reset(self, receipt_id: int) -> None:

@@ -23,19 +23,33 @@ Pinned (docs/tests/agent-core-A.md):
   0-based position, raw text and reason), ``prices`` after a ``save_matches`` that leaves
   negative item lines unpriced (position and raw text); none when the list is empty or for
   another tool.
+- ``match`` adds one NOTE ``matching`` (agent MATCHING) per receipt with at least one decision
+  (barcode-lookup PC-TC-61): ``data`` is the count per source in ``MatchSource`` order, zero
+  ones left out, ``catalog`` split by code scheme and ``new`` by name source; the summary is
+  ``match_counts_summary(data)``. No NOTE when nothing was matched.
 """
 
 from collections.abc import Mapping
 
 import pytest
 
-from paper_trail.agents.tracing import TracingToolGateway, _save_summary
+from paper_trail.agents.tracing import TracingToolGateway, _save_summary, match_counts_summary
 from paper_trail.domain.enums import AgentRole
 from paper_trail.domain.models import JsonValue
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.tools import ToolDescription
 from tests.agent_harness import TEXT_MODEL, build_harness
-from tests.extractions import NOW, extraction, inconsistent_extraction
+from tests.extractions import (
+    L1,
+    L3,
+    NOW,
+    U1,
+    coded_extraction,
+    extraction,
+    inconsistent_extraction,
+    mixed_lines_extraction,
+)
+from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.clock import FakeClock
 from tests.fakes.llm import COMPLETION_TOKENS, PROMPT_TOKENS, ScriptedLlm
 from tests.fakes.trace import FakeTracer
@@ -60,8 +74,9 @@ TOOL_ROLES = {
     "open_review": AgentRole.SUPERVISOR,
     "product_lookup": AgentRole.MATCHING,  # slice C
     "product_similarity_search": AgentRole.MATCHING,
+    "catalog_lookup": AgentRole.MATCHING,  # barcode lookup PR 1a
     "save_matches": AgentRole.SUPERVISOR,
-    "save_enrichment": AgentRole.SUPERVISOR,  # slice D
+    "describe_from_catalog": AgentRole.SUPERVISOR,
 }
 
 
@@ -308,3 +323,82 @@ def test_tc_91_126_the_tool_gateway_notes_what_a_save_leaves_out(
     ]
     expected = [] if note is None else [(AgentRole.SUPERVISOR, *note)]
     assert (kinds, notes) == ([TraceKind.TOOL] + [TraceKind.NOTE] * len(expected), expected)
+
+
+# --- barcode lookup PC-TC-61: one NOTE per receipt with the counts by source --------------------
+
+MATCH_COUNTS = [
+    pytest.param(
+        {
+            "catalog": {"store": 5, "gtin": 3, "plu": 1},
+            "alias": 1,
+            "new": {"receipt_text": 3, "plu": 1},
+        },
+        "catalog 9 (store 5, gtin 3, plu 1) · alias 1 · new 4 (printed text 3, plu 1)",
+        id="every part",
+    ),
+    pytest.param(
+        {"catalog": {"store": 5, "plu": 1}, "new": {"receipt_text": 3}},
+        "catalog 6 (store 5, plu 1) · new 3 (printed text 3)",
+        id="zero parts left out",
+    ),
+    pytest.param({"memory": 1, "alias": 2}, "memory 1 · alias 2", id="memory and alias"),
+]
+
+
+@pytest.mark.parametrize(("counts", "summary"), MATCH_COUNTS)
+def test_pc_tc_61_the_match_counts_read_as_one_line(
+    counts: dict[str, JsonValue], summary: str
+) -> None:
+    assert match_counts_summary(counts) == summary
+
+
+def _match_notes(events: tuple[TraceEvent, ...]) -> list[tuple[AgentRole, str, JsonValue]]:
+    return [
+        (event.agent, event.summary, dict(event.data))
+        for event in _of(events, TraceKind.NOTE)
+        if event.name == "matching"
+    ]
+
+
+def test_pc_tc_61_match_notes_its_counts_once_per_receipt() -> None:
+    lines = [L3, L1, U1]
+    harness = build_harness(
+        ScriptedLlm(coded_extraction(lines), coded_extraction(lines)),
+        catalog=FakeCatalog({"3101": TEST_APPLE}),
+    )
+
+    first = harness.process_text("\n".join(lines)).receipt_id
+    second = harness.process_text("\n".join(lines)).receipt_id
+
+    assert _match_notes(harness.events(first)) == [
+        (
+            AgentRole.MATCHING,
+            "new 3 (printed text 2, plu 1)",
+            {"new": {"receipt_text": 2, "plu": 1}},
+        )
+    ]
+    assert _match_notes(harness.events(second)) == [
+        (
+            AgentRole.MATCHING,
+            "catalog 2 (gtin 1, plu 1) · alias 1",
+            {"catalog": {"gtin": 1, "plu": 1}, "alias": 1},
+        )
+    ]
+    (save,) = [
+        event
+        for event in _of(harness.events(second), TraceKind.TOOL)
+        if event.name == "save_matches"
+    ]
+    assert save.summary.startswith("catalog 2 · alias 1")
+
+
+def test_pc_tc_61_nothing_to_match_writes_no_note() -> None:
+    only_deposit = mixed_lines_extraction()
+    only_deposit["items"] = only_deposit["items"][1:2]
+    only_deposit["total_cents"] = 10
+    harness = build_harness(ScriptedLlm(only_deposit))
+
+    receipt_id = harness.process_text("deposit only").receipt_id
+
+    assert _match_notes(harness.events(receipt_id)) == []

@@ -50,6 +50,7 @@ def test_ac_a_09_document_fields_follow_the_plan() -> None:
         "max_text_attempts",
         "max_vision_attempts",
         "enrichment",  # slice D: GRAPH__ENRICHMENT (docs/tests/agent-core-D.md)
+        "catalog",  # product codes: CATALOG__ENABLED (PC-TC-84)
         "transport",
     }
     assert fields("TraceOutcome") == {"status", "review_id", "review_reason", "resumed_from"}

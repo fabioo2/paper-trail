@@ -80,6 +80,10 @@
           "title": "Enrichment",
           "type": "boolean"
         },
+        "catalog": {
+          "title": "Catalog",
+          "type": "boolean"
+        },
         "transport": {
           "title": "Transport",
           "type": "string"
@@ -93,6 +97,7 @@
         "max_text_attempts",
         "max_vision_attempts",
         "enrichment",
+        "catalog",
         "transport"
       ],
       "title": "TraceConfig",

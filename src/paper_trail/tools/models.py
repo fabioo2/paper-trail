@@ -4,16 +4,21 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
-from paper_trail.application.enrichment import CategorySource
 from paper_trail.application.matching import MatchChoice
 from paper_trail.application.payloads import (
+    CatalogEntryPayload,
     DraftPayload,
     ExtractedReceipt,
+    FieldSourceKey,
     IssuePayload,
-    ProductEnrichment,
+    ProductFieldsPayload,
+    check_field_sources,
 )
 from paper_trail.domain.enums import (
     Category,
+    CodeKind,
+    CodeScheme,
+    FieldSource,
     MatchSource,
     ProcessingStage,
     ReceiptStatus,
@@ -21,8 +26,9 @@ from paper_trail.domain.enums import (
     Unit,
 )
 from paper_trail.domain.errors import DomainValidationError
-from paper_trail.domain.models import JsonValue, Product, require_id
+from paper_trail.domain.models import CodeIdentity, JsonValue, Product, require_id
 from paper_trail.domain.rules.discounts import Refusal
+from paper_trail.domain.rules.item_codes import ItemCode
 
 
 class _Model(BaseModel):
@@ -92,6 +98,7 @@ class ProductOut(_Model):
     size_unit: Unit | None
     category: Category | None
     tags: list[str]
+    field_sources: dict[str, FieldSource]
 
     @classmethod
     def of(cls, product: Product) -> Self:
@@ -103,6 +110,7 @@ class ProductOut(_Model):
             size_unit=product.size_unit,
             category=product.category,
             tags=list(product.tags),
+            field_sources=dict(product.field_sources),
         )
 
 
@@ -130,13 +138,63 @@ class SimilaritySearchOutput(_Model):
     candidates: list[CandidateOut]  # nearest first
 
 
+class ItemCodeOut(_Model):
+    """A line's leading code as parsed at the store (``ItemCode``); ``identity`` is what
+    ``product_codes`` stores it under (None for kind ``none``)."""
+
+    kind: CodeKind
+    printed: str
+    keys: list[str]
+    scheme: CodeScheme | None
+    identity: str | None
+
+    @classmethod
+    def of(cls, code: ItemCode) -> Self:
+        return cls(
+            kind=code.kind,
+            printed=code.printed,
+            keys=list(code.keys),
+            scheme=code.scheme,
+            identity=code.identity,
+        )
+
+
+class CatalogLookupInput(_Model):
+    raw_text: StrictStr  # the line's raw text; parsed by the tool
+    store_key: StrictStr
+
+
+class CatalogLookupOutput(_Model):
+    code: ItemCodeOut | None  # None: the line has no leading code
+    product: ProductOut | None  # ours, when the code is already one of our products
+    entry: CatalogEntryPayload | None  # the source that hit (the store catalog's, for ours)
+
+
+class CodeRefIn(_Model):
+    """A code identity: ``store_key`` is "" unless the scheme is ``store``."""
+
+    scheme: CodeScheme
+    store_key: StrictStr
+    code: StrictStr = Field(min_length=1)
+
+    def to_identity(self) -> CodeIdentity:
+        return CodeIdentity(self.scheme, self.store_key, self.code)
+
+
 class MatchDecisionIn(_Model):
-    """One line's product: an existing one, or a new one (source ``new``) named here."""
+    """One line's product: an existing one, or a new one (source ``new``) named here.
+
+    ``code``: the line's code identity when it was matched by its code; ``name_source``: where
+    a new product's name came from (``receipt_text`` when absent); ``catalog``: the source
+    entry it was named from, kept for the enrichment agent (not written)."""
 
     position: StrictInt = Field(ge=0)
     source: MatchSource
     product_id: StrictInt | None = None
     new_product_name: StrictStr | None = Field(default=None, min_length=1)
+    code: CodeRefIn | None = None
+    name_source: FieldSource | None = None
+    catalog: CatalogEntryPayload | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -153,6 +211,8 @@ class MatchDecisionIn(_Model):
             source=self.source,
             product_id=self.product_id,
             new_product_name=self.new_product_name,
+            code=None if self.code is None else self.code.to_identity(),
+            name_source=self.name_source,
         )
 
 
@@ -183,13 +243,24 @@ class SaveMatchesOutput(_Model):
     unpriced: list[UnpricedLineOut]
 
 
-class SaveEnrichmentInput(_Model):
+class DescribeFromCatalogInput(_Model):
+    """``fields`` and ``sources`` pair up (``check_field_sources``); ``alias`` (the raw text of
+    the line the product came from) and ``store_key`` key a person's category correction."""
+
     product_id: StrictInt
-    alias: StrictStr  # the raw text of the line the product came from; normalized by the tool
-    store_key: StrictStr | None  # where it was bought; with the alias, keys category memory
-    enrichment: ProductEnrichment  # the model's answer without its confidence
+    fields: ProductFieldsPayload
+    sources: dict[FieldSourceKey, FieldSource]
+    alias: StrictStr
+    store_key: StrictStr
+
+    @model_validator(mode="after")
+    def _paired(self) -> Self:
+        try:
+            check_field_sources(self.fields, self.sources)
+        except DomainValidationError as error:
+            raise ValueError(str(error)) from None
+        return self
 
 
-class SaveEnrichmentOutput(_Model):
+class DescribeFromCatalogOutput(_Model):
     product: ProductOut  # as stored
-    category_source: CategorySource  # "memory" when a person's correction chose the category

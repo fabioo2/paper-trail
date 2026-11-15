@@ -14,6 +14,7 @@ from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
     CorrectionRepository,
     PriceRepository,
+    ProductCodeRepository,
     ProductRepository,
     ReceiptRepository,
 )
@@ -23,6 +24,7 @@ from tests.fakes.queues import FakeJobQueue, FakeReviewQueue
 from tests.fakes.repositories import (
     FakeCorrectionRepository,
     FakePriceRepository,
+    FakeProductCodeRepository,
     FakeProductRepository,
     FakeReceiptRepository,
 )
@@ -49,6 +51,7 @@ class FakeUnitOfWork:
         # Annotated with the port types: mypy then checks each fake against its protocol.
         self.receipts: ReceiptRepository = FakeReceiptRepository(working, clock)
         self.products: ProductRepository = FakeProductRepository(working)
+        self.product_codes: ProductCodeRepository = FakeProductCodeRepository(working)
         self.prices: PriceRepository = FakePriceRepository(working)
         self.corrections: CorrectionRepository = FakeCorrectionRepository(working)
         self.jobs: JobQueue = FakeJobQueue(working, clock)

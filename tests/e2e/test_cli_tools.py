@@ -117,6 +117,24 @@ def test_ac_b_04_tools_list_for_one_role(harness: Harness, role: AgentRole) -> N
     assert _rows(result.stdout) == _expected_rows(harness, [role])
 
 
+@pytest.mark.usefixtures("data_dir")
+@pytest.mark.parametrize(
+    ("role", "tools"),
+    [
+        ("matching", ["catalog_lookup", "product_lookup", "product_similarity_search"]),
+        ("enrichment", ["catalog_lookup", "product_lookup"]),
+        ("supervisor", ["describe_from_catalog", "open_review", "save_matches", "save_receipt"]),
+    ],
+)
+def test_the_catalog_tools_are_listed_for_their_roles(role: str, tools: list[str]) -> None:
+    """PC-TC-44: ``save_enrichment`` is gone; ``catalog_lookup`` and ``describe_from_catalog``
+    join their roles (the MCP listing equals this one, test above)."""
+    result = invoke("tools", "list", "--role", role)
+
+    assert result.exit_code == 0, result.output
+    assert [name for _, name, _ in _rows(result.stdout)] == tools
+
+
 @pytest.mark.usefixtures("mcp_url")
 @pytest.mark.parametrize("role", [None, *AgentRole])
 def test_ac_b_04_tools_list_is_identical_over_mcp(role: AgentRole | None) -> None:
@@ -235,6 +253,41 @@ def test_e3_the_same_calls_over_mcp(harness: Harness) -> None:
     assert json.loads(allowed.stdout) == dict(expected)
     assert denied.exit_code == EXIT_DENIED
     assert "denied: role=matching tool=save_receipt" in denied.stderr
+
+
+@pytest.mark.usefixtures("migrated", "mcp_url")
+def test_catalog_lookup_prints_the_same_json_in_process_and_over_mcp() -> None:
+    """PC-TC-45 (wiring): a Costco store item nobody named yet, on both transports."""
+    payload = json.dumps({"raw_text": "1362394 CHOC PISTACH", "store_key": "costco"})
+
+    outputs = [
+        invoke(
+            "tools",
+            "call",
+            "--transport",
+            transport,
+            "--role",
+            "matching",
+            "catalog_lookup",
+            payload,
+        )
+        for transport in ("inprocess", "mcp")
+    ]
+
+    assert [output.exit_code for output in outputs] == [0, 0], [o.output for o in outputs]
+    assert [json.loads(output.stdout) for output in outputs] == [
+        {
+            "code": {
+                "kind": "store_item",
+                "printed": "1362394",
+                "keys": ["1362394"],
+                "scheme": "store",
+                "identity": "1362394",
+            },
+            "product": None,
+            "entry": None,
+        }
+    ] * 2
 
 
 @pytest.mark.usefixtures("migrated")

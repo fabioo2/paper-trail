@@ -18,6 +18,8 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DATABASE_FILENAME = "paper_trail.db"
+CATALOG_DIRNAME = "catalog"
+PLU_FILENAME = "plu.csv"
 
 
 class WorkerSettings(BaseModel):
@@ -111,6 +113,19 @@ class GraphSettings(BaseModel):
     enrichment: bool = True  # describe the products a receipt created (False: skip the stage)
 
 
+class CatalogSettings(BaseModel):
+    """Product codes and catalogs (``PAPER_TRAIL_CATALOG__*``, barcode-lookup plan 6).
+
+    ``enabled`` false sends coded lines the way of uncoded ones (``process --no-catalog``);
+    matching still asks no model. ``plu_path`` defaults to ``<data_dir>/catalog/plu.csv``
+    (``Settings`` fills it in, so it is never None there)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = True
+    plu_path: Path | None = None
+
+
 class PromptSettings(BaseModel):
     """Prompt versions per agent (``PAPER_TRAIL_PROMPTS__*``, agent-core plan 2.5)."""
 
@@ -118,8 +133,8 @@ class PromptSettings(BaseModel):
 
     extraction_version: str = "v2"  # v2: values as printed (ADR-0017); v1: integer cents
     vision_version: str = "v1"
-    matching_version: str = "v1"
-    enrichment_version: str = "v1"
+    matching_version: str = "v1"  # unused since product codes (ADR-0018): matching asks no model
+    enrichment_version: str = "v1"  # unused since product codes: enrichment asks no model
     examples: bool = True  # include the few-shot example pairs
 
 
@@ -197,6 +212,7 @@ class Settings(BaseSettings):
     graph: GraphSettings = GraphSettings()
     prompts: PromptSettings = PromptSettings()
     matching: MatchingSettings = MatchingSettings()
+    catalog: CatalogSettings = Field(default=CatalogSettings(), validate_default=True)
     tools: ToolsSettings = ToolsSettings()
     mcp: McpSettings = McpSettings()
 
@@ -205,6 +221,14 @@ class Settings(BaseSettings):
     def _default_database_path(cls, value: object, info: ValidationInfo) -> object:
         if value is None and "data_dir" in info.data:
             return info.data["data_dir"] / DATABASE_FILENAME
+        return value
+
+    @field_validator("catalog", mode="after")
+    @classmethod
+    def _default_plu_path(cls, value: CatalogSettings, info: ValidationInfo) -> CatalogSettings:
+        if value.plu_path is None and "data_dir" in info.data:
+            plu_path = info.data["data_dir"] / CATALOG_DIRNAME / PLU_FILENAME
+            return value.model_copy(update={"plu_path": plu_path})
         return value
 
     @field_validator("log_format", mode="before")

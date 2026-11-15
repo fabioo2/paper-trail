@@ -10,13 +10,16 @@ JSON with the models defined once here, below both:
 - ``DraftPayload``: a ``ReceiptDraft`` without loss (each amount keeps its own currency), for
   saving a draft that came from the model or from a person.
 - ``ProductEnrichment``: what the enrichment model says a product is (its answer minus its
-  confidence), for the ``save_enrichment`` tool.
+  confidence); the ``enrichment/v1`` prompt's answer, kept on disk but unused (ADR-0018).
+- ``CatalogEntryPayload``: a catalog's entry for a code (the ``catalog_lookup`` tool's
+  ``entry``), and ``ProductFieldsPayload``: the fields ``describe_from_catalog`` writes.
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
@@ -29,11 +32,13 @@ from pydantic import (
     model_validator,
 )
 
-from paper_trail.domain.enums import Category, LineKind, Unit
+from paper_trail.domain.enums import Category, FieldSource, LineKind, Unit
+from paper_trail.domain.errors import DomainValidationError
 from paper_trail.domain.models import LineItem, Product, ReceiptDraft
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import ArithmeticIssue, IssueCode
 from paper_trail.domain.rules.dates import parse_receipt_date
+from paper_trail.ports.catalog import CatalogProduct, CatalogSource
 
 
 def _decimal_string(value: object) -> object:
@@ -313,3 +318,134 @@ class ProductEnrichment(BaseModel):
             category=category,
             tags=tuple(self.tags),
         )
+
+
+# The keys of ``Product.field_sources`` (``FIELD_SOURCE_KEYS``): ``size`` covers both size fields.
+type FieldSourceKey = Literal["canonical_name", "brand", "size", "category", "tags"]
+
+
+class CatalogEntryPayload(BaseModel):
+    """A ``CatalogProduct`` as JSON (without ``product_id``: the tool returns our product
+    itself). ``size_value`` is a decimal string."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: CatalogSource
+    key: str
+    name: str | None
+    brand: str | None
+    size_value: str | None
+    size_unit: Unit | None
+    quantity_text: str | None
+    categories: list[str]
+    category: Category | None
+    tags: list[str]
+
+    @classmethod
+    def of(cls, entry: CatalogProduct) -> Self:
+        return cls(
+            source=entry.source,
+            key=entry.key,
+            name=entry.name,
+            brand=entry.brand,
+            size_value=None if entry.size_value is None else str(entry.size_value),
+            size_unit=entry.size_unit,
+            quantity_text=entry.quantity_text,
+            categories=list(entry.categories),
+            category=entry.category,
+            tags=list(entry.tags),
+        )
+
+
+class ProductFieldsPayload(BaseModel):
+    """The descriptive fields ``describe_from_catalog`` writes; None leaves a field as it is.
+    ``size_value`` (a positive decimal string) and ``size_unit`` come together or not at all."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: NonBlank | None = None
+    brand: NonBlank | None = None
+    size_value: QuantityText | None = None
+    size_unit: Unit | None = None
+    category: Category | None = None
+    tags: list[Tag] | None = Field(default=None, max_length=MAX_TAGS)
+
+    @model_validator(mode="after")
+    def _size_has_a_unit(self) -> Self:
+        if (self.size_value is None) != (self.size_unit is None):
+            msg = "size_value and size_unit are given together or not at all"
+            raise ValueError(msg)
+        return self
+
+
+# The provenance key of each field ``describe_from_catalog`` takes.
+_SOURCE_KEYS: dict[str, FieldSourceKey] = {
+    "name": "canonical_name",
+    "brand": "brand",
+    "size_value": "size",
+    "size_unit": "size",
+    "category": "category",
+    "tags": "tags",
+}
+_ENTRY_SOURCES = {"plu": FieldSource.PLU}
+DATA_SOURCES = frozenset({FieldSource.PLU, FieldSource.OFF, FieldSource.OFF_LLM})
+
+
+def entry_product_name(name: str, brand: str | None) -> str:
+    """A new product's name from a source entry: ``"<brand> <name>"`` unless the name already
+    contains the brand (ignoring case)."""
+    if brand is None or brand.casefold() in name.casefold():
+        return name
+    return f"{brand} {name}"
+
+
+def catalog_fields(
+    entry: CatalogEntryPayload,
+) -> tuple[ProductFieldsPayload, dict[FieldSourceKey, FieldSource]]:
+    """The fields a reference entry supplies and their source: a ``plu`` entry gives its name,
+    category and (when it has any) tags, each sourced ``plu``. A ``store_catalog`` entry is one
+    of our products, so it gives nothing."""
+    source = _ENTRY_SOURCES.get(entry.source)
+    if source is None:
+        return ProductFieldsPayload(), {}
+    sized = entry.size_value is not None and entry.size_unit is not None
+    fields = ProductFieldsPayload(
+        name=entry.name,
+        brand=entry.brand,
+        size_value=entry.size_value if sized else None,
+        size_unit=entry.size_unit if sized else None,
+        category=entry.category,
+        tags=list(entry.tags) or None,
+    )
+    return fields, dict.fromkeys(_given_keys(fields), source)
+
+
+def check_field_sources(
+    fields: ProductFieldsPayload, sources: Mapping[FieldSourceKey, FieldSource]
+) -> None:
+    """DomainValidationError unless every given field has exactly its source key and every
+    source key has its field (``name`` -> ``canonical_name``, ``size_value``/``size_unit`` ->
+    ``size``, the others by their own name), and every source is a data source (``plu``,
+    ``off``, ``off_llm``): a person's values and the printed text are never written this way."""
+    given = _given_keys(fields)
+    problems = [
+        f"field {field} has no source {_SOURCE_KEYS[field]}"
+        for field in _given_fields(fields)
+        if _SOURCE_KEYS[field] not in sources
+    ]
+    problems += [f"source {key} has no field" for key in sources if key not in given]
+    problems += [
+        f"source {key} is {source.value}, not a data source"
+        for key, source in sources.items()
+        if source not in DATA_SOURCES
+    ]
+    if problems:
+        raise DomainValidationError("; ".join(problems))
+
+
+def _given_fields(fields: ProductFieldsPayload) -> list[str]:
+    return [name for name in _SOURCE_KEYS if getattr(fields, name) is not None]
+
+
+def _given_keys(fields: ProductFieldsPayload) -> list[FieldSourceKey]:
+    return list(dict.fromkeys(_SOURCE_KEYS[name] for name in _given_fields(fields)))

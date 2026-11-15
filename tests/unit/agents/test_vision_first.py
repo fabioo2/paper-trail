@@ -32,7 +32,7 @@ from paper_trail.agents.routing import (
 )
 from paper_trail.application.process_receipt import ProcessOutcome
 from paper_trail.domain.enums import ReceiptStatus, ReviewReason
-from paper_trail.domain.trace import TraceKind
+from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.agents import GraphOutcome
 from tests.agent_harness import TEXT_MODEL, VISION_MODEL, Harness, agent_settings, build_harness
 from tests.extractions import (
@@ -215,6 +215,15 @@ def _graph(outcome: ProcessOutcome) -> GraphOutcome:
     assert outcome.failure is None, outcome.failure
     assert outcome.graph is not None
     return outcome.graph
+
+
+def _receipt_notes(harness: Harness, receipt_id: int) -> list[TraceEvent]:
+    """The extraction's NOTE events; matching's count NOTE is pinned by test_tracing."""
+    return [
+        event
+        for event in harness.events(receipt_id)
+        if event.kind is TraceKind.NOTE and event.name != "matching"
+    ]
 
 
 def _routes(harness: Harness, receipt_id: int) -> list[str]:
@@ -459,7 +468,7 @@ def test_real_run_a_missed_multi_buy_is_reconciled_from_the_ocr_text() -> None:
     assert [line.line_total.amount_cents for line in receipt.items] == [899, 500, 500]
     assert receipt.tax is not None
     assert receipt.tax.amount_cents == 0
-    notes = [event for event in harness.events(graph.receipt_id) if event.kind is TraceKind.NOTE]
+    notes = _receipt_notes(harness, graph.receipt_id)
     assert [note.summary for note in notes] == [
         "tax 8.99 H ignored: subtotal equals total",
         "reconciled multi-buy 2 @ 2/$10.00 from OCR",
@@ -474,7 +483,7 @@ def test_real_run_an_ignored_tax_is_a_visible_note() -> None:
     graph = _graph(harness.process_image(LABEL))
 
     assert graph.status is ReceiptStatus.COMPLETED
-    notes = [event for event in harness.events(graph.receipt_id) if event.kind is TraceKind.NOTE]
+    notes = _receipt_notes(harness, graph.receipt_id)
     assert [(note.name, note.summary) for note in notes] == [
         ("tax", "tax 8.99 H ignored: subtotal equals total")
     ]
@@ -485,7 +494,7 @@ def test_real_run_a_printed_tax_is_no_note() -> None:
 
     graph = _graph(harness.process_image(LABEL))
 
-    assert not [e for e in harness.events(graph.receipt_id) if e.kind is TraceKind.NOTE]
+    assert not _receipt_notes(harness, graph.receipt_id)
 
 
 def test_real_run_without_the_ocr_line_nothing_is_reconciled() -> None:
@@ -518,7 +527,7 @@ def test_blind_test_a_tax_computed_from_base_and_rate_completes_with_a_note() ->
     receipt = harness.receipt(graph.receipt_id)
     assert receipt.tax is not None
     assert receipt.tax.amount_cents == 84
-    notes = [event for event in harness.events(graph.receipt_id) if event.kind is TraceKind.NOTE]
+    notes = _receipt_notes(harness, graph.receipt_id)
     assert [(note.name, note.summary) for note in notes] == [
         ("tax", "tax 0.84 computed from 6.49 @ 13.000%")
     ]

@@ -34,6 +34,7 @@ class TraceConfig(_Strict):
     max_text_attempts: int
     max_vision_attempts: int
     enrichment: bool
+    catalog: bool
     transport: str
 
 
@@ -104,6 +105,7 @@ class JsonTraceWriter:
             max_text_attempts=config.max_text_attempts,
             max_vision_attempts=config.max_vision_attempts,
             enrichment=config.enrichment,
+            catalog=config.catalog,
             transport=config.transport,
         )
 

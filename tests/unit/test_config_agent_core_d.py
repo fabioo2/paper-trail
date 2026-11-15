@@ -8,7 +8,8 @@ Pinned (docs/tests/agent-core-D.md):
   graph routes with:
   ``graph_limits(settings).max_vision_attempts`` equals it.
 - ``PROMPTS__ENRICHMENT_VERSION`` (default ``v1``, there since slice A) names a prompt that
-  exists.
+  exists. Since product codes (barcode-lookup PR 1a, R9) enrichment asks no model, so the
+  prompt is unused; the setting still loads.
 """
 
 import pytest

@@ -52,6 +52,7 @@ export function lineItem(overrides: Partial<LineItemOut> = {}): LineItemOut {
     product_id: null,
     category: "dairy_eggs",
     applies_to_position: null,
+    match_source: null,
     ...overrides,
   };
 }

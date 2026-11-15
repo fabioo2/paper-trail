@@ -65,9 +65,9 @@ def engine(database: Path) -> Iterator[Engine]:
 
 @pytest.fixture(scope="module")
 def fresh(tmp_path_factory: pytest.TempPathFactory) -> tuple[set[IndexDefinition], Schema]:
-    """The index definitions and the schema of a database built from nothing to head."""
+    """The index definitions and the schema of a database built from nothing to 0005."""
     database = tmp_path_factory.mktemp("fresh") / "paper_trail.db"
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0005")
     engine = create_engine(database)
     try:
         with engine.connect() as connection:
@@ -247,7 +247,7 @@ def test_rl_tc_10_the_upgrade_adds_the_missing_indexes(
 ) -> None:
     counts = _at_0004_without(database, engine, dropped)
 
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0005")
 
     with engine.connect() as connection:
         assert (current_revision(engine), _schema(connection), _counts(connection)) == (
@@ -262,7 +262,7 @@ def test_rl_tc_10_a_complete_database_is_unchanged(database: Path, engine: Engin
     with engine.connect() as connection:
         before = _schema(connection)
 
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0005")
 
     with engine.connect() as connection:
         assert (current_revision(engine), _schema(connection), _counts(connection)) == (
@@ -332,7 +332,7 @@ def test_rl_tc_11_downgrade_keeps_the_indexes_and_upgrade_runs_again(
 ) -> None:
     counts = _at_0004_without(database, engine, dropped)
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0005")
 
     command.downgrade(config, "0004")
 
@@ -343,7 +343,7 @@ def test_rl_tc_11_downgrade_keeps_the_indexes_and_upgrade_runs_again(
             counts,
         )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0005")
 
     with engine.connect() as connection:
         assert (current_revision(engine), _schema(connection), _counts(connection)) == (

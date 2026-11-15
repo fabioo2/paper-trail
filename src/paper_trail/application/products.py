@@ -1,9 +1,10 @@
 """Products, their aliases and their prices: the writes shared by every use case that links a
 receipt line to a product (import, matching, a person's correction), and reading one back."""
 
+from collections.abc import Mapping
 from datetime import date, datetime
 
-from paper_trail.domain.enums import AliasSource, Category
+from paper_trail.domain.enums import AliasSource, Category, FieldSource
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
     LineItem,
@@ -18,8 +19,16 @@ from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 
-def new_product(uow: UnitOfWork, name: str, category: Category | None, now: datetime) -> Product:
-    """Store a product known only by its name (card numbers masked, like all free text)."""
+def new_product(
+    uow: UnitOfWork,
+    name: str,
+    category: Category | None,
+    now: datetime,
+    *,
+    field_sources: Mapping[str, FieldSource],
+) -> Product:
+    """Store a product known only by its name and maybe its category (card numbers masked,
+    like all free text), with where each came from."""
     return uow.products.add(
         Product(
             id=None,
@@ -30,8 +39,17 @@ def new_product(uow: UnitOfWork, name: str, category: Category | None, now: date
             category=category,
             tags=(),
             created_at=now,
+            field_sources=dict(field_sources),
         )
     )
+
+
+def person_named(category: Category | None) -> dict[str, FieldSource]:
+    """The field sources of a product a person named (and maybe categorized)."""
+    sources = {"canonical_name": FieldSource.PERSON}
+    if category is not None:
+        sources["category"] = FieldSource.PERSON
+    return sources
 
 
 def remember_alias(  # noqa: PLR0913 - the fields of one alias, plus where and when

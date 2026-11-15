@@ -116,8 +116,8 @@ def test_ac_b_05_mcp_gives_the_same_outcome_and_events_as_in_process(
 def test_ac_b_05_an_image_is_read_over_mcp(
     data_dir: Path, ollama: StartOllama, tmp_path: Path
 ) -> None:
-    """ocr_read (Tesseract), the matching agent's reads (slice C: a lookup and a search per line
-    on a fresh database) and the supervisor's writes all go through the MCP hop."""
+    """ocr_read (Tesseract), the matching agent's reads (one ``product_lookup`` per uncoded line,
+    no similarity search, PC-TC-62/89) and the supervisor's writes all go through the MCP hop."""
     photo = tmp_path / "costco.jpg"
     photo.write_bytes(PRINTED_RECEIPTS[0].render())
     ollama(extraction())
@@ -127,7 +127,7 @@ def test_ac_b_05_an_image_is_read_over_mcp(
     assert code == 0, output
     document = _trace(data_dir, "img")
     tools = [event for event in document["events"] if event["kind"] == "tool"]
-    matching = ["product_lookup", "product_similarity_search"] * 3 + ["save_matches"]
+    matching = ["product_lookup"] * 3 + ["save_matches"]
     assert [event["name"] for event in tools] == [
         "ocr_read",
         "check_arithmetic",

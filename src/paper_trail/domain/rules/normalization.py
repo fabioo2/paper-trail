@@ -6,13 +6,15 @@ Both normalizers are idempotent: they repeat their removals until nothing change
 import re
 import unicodedata
 
-# Trailing tokens that receipts print after an item but that do not name it.
-_TAX_FLAGS = frozenset({"h", "gst", "hst", "pst", "qst"})
+# Trailing tokens that receipts print after an item but that do not name it. Only observed
+# tokens, never a pattern: "PJ" (pyjamas) in "TH 2PC PJ" is a word. Superstore prints MRJ/HMRJ.
+_TAX_FLAGS_BEFORE_0006 = frozenset({"h", "gst", "hst", "pst", "qst"})
+_TAX_FLAGS = _TAX_FLAGS_BEFORE_0006 | {"mrj", "hmrj"}
 _PRICE = re.compile(r"\$?[0-9]+\.[0-9]{2}-?")
 _ITEM_CODE = re.compile(r"[0-9]{4,}")
-# A leading item code and the text after it: Costco 4-7 digits, a PLU 4, a UPC 11-13. A
-# quantity marker before the code ("(1)05700001285 CRV ...") is dropped.
-_LEADING_ITEM_CODE = re.compile(r"(?:\([0-9]{1,2}\)\s*)?([0-9]{4,13})\s+(\S.*)", re.DOTALL)
+# A leading item code and the text after it: Costco 4-7 digits, a PLU 4-5, a UPC 11-13, a
+# GTIN-14. A quantity marker before the code ("(1)05700001285 CRV ...") is dropped.
+_LEADING_ITEM_CODE = re.compile(r"(?:\([0-9]{1,2}\)\s*)?([0-9]{4,14})\s+(\S.*)", re.DOTALL)
 
 # Store-name tokens that are legal forms or store formats, not the store.
 _STORE_SUFFIXES = frozenset(
@@ -68,11 +70,28 @@ def _tokens(text: str) -> list[str]:
 def normalize_alias(text: str) -> str:
     """The alias of a receipt line: e.g. ``"1234567 KS ORG EGGS 24CT 8.99 H"`` -> ``"ks org eggs
     24ct"``. Size tokens, units, ``%`` and accents are kept."""
+    return _alias(text, _TAX_FLAGS)
+
+
+def legacy_alias(text: str) -> str:
+    """The alias ``normalize_alias`` gave before ``mrj`` and ``hmrj`` became tax flags: stored
+    aliases and corrections keep that key until ``catalog backfill`` re-normalizes them, so
+    lookups also try it."""
+    return _alias(text, _TAX_FLAGS_BEFORE_0006)
+
+
+def is_trailing_noise(token: str) -> bool:
+    """A token printed after an item that does not name it: a tax flag or a price."""
+    folded = _tokens(token)
+    return len(folded) == 1 and (folded[0] in _TAX_FLAGS or bool(_PRICE.fullmatch(folded[0])))
+
+
+def _alias(text: str, tax_flags: frozenset[str]) -> str:
     tokens = _tokens(text)
     while True:
         if len(tokens) > 1 and _ITEM_CODE.fullmatch(tokens[0]):
             tokens = tokens[1:]
-        elif tokens and (tokens[-1] in _TAX_FLAGS or _PRICE.fullmatch(tokens[-1])):
+        elif tokens and (tokens[-1] in tax_flags or _PRICE.fullmatch(tokens[-1])):
             tokens = tokens[:-1]
         else:
             return " ".join(tokens)

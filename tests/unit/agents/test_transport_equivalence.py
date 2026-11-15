@@ -20,9 +20,17 @@ from structlog.testing import capture_logs
 
 from paper_trail.adapters.mcp.gateway import McpToolGateway
 from paper_trail.application.process_receipt import ProcessOutcome
-from paper_trail.domain.enums import AgentRole, ReceiptStatus, ReviewReason, ReviewStatus
+from paper_trail.domain.enums import (
+    AgentRole,
+    CodeKind,
+    ReceiptStatus,
+    ReviewReason,
+    ReviewStatus,
+)
 from paper_trail.domain.models import JsonValue, Receipt, ReviewItem
+from paper_trail.domain.rules.item_codes import ItemCode
 from paper_trail.domain.trace import TraceKind
+from paper_trail.ports.catalog import CatalogProduct
 from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import (
     TOOL_TRANSPORTS,
@@ -32,14 +40,18 @@ from tests.agent_harness import (
     tool_transport,
 )
 from tests.extractions import (
-    COSTCO_ENRICHMENTS,
+    C1,
     COSTCO_OCR,
+    L3,
+    L4,
+    LOBLAWS,
     extraction,
     inconsistent_extraction,
     printed_extraction,
     printed_fixture,
 )
 from tests.factories import PRINTED_LINKS, receipt_draft
+from tests.fakes.catalog import ORGANIC_TEST_APPLE, TEST_APPLE
 from tests.fakes.llm import ScriptedLlm
 from tests.fakes.tools import MisroutedToolGateway
 from tests.support import require_id
@@ -180,20 +192,52 @@ def review_resolution() -> Observed:
     return observed
 
 
-def vision_and_enrichment() -> Observed:
-    """Slice D: both text attempts fail, the vision attempt reads the photo, then the new
-    products are enriched and the supervisor saves them with ``save_enrichment``."""
+class _PluTable:
+    """The PLU table of the barcode-lookup cases: 3101 "Test Apple", its organic form named
+    "Organic Test Apple" (a ``ProductCatalog``)."""
+
+    def lookup(self, code: ItemCode, store_key: str) -> CatalogProduct | None:
+        if code.kind is not CodeKind.PLU or code.keys != ("3101",):
+            return None
+        return ORGANIC_TEST_APPLE if code.organic else TEST_APPLE
+
+
+def _printed_coded(*raw_texts: str) -> dict[str, Any]:
+    """A Loblaws receipt as the vision model answers it (printed values), 4.99 a line."""
+    items = [
+        {
+            "raw_text": text,
+            "description": text.title(),
+            "quantity": "1",
+            "unit_price": "4.99",
+            "amount": "4.99",
+            "kind": "item",
+        }
+        for text in raw_texts
+    ]
+    total = f"{4.99 * len(raw_texts):.2f}"
+    return printed_extraction(store_name=LOBLAWS, subtotal=None, taxes=[], total=total, items=items)
+
+
+def vision_and_catalog() -> Observed:
+    """Slice D and barcode lookup PC-TC-62: both text attempts fail, the vision attempt reads
+    the photo, the coded lines are matched by code and the PLU-named products are described
+    with ``describe_from_catalog``; no model request after the vision answer."""
     llm = ScriptedLlm(
         inconsistent_extraction(),
         inconsistent_extraction(),
-        printed_extraction(),  # the vision answer: printed values (vision/v1)
-        *COSTCO_ENRICHMENTS,
+        _printed_coded(C1, L3, L4),  # the vision answer: printed values (vision/v1)
     )
     settings = agent_settings(max_vision_attempts=1, enrichment=True)
-    observed = _single_run(build_harness(llm, settings=settings))
+    observed = _single_run(build_harness(llm, settings=settings, catalog=_PluTable()))
     assert observed.receipt.status is ReceiptStatus.COMPLETED
-    assert observed.llm_calls == 6
-    assert observed.tools[-4:] == ["save_matches"] + ["save_enrichment"] * 3
+    assert observed.llm_calls == 3
+    assert observed.tools[-9:] == [
+        *["catalog_lookup", "product_lookup"] * 3,
+        "save_matches",
+        "describe_from_catalog",
+        "describe_from_catalog",
+    ]
     return observed
 
 
@@ -233,7 +277,7 @@ SCENARIOS: dict[str, Callable[[], Observed]] = {
         denied_tool,
         resume,
         review_resolution,
-        vision_and_enrichment,
+        vision_and_catalog,
         discounts,
     )
 }

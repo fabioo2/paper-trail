@@ -1,10 +1,19 @@
 """In-memory repositories (implement ``paper_trail.ports.repositories``) over a ``FakeState``."""
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from paper_trail.domain.enums import AliasSource, CorrectionKind, ProcessingStage, ReceiptStatus
+import structlog
+
+from paper_trail.domain.enums import (
+    AliasSource,
+    CodeScheme,
+    CorrectionKind,
+    ProcessingStage,
+    ReceiptStatus,
+)
 from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import (
     Correction,
@@ -12,6 +21,7 @@ from paper_trail.domain.models import (
     PriceObservation,
     Product,
     ProductAlias,
+    ProductCode,
     Receipt,
     ReceiptSummary,
 )
@@ -23,6 +33,8 @@ from tests.support import require_id
 
 if TYPE_CHECKING:  # agent core slice C; a type only, so the fakes import before it exists
     from paper_trail.domain.models import ItemLink
+
+log = structlog.get_logger("paper_trail.adapters.sqlite.product_code_repository")
 
 
 class FakeReceiptRepository:
@@ -195,6 +207,9 @@ class FakeProductRepository:
                 return self._state.products.get(match.product_id)
         return None
 
+    def alias_at(self, alias: str, store_key: str | None) -> ProductAlias | None:
+        return self._alias(alias, store_key)
+
     def add_alias(self, alias: ProductAlias) -> ProductAlias:
         existing = self._alias(alias.alias, alias.store_key)
         if existing is None:
@@ -227,6 +242,79 @@ class FakeProductRepository:
 def _outranks(existing: AliasSource, incoming: AliasSource) -> bool:
     """A user's correction is never overwritten by a machine-made alias."""
     return existing is AliasSource.USER_CORRECTION and incoming is not AliasSource.USER_CORRECTION
+
+
+class FakeProductCodeRepository:
+    """Logs ``catalog.code_conflict`` like the SQLite repository (same logger name)."""
+
+    def __init__(self, state: FakeState) -> None:
+        self._state = state
+
+    def find(self, scheme: CodeScheme, store_key: str, code: str) -> ProductCode | None:
+        return next(
+            (
+                row
+                for row in self._state.product_codes.values()
+                if (row.scheme, row.store_key, row.code) == (scheme, store_key, code)
+            ),
+            None,
+        )
+
+    def for_product(self, product_id: int) -> tuple[ProductCode, ...]:
+        return tuple(
+            row
+            for _, row in sorted(self._state.product_codes.items())
+            if row.product_id == product_id
+        )
+
+    def list(
+        self, *, store_key: str | None = None, scheme: CodeScheme | None = None
+    ) -> tuple[ProductCode, ...]:
+        return tuple(
+            row
+            for _, row in sorted(self._state.product_codes.items())
+            if (store_key is None or row.store_key == store_key)
+            and (scheme is None or row.scheme is scheme)
+        )
+
+    def upsert(self, code: ProductCode, *, replace: bool) -> ProductCode:
+        if not code.code or (code.scheme is CodeScheme.STORE) != (code.store_key != ""):
+            msg = f"product_codes refuses {code.scheme} {code.store_key!r} {code.code!r}"
+            raise ValueError(msg)
+        if code.product_id not in self._state.products:
+            msg = f"product {code.product_id} does not exist"
+            raise ValueError(msg)
+        existing = self.find(code.scheme, code.store_key, code.code)
+        if existing is None:
+            stored = dataclasses.replace(code, id=self._state.next_id("product_codes"))
+            self._state.product_codes[require_id(stored.id)] = stored
+            return stored
+        same_product = existing.product_id == code.product_id
+        if not replace:
+            if not same_product:
+                log.warning(
+                    "catalog.code_conflict",
+                    scheme=code.scheme.value,
+                    store_key=code.store_key,
+                    code=code.code,
+                    existing_product_id=existing.product_id,
+                    refused_product_id=code.product_id,
+                )
+            return existing
+        if same_product and existing.source is code.source:
+            return existing
+        stored = dataclasses.replace(
+            existing, product_id=code.product_id, source=code.source, updated_at=code.updated_at
+        )
+        self._state.product_codes[require_id(stored.id)] = stored
+        return stored
+
+    def remove(self, scheme: CodeScheme, store_key: str, code: str) -> bool:
+        existing = self.find(scheme, store_key, code)
+        if existing is None:
+            return False
+        del self._state.product_codes[require_id(existing.id)]
+        return True
 
 
 class FakePriceRepository:

@@ -5,11 +5,12 @@ The application's tables (FTS triggers included), the sqlite-vec index and LangG
 embeddings are ``FakeEmbeddings``. Each "process" is a new harness with its own checkpointer
 connection.
 
-Covers AC-D-01 (the vision attempt's checkpoint survives a GPU drop and a new process),
-AC-D-02 / S4-AC-04 (enriched products found by a tag through the real FTS index, their
-vectors replaced in sqlite-vec) and slice C review note 1 (PROCESSING/MATCHING on disk while
-matching waits for the GPU). Masking (AC-A-04) still holds with the vision attempt: no card
-number reaches any column, checkpoint included.
+Covers AC-D-01 (the vision attempt's checkpoint survives a GPU drop and a new process) and
+slice C review note 1 (PROCESSING on disk while matching waits for the GPU; since product codes
+the only embedding in matching is a confirmed new product's, so the receipt holds a PLU line).
+Masking (AC-A-04) still holds with the vision attempt: no card number reaches any column,
+checkpoint included. Enrichment asks no model (barcode-lookup plan R9), so every script holds
+extraction answers only.
 """
 
 import sqlite3
@@ -21,10 +22,8 @@ from sqlalchemy import Engine
 
 from paper_trail.adapters.sqlite.checkpoints import CheckpointSaver
 from paper_trail.application.process_receipt import ProcessingStoppedError
-from paper_trail.domain.enums import Category, MatchSource, ProcessingStage, ReceiptStatus
-from paper_trail.domain.rules.normalization import normalize_alias
+from paper_trail.domain.enums import MatchSource, ProcessingStage, ReceiptStatus
 from paper_trail.ports.llm import LlmUnavailableError
-from paper_trail.ports.search import HitKind
 from tests.agent_harness import (
     VISION_MODEL,
     Harness,
@@ -32,21 +31,21 @@ from tests.agent_harness import (
     build_harness,
 )
 from tests.extractions import (
-    COSTCO_ENRICHMENTS,
     COSTCO_OCR,
+    L3,
     NOW,
     TEST_PAN_DIGITS,
-    extraction,
+    coded_extraction,
     inconsistent_extraction,
     printed_extraction,
 )
+from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.clock import FakeClock
 from tests.fakes.embeddings import FakeEmbeddings
 from tests.fakes.images import FakeImageStore
 from tests.fakes.llm import Reply, ScriptedLlm
 from tests.pans import UUID, card_numbers
 from tests.storage import sqlite_uow_factory, table_values
-from tests.support import require_id
 
 GPU_DOWN = "cannot reach the LLM host llm-host.test:11434"
 
@@ -80,6 +79,7 @@ def process_on(migrated_engine: Engine, database: Path) -> Iterator[StartProcess
             embeddings=FakeEmbeddings(error=LlmUnavailableError(GPU_DOWN))
             if embeddings_down
             else embeddings,
+            catalog=FakeCatalog({"3101": TEST_APPLE}),
         )
 
     yield start
@@ -96,7 +96,7 @@ def test_ac_d_01_a_gpu_drop_at_the_vision_attempt_resumes_in_a_new_process(
     with pytest.raises(ProcessingStoppedError) as stopped:
         first.process_image("faded")
     receipt_id = stopped.value.receipt_id
-    second = process_on(printed_extraction(), *COSTCO_ENRICHMENTS)  # the vision answer
+    second = process_on(printed_extraction())  # the vision answer
 
     resumed = second.resume(receipt_id)
 
@@ -107,29 +107,10 @@ def test_ac_d_01_a_gpu_drop_at_the_vision_attempt_resumes_in_a_new_process(
     assert second.match_sources(receipt_id) == [MatchSource.NEW] * 3
 
 
-def test_s4_ac_04_enriched_products_are_searchable_and_their_vectors_replaced(
-    process_on: StartProcess,
-) -> None:
-    harness = process_on(extraction(), *COSTCO_ENRICHMENTS)
-
-    receipt_id = harness.process_text(COSTCO_OCR).receipt_id
-
-    eggs = require_id(harness.line(receipt_id, 0).product_id)
-    assert harness.product(eggs).category is Category.DAIRY_EGGS
-    with harness.uow_factory(read_only=True) as uow:
-        hits = uow.text_search.search("breakfast", limit=10)
-        enriched = COSTCO_ENRICHMENTS[0]
-        text = normalize_alias(" ".join([enriched["canonical_name"], *enriched["tags"]]))
-        (nearest,) = uow.vectors.nearest(harness.embeddings.vector(text), k=1)
-    assert (HitKind.PRODUCT, eggs) in [(hit.kind, hit.id) for hit in hits]
-    assert nearest.product_id == eggs
-    assert nearest.distance == pytest.approx(0.0, abs=1e-6)
-
-
 def test_review_note_1_a_drop_during_matching_is_processing_on_disk(
     process_on: StartProcess,
 ) -> None:
-    first = process_on(extraction(), embeddings_down=True)
+    first = process_on(coded_extraction([L3]), embeddings_down=True)
     with pytest.raises(ProcessingStoppedError) as stopped:
         first.process_text(COSTCO_OCR)
     receipt_id = stopped.value.receipt_id
@@ -140,7 +121,7 @@ def test_review_note_1_a_drop_during_matching_is_processing_on_disk(
         ReceiptStatus.PROCESSING,
         ProcessingStage.WAITING_FOR_GPU,
     )
-    resumed = process_on(*COSTCO_ENRICHMENTS).resume(receipt_id)
+    resumed = process_on().resume(receipt_id)
     assert resumed.graph is not None
     assert resumed.graph.status is ReceiptStatus.COMPLETED
     done = first.receipt(receipt_id)
@@ -154,7 +135,6 @@ def test_ac_a_04_no_card_number_reaches_the_database_with_vision_and_enrichment(
         inconsistent_extraction(),
         inconsistent_extraction(),
         printed_extraction(),
-        *COSTCO_ENRICHMENTS,
     )
 
     outcome = harness.process_image("with-a-card")

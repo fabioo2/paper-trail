@@ -7,7 +7,8 @@ continues a receipt's thread from its last checkpoint (after a pause, a GPU drop
 
 Exit codes: 0 every receipt completed, is parked for review or paused; 1 the main database is
 not migrated, or ``--resume`` names an unknown receipt or one with nothing to resume (or that
-waits for a review); 2 a usage error; 3 a receipt failed (a file that is not an image
+waits for a review); 2 a usage error, or ``--resume`` of a run saved by an older version past
+matching; 3 a receipt failed (a file that is not an image
 included); 4 the LLM host is unreachable or not configured, which stops the batch (the receipt
 in progress keeps its checkpoint; the output says how to resume it).
 """
@@ -35,6 +36,7 @@ from paper_trail.interfaces.cli.options import Transport, with_transport
 from paper_trail.interfaces.cli.receipts import EXIT_INVALID_INPUT, EXIT_UNAVAILABLE, fail
 from paper_trail.interfaces.cli.runs import llm_calls, open_run, write_trace
 from paper_trail.interfaces.cli.trace_view import ReceiptHeader, Style, header, rows, styler
+from paper_trail.ports.agents import OutdatedCheckpointError
 from paper_trail.ports.trace import RunSummary
 
 EXIT_RECEIPT_FAILED = 3
@@ -49,6 +51,7 @@ class ProcessOptions:
     feedback: bool = True
     vision: bool = True
     examples: bool = True
+    catalog: bool = True  # False: --no-catalog (CATALOG__ENABLED=false for this run)
     prompt_version: str | None = None
     transport: Transport | None = None  # None: settings.tools.transport
     interrupt_after: str | None = None  # a node of the graph (NODE_NAMES)
@@ -107,10 +110,12 @@ def with_flags(settings: Settings, options: ProcessOptions) -> Settings:
     prompts: dict[str, object] = {"examples": settings.prompts.examples and options.examples}
     if options.prompt_version is not None:
         prompts["extraction_version"] = options.prompt_version
+    catalog = {"enabled": settings.catalog.enabled and options.catalog}
     flagged = settings.model_copy(
         update={
             "graph": settings.graph.model_copy(update=graph),
             "prompts": settings.prompts.model_copy(update=prompts),
+            "catalog": settings.catalog.model_copy(update=catalog),
         }
     )
     return with_transport(flagged, options.transport)
@@ -149,6 +154,8 @@ def resume_receipt(settings: Settings, receipt_id: int, options: ProcessOptions)
                 f"--resume {receipt_id}",
                 lambda: agents.process_receipt.resume(receipt_id),
             )
+        except OutdatedCheckpointError as error:
+            fail(EXIT_INVALID_INPUT, str(error))
         except (NotFoundError, ConflictError) as error:
             fail(EXIT_UNAVAILABLE, str(error))
 

@@ -117,3 +117,41 @@ def test_s1_ac_13_deleting_a_line_item_cascades_to_its_observation(
     _delete(migrated_engine, "line_items", graph.line_ids[0])
 
     assert _count(migrated_engine, "SELECT count(*) FROM price_observations") == 0
+
+
+def test_pc_tc_18_deleting_a_product_deletes_its_codes(migrated_engine: Engine) -> None:
+    """Barcode lookup R3: ``product_codes.product_id`` is ``ON DELETE CASCADE``."""
+    with migrated_engine.begin() as connection:
+        ids = [
+            int(
+                connection.execute(
+                    text(
+                        "INSERT INTO products (canonical_name, created_at)"
+                        " VALUES (:name, '2026-11-01T00:00:00+00:00') RETURNING id"
+                    ),
+                    {"name": name},
+                ).scalar_one()
+            )
+            for name in ("Choc", "Kiwi")
+        ]
+        for product_id, scheme, store_key, code in [
+            (ids[0], "store", "costco", "1362394"),
+            (ids[0], "gtin", "", "0060383064877"),
+            (ids[1], "store", "costco", "1543210"),
+        ]:
+            connection.execute(
+                text(
+                    "INSERT INTO product_codes"
+                    " (product_id, scheme, store_key, code, source, created_at, updated_at)"
+                    " VALUES (:product_id, :scheme, :store_key, :code, 'manual',"
+                    " '2026-11-01T00:00:00+00:00', '2026-11-01T00:00:00+00:00')"
+                ),
+                {"product_id": product_id, "scheme": scheme, "store_key": store_key, "code": code},
+            )
+
+    _delete(migrated_engine, "products", ids[0])
+
+    with migrated_engine.connect() as connection:
+        left = connection.execute(text("SELECT product_id, code FROM product_codes")).all()
+        orphans = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+    assert ([tuple(row) for row in left], orphans) == ([(ids[1], "1543210")], [])

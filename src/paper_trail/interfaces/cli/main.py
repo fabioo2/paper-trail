@@ -259,6 +259,16 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
     no_examples: Annotated[
         bool, typer.Option("--no-examples", help="Leave the few-shot examples out of prompts.")
     ] = False,
+    no_catalog: Annotated[
+        bool,
+        typer.Option(
+            "--no-catalog",
+            help=(
+                "Match coded lines by their text, not their code (products made so get no code:"
+                " later runs with the catalog do not find them by it)."
+            ),
+        ),
+    ] = False,
     prompt_version: Annotated[
         str | None,
         typer.Option("--prompt-version", metavar="V", help="Extraction prompt version, e.g. v1."),
@@ -310,6 +320,7 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
         feedback=not no_feedback,
         vision=not no_vision,
         examples=not no_examples,
+        catalog=not no_catalog,
         prompt_version=prompt_version,
         transport=transport,
         interrupt_after=interrupt_after,
@@ -332,6 +343,7 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
         "--no-feedback": no_feedback,
         "--no-vision": no_vision,
         "--no-examples": no_examples,
+        "--no-catalog": no_catalog,
         "--prompt-version": prompt_version is not None,
     }
     if refused := [flag for flag, given in changing.items() if given]:

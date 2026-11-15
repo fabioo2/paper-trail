@@ -18,7 +18,7 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError
 
 from paper_trail.adapters.sqlite.engine import create_engine
-from paper_trail.adapters.sqlite.migrations import alembic_config, current_revision, head_revision
+from paper_trail.adapters.sqlite.migrations import alembic_config, current_revision
 from tests.support import SCHEMA_HEAD
 
 NOW = "2026-11-14T12:00:00.000000+00:00"
@@ -205,9 +205,9 @@ def test_tc_71_72_existing_observations_are_regular_prices_after_the_upgrade(
         lines_before = _rows(connection, "line_items")
         observations_before = _rows(connection, "price_observations")
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0004")
 
-    assert (SCHEMA_HEAD, head_revision(), current_revision(engine)) == ("0005", "0005", "0005")
+    assert current_revision(engine) == "0004"
     with engine.connect() as connection:
         assert _rows(connection, "line_items") == [
             {**row, "applies_to_position": None} for row in lines_before

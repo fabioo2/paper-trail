@@ -1,81 +1,106 @@
-"""Matching with alias and correction memory, through the whole graph (PLAN 6, agent core
-slice C): S4-AC-01, S4-AC-02, S4-AC-03, S4-AC-04 (minus enrichment, slice D), S4-AC-07,
-AC-C-01, AC-C-02 and AC-C-03, with the scripted LLM and fake embeddings.
+"""Matching within a store by code and memory, through the whole graph (agent core slice C,
+barcode-lookup plan PR 1a: R8, R11, A4, A10, owner answer on global codes).
 
 In-process tools; the MCP transport is compared in ``test_transport_equivalence.py`` (S5-AC-04).
 
-Pinned (docs/tests/agent-core-C.md):
+Pinned (docs/tests/barcode-lookup.md, test cases PC-TC-54..60):
 - Graph: ``persist -> match -> commit_matches -> END``. ``match`` is the MATCHING agent and only
-  reads (``product_lookup``, ``product_similarity_search``); ``commit_matches`` is the
-  SUPERVISOR and writes everything with one ``save_matches`` call, also when no line is matched
-  (an empty ``decisions`` list).
-- For each ITEM line, in position order, whose alias (``normalize_alias(raw_text)``) is not
-  generic (``is_generic_alias``): ``product_lookup(alias, store_key)``, where ``store_key`` is
-  ``normalize_store_name(store_name)``; a product -> its source (``memory`` or ``alias``).
-  Otherwise ``product_similarity_search(alias, k=3)``: the nearest candidate at distance
-  <= ``MATCHING__AUTO_LINK_MAX_DISTANCE`` -> ``vector``; else, when the nearest is at most
-  ``MATCHING__REVIEW_MAX_DISTANCE``, one LLM confirmation (``matching/v1``) among the candidates
-  within that distance (the top 3): ``same`` with one of their ids and confidence >=
-  ``GRAPH__MIN_CONFIDENCE`` -> that product, source ``llm``; anything else (``different``, an id
-  that was not offered, low confidence, an answer that never validates) -> a new product, source
-  ``new``, named after the line's ``description``. No candidates -> ``new``. DEPOSIT, FEE and
-  DISCOUNT lines and generic aliases get no tool call and stay unlinked.
-- The confirmation request: ``settings.ollama.text_model``, temperature 0, tag
-  ``matching/v1``; its final user message holds the line's raw text and each offered
-  candidate's id and canonical name inside ``<receipt_data>``. The LLM trace event's agent is
-  MATCHING.
-- The ``save_matches`` TOOL event's ``data["output"]["lines"]`` gives each linked line's
-  ``source`` (the trace shows the source per line). Its summary starts with the count per
-  source, in ``MatchSource`` order (``memory 1 · alias 2``), so the terminal's 42-column result
-  cell shows them; then the new products and prices.
+  reads (``catalog_lookup``, ``product_lookup``); ``commit_matches`` is the SUPERVISOR and writes
+  everything with one ``save_matches`` call, also when no line is matched.
+- Per ITEM line whose alias is not generic and that a review answer did not name: a line with a
+  code (catalog on) -> ``catalog_lookup``; the code's product -> ``catalog``; else a person's
+  PRODUCT_LINK correction for the line at the store (``product_lookup``, source ``memory``),
+  the code attached with source ``correction``; else a reference entry -> a new product named
+  from it; else a new product named ``printed_name(raw_text)``. A MATCHED alias never links a
+  coded line. A line without a code (or any line with the catalog off) -> ``product_lookup``:
+  a correction, then an alias at exactly that store, else a new printed-text product; no
+  ``catalog_lookup``. Barcodes and PLUs name one product at every store; store item numbers
+  and in-store codes belong to their store; no line is linked by text across stores.
+- Zero model requests in ``match``: the scripted LLM holds the extraction replies only (any
+  other request fails the run), no LLM event has agent MATCHING, nothing is embedded except a
+  confirmed new product. ``product_similarity_search`` is never called.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from paper_trail.application.process_receipt import ProcessOutcome
-from paper_trail.domain.enums import AgentRole, MatchSource, ReceiptStatus
-from paper_trail.domain.models import JsonValue
-from paper_trail.domain.trace import TraceEvent, TraceKind
-from paper_trail.ports.unit_of_work import UnitOfWork
-from tests.agent_harness import (
-    TEXT_MODEL,
-    Harness,
-    agent_settings,
-    build_harness,
+from paper_trail.domain.enums import (
+    AgentRole,
+    AliasSource,
+    CodeScheme,
+    CodeSource,
+    CorrectionKind,
+    FieldSource,
+    MatchSource,
+    ReceiptStatus,
 )
+from paper_trail.domain.models import JsonValue, ProductAlias, ProductCode
+from paper_trail.domain.trace import TraceEvent, TraceKind
+from paper_trail.ports.catalog import ProductCatalog
+from paper_trail.ports.unit_of_work import UnitOfWork
+from tests.agent_harness import Harness, agent_settings, build_harness
 from tests.extractions import (
-    COSTCO_ALIASES,
+    C1,
+    C2,
     COSTCO_OCR,
-    EGGS_ALIAS,
     KIRKLAND_EGGS,
     KIRKLAND_EGGS_ALIAS,
+    L1,
+    L3,
+    L5,
+    LOBLAWS,
+    LOBLAWS_KEY,
     STORE_KEY,
     STORE_NAME,
+    U1,
     WALMART,
     WALMART_KEY,
+    coded_extraction,
     extraction,
     inconsistent_extraction,
     match_decision,
     mixed_lines_extraction,
     one_line_extraction,
 )
-from tests.factories import product, receipt_draft
+from tests.factories import CREATED_AT, correction, product, receipt_draft
+from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.embeddings import FakeEmbeddings, at_distance, basis
 from tests.fakes.llm import Reply, ScriptedLlm
 from tests.storage import in_unit
 from tests.support import require_id
 
-LLM = TraceKind.LLM
 TOOL = TraceKind.TOOL
-NEW, ALIAS, VECTOR = MatchSource.NEW, MatchSource.ALIAS, MatchSource.VECTOR
-MATCHING_TAG = "matching/v1"
-DESCRIPTIONS = ["Kirkland Organic Eggs 24 ct", "Kirkland 2% Milk 4 L", "Kirkland Sourdough Bread"]
+NEW, ALIAS, CATALOG, MEMORY = (
+    MatchSource.NEW,
+    MatchSource.ALIAS,
+    MatchSource.CATALOG,
+    MatchSource.MEMORY,
+)
+PRINTED_NAMES = ["KS ORG EGGS 24CT", "KS 2% MILK 4L", "KS SOURDOUGH"]
+COSTCO_ALIASES = ["ks org eggs 24ct", "ks 2% milk 4l", "ks sourdough"]
+L3_ALIAS = "tst apple"
+READ_TOOLS = {"catalog_lookup", "product_lookup"}
+
+type CodeRow = tuple[CodeScheme, str, str, int, CodeSource]
 
 
-def _harness(*replies: Reply, table: dict[str, tuple[float, ...]] | None = None) -> Harness:
-    return build_harness(ScriptedLlm(*replies), embeddings=FakeEmbeddings(table))
+def _harness(
+    *replies: Reply, catalog: ProductCatalog | None = None, catalog_on: bool = True
+) -> Harness:
+    """Only extraction replies: any other model request fails the run."""
+    return build_harness(
+        ScriptedLlm(*replies),
+        settings=agent_settings(catalog=catalog_on),
+        embeddings=FakeEmbeddings(),
+        catalog=catalog,
+    )
+
+
+def _plu() -> FakeCatalog:
+    return FakeCatalog({"3101": TEST_APPLE})
 
 
 def _completed(outcome: ProcessOutcome) -> int:
@@ -85,24 +110,37 @@ def _completed(outcome: ProcessOutcome) -> int:
     return outcome.receipt_id
 
 
+def _run(harness: Harness, *raw_texts: str) -> int:
+    return _completed(harness.process_text("\n".join(raw_texts), f"{len(raw_texts)}.txt"))
+
+
 def _costco(harness: Harness, name: str = "costco.txt") -> int:
     return _completed(harness.process_text(COSTCO_OCR, name))
 
 
-def _walmart_eggs(harness: Harness) -> int:
-    return _completed(harness.process_text(f"{WALMART}\n{KIRKLAND_EGGS} 8.99", "walmart.txt"))
+def _assert_no_model(harness: Harness, *receipt_ids: int) -> None:
+    """PC-TC-58's recipe: one request per receipt (its extraction), none from matching."""
+    assert harness.llm.calls == len(receipt_ids)
+    for receipt_id in receipt_ids:
+        assert not [
+            event
+            for event in harness.events(receipt_id)
+            if event.kind is TraceKind.LLM
+            and event.agent in {AgentRole.MATCHING, AgentRole.ENRICHMENT}
+        ]
+        assert (TOOL, "product_similarity_search") not in harness.steps(receipt_id)
 
 
-def _matching_requests(harness: Harness) -> list[int]:
-    return [i for i, request in enumerate(harness.llm.requests) if request.tag == MATCHING_TAG]
+def _matching_tools(harness: Harness, receipt_id: int) -> list[str]:
+    return [
+        event.name
+        for event in harness.events(receipt_id)
+        if event.kind is TOOL and event.agent is AgentRole.MATCHING
+    ]
 
 
 def _save_matches_event(harness: Harness, receipt_id: int) -> TraceEvent:
-    saves = [
-        event
-        for event in harness.events(receipt_id)
-        if event.kind is TOOL and event.name == "save_matches"
-    ]
+    saves = [e for e in harness.events(receipt_id) if e.kind is TOOL and e.name == "save_matches"]
     return saves[-1]
 
 
@@ -125,233 +163,265 @@ def _int(line: JsonValue, key: str) -> int:
     return value
 
 
-def _seed(harness: Harness, name: str, vector: tuple[float, ...]) -> int:
-    def add(uow: UnitOfWork) -> int:
-        product_id = require_id(uow.products.add(product(canonical_name=name)).id)
-        uow.vectors.upsert(product_id, vector)
-        return product_id
-
-    return in_unit(harness.uow_factory, add)
+def _linked(harness: Harness, receipt_id: int) -> list[tuple[int | None, MatchSource | None]]:
+    return [(item.product_id, item.match_source) for item in harness.receipt(receipt_id).items]
 
 
-# --- S4-AC-04 / AC-C-03 step 1: the first receipt creates products ----------------------------
+def _seed_product(harness: Harness, name: str) -> int:
+    return in_unit(
+        harness.uow_factory,
+        lambda uow: require_id(uow.products.add(product(canonical_name=name)).id),
+    )
+
+
+def _seed_code(harness: Harness, product_id: int, scheme: CodeScheme, code: str) -> None:
+    """A person's code (``catalog add``); store_key "" (a barcode or PLU)."""
+    value = ProductCode(
+        None, product_id, scheme, "", code, CodeSource.MANUAL, CREATED_AT, CREATED_AT
+    )
+    in_unit(harness.uow_factory, lambda uow: uow.product_codes.upsert(value, replace=True))
+
+
+def _seed_correction(harness: Harness, alias: str, store_key: str, product_id: int) -> None:
+    value = correction(
+        kind=CorrectionKind.PRODUCT_LINK,
+        subject=alias,
+        old_value=None,
+        new_value=str(product_id),
+        store_key=store_key,
+    )
+    in_unit(harness.uow_factory, lambda uow: uow.corrections.add(value))
+
+
+def _seed_alias(
+    harness: Harness,
+    product_id: int,
+    alias: str,
+    store_key: str | None,
+    source: AliasSource = AliasSource.MATCHED,
+) -> None:
+    value = ProductAlias(None, product_id, alias, store_key, source, CREATED_AT)
+    in_unit(harness.uow_factory, lambda uow: uow.products.add_alias(value))
+
+
+def _codes(harness: Harness) -> list[CodeRow]:
+    def rows(uow: UnitOfWork) -> list[CodeRow]:
+        return [
+            (row.scheme, row.store_key, row.code, row.product_id, row.source)
+            for row in uow.product_codes.list()
+        ]
+
+    return in_unit(harness.uow_factory, rows)
+
+
+def _printed_text_product(harness: Harness, product_id: int, name: str) -> None:
+    stored = harness.product(product_id)
+    assert (
+        stored.canonical_name,
+        dict(stored.field_sources),
+        stored.brand,
+        stored.size_value,
+        stored.size_unit,
+        stored.category,
+        stored.tags,
+    ) == (name, {"canonical_name": FieldSource.RECEIPT_TEXT}, None, None, None, None, ())
+
+
+# --- a first receipt: one printed-text product per line ----------------------------------------
 
 
 def test_s4_ac_04_a_first_receipt_creates_a_product_per_line() -> None:
+    """PC-TC-54 (e) / 56 for uncoded lines: named by their printed text, never embedded."""
     harness = _harness(extraction())
 
     receipt_id = _costco(harness)
 
-    stored = harness.receipt(receipt_id)
     assert harness.match_sources(receipt_id) == [NEW, NEW, NEW]
-    product_ids = [require_id(item.product_id) for item in stored.items]
+    product_ids = [require_id(item.product_id) for item in harness.receipt(receipt_id).items]
     assert len(set(product_ids)) == 3
-    assert [harness.product(pid).canonical_name for pid in product_ids] == DESCRIPTIONS
-    assert all(harness.has_vector(pid) for pid in product_ids)
-    assert harness.embeddings.requests == [
-        (EGGS_ALIAS,),
-        (COSTCO_ALIASES[1],),
-        (COSTCO_ALIASES[2],),
-        COSTCO_ALIASES,
-    ]
-    assert _matching_requests(harness) == []
+    for pid, name in zip(product_ids, PRINTED_NAMES, strict=True):
+        _printed_text_product(harness, pid, name)
+        assert not harness.has_vector(pid)
     for pid, alias in zip(product_ids, COSTCO_ALIASES, strict=True):
         assert harness.find_by_alias(alias, STORE_KEY) == harness.product(pid)
         (price,) = harness.price_history(pid)
         assert (price.receipt_id, price.store_key) == (receipt_id, STORE_KEY)
-
-
-def test_the_graph_runs_match_then_commit_matches() -> None:
-    harness = _harness(extraction())
-
-    receipt_id = _costco(harness)
-
+    assert harness.embeddings.calls == 0
+    assert _codes(harness) == []
     assert harness.node_runs(receipt_id)[-3:] == ["persist", "match", "commit_matches"]
-    lookup, search = (TOOL, "product_lookup"), (TOOL, "product_similarity_search")
-    assert harness.steps(receipt_id)[-7:] == [
-        lookup,
-        search,
-        lookup,
-        search,
-        lookup,
-        search,
-        (TOOL, "save_matches"),
-    ]
+    tools = [name for kind, name in harness.steps(receipt_id) if kind is TOOL]
+    assert tools[-4:] == ["product_lookup"] * 3 + ["save_matches"]
+    _assert_no_model(harness, receipt_id)
 
 
-def test_s4_ac_04_a_line_far_from_every_product_is_new() -> None:
-    """Above REVIEW_MAX_DISTANCE: a new product, no confirmation, its vector stored."""
-    harness = _harness(one_line_extraction("KS ORG EGGS 24CT"), table={EGGS_ALIAS: basis(0)})
-    far = _seed(harness, "Something else", at_distance(0.6))
-
-    receipt_id = _completed(harness.process_text("KS ORG EGGS 24CT 8.99"))
-
-    (line,) = harness.receipt(receipt_id).items
-    assert line.match_source is NEW
-    assert line.product_id not in (None, far)
-    assert harness.has_vector(require_id(line.product_id))
-    assert _matching_requests(harness) == []
+# --- PC-TC-54: a coded line, in the order of A4 -------------------------------------------------
 
 
-# --- S4-AC-01 and AC-C-03 step 2: the same text at the same store hits the alias ---------------
+@dataclass(frozen=True)
+class CodedCase:
+    owned: bool  # the code names product "A"
+    corrected: bool  # a person's PRODUCT_LINK correction names product "B"
+    matched_alias: bool  # a MATCHED alias at the store names product "M"
+    entry: bool  # the PLU catalog knows 3101
+    product: str | None  # "A", "B", or None for a new product
+    new_name: str | None
+    source: MatchSource
+    tools: tuple[str, ...]
+    code: tuple[str, CodeSource]  # (the product the code names, its source)
 
 
-def test_s4_ac_01_an_alias_hit_calls_neither_embeddings_nor_the_model() -> None:
-    harness = _harness(extraction(), extraction())
-    first = _costco(harness, "a.txt")
-    embeddings_before = harness.embeddings.calls
-
-    second = _costco(harness, "b.txt")
-
-    assert harness.match_sources(second) == [ALIAS, ALIAS, ALIAS]
-    assert [item.product_id for item in harness.receipt(second).items] == [
-        item.product_id for item in harness.receipt(first).items
-    ]
-    assert harness.embeddings.calls == embeddings_before
-    assert _matching_requests(harness) == []
-    assert harness.llm.calls == 2  # the two extractions only
-    steps = harness.steps(second)
-    assert (TOOL, "product_similarity_search") not in steps
-    assert steps[-4:] == [(TOOL, "product_lookup")] * 3 + [(TOOL, "save_matches")]
-    for item in harness.receipt(second).items:
-        assert len(harness.price_history(require_id(item.product_id))) == 2
-
-
-# --- S4-AC-02: a second store's spelling links through the vector index ------------------------
-
-
-def test_s4_ac_02_close_embeddings_link_two_stores_to_one_product() -> None:
-    table = {EGGS_ALIAS: basis(0), KIRKLAND_EGGS_ALIAS: at_distance(0.05)}
-    walmart_reply = one_line_extraction(KIRKLAND_EGGS, store_name=WALMART)
-    harness = _harness(extraction(), walmart_reply, table=table)
-    costco = _costco(harness)
-    eggs = require_id(harness.line(costco, 0).product_id)
-
-    walmart = _walmart_eggs(harness)
-
-    (line,) = harness.receipt(walmart).items
-    assert (line.product_id, line.match_source) == (eggs, VECTOR)
-    assert {price.store_key for price in harness.price_history(eggs)} == {STORE_KEY, WALMART_KEY}
-    assert harness.find_by_alias(KIRKLAND_EGGS_ALIAS, WALMART_KEY) == harness.product(eggs)
-    assert _matching_requests(harness) == []
-    assert _traced_sources(_save_matches_event(harness, walmart)) == {0: "vector"}
+LOOKUPS = ("catalog_lookup", "product_lookup")
+CODED_CASES = {
+    "a-code-is-ours": CodedCase(
+        True, False, False, True, "A", None, CATALOG, ("catalog_lookup",), ("A", CodeSource.MANUAL)
+    ),
+    "b-correction": CodedCase(
+        False, True, False, True, "B", None, MEMORY, LOOKUPS, ("B", CodeSource.CORRECTION)
+    ),
+    "c-code-before-correction": CodedCase(
+        True, True, False, True, "A", None, CATALOG, ("catalog_lookup",), ("A", CodeSource.MANUAL)
+    ),
+    "d-plu-entry": CodedCase(
+        False, False, False, True, None, "Test Apple", NEW, LOOKUPS, ("new", CodeSource.PLU)
+    ),
+    "e-nothing": CodedCase(
+        False, False, False, False, None, "TST APPLE", NEW, LOOKUPS, ("new", CodeSource.RECEIPT)
+    ),
+    "f-matched-alias-is-not-a-correction": CodedCase(
+        False, False, True, False, None, "TST APPLE", NEW, LOOKUPS, ("new", CodeSource.RECEIPT)
+    ),
+}  # fmt: skip
 
 
-# --- S4-AC-03: the confirmation band ------------------------------------------------------------
+@pytest.mark.parametrize("case", CODED_CASES.values(), ids=CODED_CASES.keys())
+def test_pc_tc_54_a_coded_line_follows_code_correction_entry_then_printed_text(
+    case: CodedCase,
+) -> None:
+    harness = _harness(coded_extraction([L3]), catalog=_plu() if case.entry else FakeCatalog())
+    seeded = {name: _seed_product(harness, name) for name in ("A", "B", "M")}
+    if case.owned:
+        _seed_code(harness, seeded["A"], CodeScheme.PLU, "3101")
+    if case.corrected:
+        _seed_correction(harness, L3_ALIAS, LOBLAWS_KEY, seeded["B"])
+    if case.matched_alias:
+        _seed_alias(harness, seeded["M"], L3_ALIAS, LOBLAWS_KEY)
+
+    receipt_id = _run(harness, L3)
+
+    ((linked, source),) = _linked(harness, receipt_id)
+    if case.product is None:
+        assert linked not in seeded.values()
+        assert harness.product(require_id(linked)).canonical_name == case.new_name
+        expected_owner = require_id(linked)
+    else:
+        assert linked == seeded[case.product]
+        expected_owner = seeded[case.code[0]]
+    assert source is case.source
+    assert tuple(_matching_tools(harness, receipt_id)) == case.tools
+    assert _codes(harness) == [(CodeScheme.PLU, "", "3101", expected_owner, case.code[1])]
+    _assert_no_model(harness, receipt_id)
 
 
-def _in_band(harness: Harness) -> list[int]:
-    """Four products between the thresholds of the Walmart eggs (basis(0)), nearest first."""
-    return [
-        _seed(harness, f"Candidate {index}", at_distance(distance, toward=index))
-        for index, distance in enumerate((0.18, 0.20, 0.22, 0.25), start=1)
-    ]
+# --- PC-TC-56: an uncoded line: correction, then the store's alias, nothing else ---------------
 
 
-def _band_harness(answer: Reply) -> Harness:
-    return _harness(
-        one_line_extraction(KIRKLAND_EGGS, store_name=WALMART),
-        answer,
-        table={KIRKLAND_EGGS_ALIAS: basis(0)},
-    )
-
-
-def test_s4_ac_03_same_links_after_exactly_one_confirmation_with_the_top_candidates() -> None:
-    harness = _band_harness(match_decision("same", 2))
-    candidates = _in_band(harness)
-    assert candidates == [1, 2, 3, 4]  # a fresh database numbers products from 1
-
-    receipt_id = _walmart_eggs(harness)
-
-    (line,) = harness.receipt(receipt_id).items
-    assert (line.product_id, line.match_source) == (2, MatchSource.LLM)
-    (index,) = _matching_requests(harness)
-    request = harness.llm.requests[index]
-    assert request.model == TEXT_MODEL
-    assert request.temperature == 0.0
-    final = harness.llm.last_user_message(index)
-    data = final.split("<receipt_data>", 1)[1].split("</receipt_data>", 1)[0]
-    assert KIRKLAND_EGGS in data
-    for offered in (1, 2, 3):
-        assert str(offered) in data
-        assert f"Candidate {offered}" in data
-    assert "Candidate 4" not in final
-    (event,) = [e for e in harness.events(receipt_id) if e.kind is LLM and e.name == MATCHING_TAG]
-    assert event.agent is AgentRole.MATCHING
-    assert _traced_sources(_save_matches_event(harness, receipt_id)) == {0: "llm"}
+UNCODED_CASES = {
+    "correction-at-the-store": ("correction", STORE_KEY, MEMORY),
+    "alias-at-the-store": ("alias", STORE_KEY, ALIAS),
+    "alias-only-at-another-store": ("alias", WALMART_KEY, NEW),
+    "global-alias-only": ("alias", None, NEW),
+    "nothing": (None, None, NEW),
+}
 
 
 @pytest.mark.parametrize(
-    "answer",
-    [
-        match_decision("different", None),
-        match_decision("same", 4),  # Candidate 4 was not offered
-        match_decision("same", 1, confidence=0.3),  # below GRAPH__MIN_CONFIDENCE
-        "this is not JSON",
-    ],
-    ids=["different", "not-offered", "low-confidence", "unparsed"],
+    ("memory", "store_key", "source"), UNCODED_CASES.values(), ids=UNCODED_CASES.keys()
 )
-def test_s4_ac_03_anything_but_a_confident_same_creates_a_new_product(answer: Reply) -> None:
-    harness = _band_harness(answer)
-    candidates = _in_band(harness)
+def test_pc_tc_56_an_uncoded_line_uses_the_stores_memory_only(
+    memory: str | None, store_key: str | None, source: MatchSource
+) -> None:
+    harness = _harness(one_line_extraction(U1))
+    known = _seed_product(harness, "Known Eggs")
+    if memory == "correction":
+        _seed_correction(harness, COSTCO_ALIASES[0], STORE_KEY, known)
+    elif memory == "alias":
+        _seed_alias(harness, known, COSTCO_ALIASES[0], store_key)
 
-    receipt_id = _walmart_eggs(harness)
+    receipt_id = _run(harness, U1)
 
-    (line,) = harness.receipt(receipt_id).items
-    assert line.match_source is NEW
-    assert line.product_id not in candidates
-    assert len(_matching_requests(harness)) == 1  # one confirmation, never retried
-    assert harness.product(require_id(line.product_id)).canonical_name == "Kirkland Organic Eggs 24"
-
-
-def test_a_candidate_within_auto_link_wins_without_asking() -> None:
-    harness = _harness(
-        one_line_extraction(KIRKLAND_EGGS, store_name=WALMART),
-        table={KIRKLAND_EGGS_ALIAS: basis(0)},
-    )
-    close = _seed(harness, "Close", at_distance(0.1))
-    _in_band(harness)
-
-    receipt_id = _walmart_eggs(harness)
-
-    assert harness.line(receipt_id, 0).product_id == close
-    assert _matching_requests(harness) == []
+    ((linked, linked_source),) = _linked(harness, receipt_id)
+    assert linked_source is source
+    if source is NEW:
+        assert linked != known
+        _printed_text_product(harness, require_id(linked), U1)
+    else:
+        assert linked == known
+    assert _matching_tools(harness, receipt_id) == ["product_lookup"]
+    assert _codes(harness) == []
+    _assert_no_model(harness, receipt_id)
 
 
-def test_thresholds_come_from_settings() -> None:
-    """MATCHING__AUTO_LINK_MAX_DISTANCE = 0.3: the 0.25 candidate links without a question."""
-    harness = build_harness(
-        ScriptedLlm(one_line_extraction(KIRKLAND_EGGS, store_name=WALMART)),
-        settings=agent_settings(auto_link_max_distance=0.3, review_max_distance=0.4),
-        embeddings=FakeEmbeddings({KIRKLAND_EGGS_ALIAS: basis(0)}),
-    )
-    candidate = _seed(harness, "Candidate", at_distance(0.25))
+def test_pc_tc_56_an_alias_under_the_old_tax_flags_is_still_found() -> None:
+    """A8: ``tst apple mrj`` is how the line was normalized before ``mrj`` became a tax flag."""
+    harness = _harness(one_line_extraction("TST APPLE MRJ", store_name=LOBLAWS))
+    known = _seed_product(harness, "Test Apple")
+    _seed_alias(harness, known, "tst apple mrj", LOBLAWS_KEY)
 
-    receipt_id = _walmart_eggs(harness)
+    receipt_id = _run(harness, "TST APPLE MRJ")
 
-    assert harness.line(receipt_id, 0).product_id == candidate
-    assert harness.line(receipt_id, 0).match_source is VECTOR
+    assert _linked(harness, receipt_id) == [(known, ALIAS)]
+    _assert_no_model(harness, receipt_id)
 
 
-# --- S4-AC-07 and the lines that are never matched ----------------------------------------------
+# --- PC-TC-57: lines that are never matched ------------------------------------------------------
 
 
-def test_s4_ac_07_every_linked_line_has_its_source_and_others_are_never_matched() -> None:
-    harness = _harness(mixed_lines_extraction())
+def _coded_mixed_extraction() -> dict[str, Any]:
+    """C1, then a deposit, a fee and a discount that print codes, a generic coded line and a
+    generic uncoded one. 16.99 + 0.10 + 0.25 - 4.00 + 3.50 + 2.00 = 18.84."""
 
-    receipt_id = _completed(harness.process_text("mixed"))
+    def line(raw_text: str, kind: str, cents: int) -> dict[str, Any]:
+        unit = cents if kind == "item" else None
+        return {
+            "raw_text": raw_text,
+            "description": raw_text.title(),
+            "quantity": "1",
+            "unit_price_cents": unit,
+            "line_total_cents": cents,
+            "kind": kind,
+        }
+
+    value = one_line_extraction(C1, cents=1699)
+    value["items"] += [
+        line("1281 BOTTLE DEPOSIT", "deposit", 10),
+        line("1234567 ECO FEE", "fee", 25),
+        line("0000000001 / 1362394", "discount", -400),
+        line("1543210 PRODUCE", "item", 350),
+        line("PRODUCE", "item", 200),
+    ]
+    value["total_cents"] = 1884
+    return value
+
+
+def test_pc_tc_57_deposits_fees_discounts_and_generic_lines_are_never_matched() -> None:
+    harness = _harness(_coded_mixed_extraction())
+
+    receipt_id = _run(harness, "mixed")
 
     items = harness.receipt(receipt_id).items
-    assert [(item.product_id is not None, item.match_source) for item in items] == [
-        (True, NEW),
-        (False, None),  # DEPOSIT
-        (False, None),  # DISCOUNT
-        (False, None),  # "PRODUCE": a generic alias
+    choc = require_id(items[0].product_id)
+    assert _linked(harness, receipt_id) == [
+        (choc, NEW),
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
     ]
-    assert harness.embeddings.texts == [EGGS_ALIAS, EGGS_ALIAS]  # search, then the new vector
-    tools = [name for kind, name in harness.steps(receipt_id) if kind is TOOL]
-    assert tools.count("product_lookup") == 1
-    assert harness.product_ids() == [require_id(items[0].product_id)]
+    assert _matching_tools(harness, receipt_id) == ["catalog_lookup", "product_lookup"]
+    assert _codes(harness) == [(CodeScheme.STORE, STORE_KEY, "1362394", choc, CodeSource.RECEIPT)]
+    assert harness.product_ids() == [choc]
+    _assert_no_model(harness, receipt_id)
 
 
 def test_a_receipt_with_nothing_to_match_still_commits_once() -> None:
@@ -368,73 +438,153 @@ def test_a_receipt_with_nothing_to_match_still_commits_once() -> None:
     assert harness.product_ids() == []
 
 
-# --- AC-C-02: the matching agent only reads -----------------------------------------------------
+# --- PC-TC-58: no model and no vectors in match, even where matching/v1 asked -------------------
 
 
-def test_ac_c_02_the_matching_agent_has_read_tools_only() -> None:
-    harness = _harness(extraction())
-
-    receipt_id = _costco(harness)
-
-    assert harness.registry.for_role(AgentRole.MATCHING).names == (
-        "product_lookup",
-        "product_similarity_search",
+def test_pc_tc_58_a_line_near_a_product_is_new_without_asking() -> None:
+    """The state where ``matching/v1`` asked for a confirmation: a product at review distance
+    and a confirmation reply queued. It stays unconsumed."""
+    harness = build_harness(
+        ScriptedLlm(
+            one_line_extraction(KIRKLAND_EGGS, store_name=WALMART), match_decision("same", 1)
+        ),
+        embeddings=FakeEmbeddings({KIRKLAND_EGGS_ALIAS: basis(0)}),
     )
-    events = harness.events(receipt_id)
-    matching_tools = {e.name for e in events if e.kind is TOOL and e.agent is AgentRole.MATCHING}
-    assert matching_tools == {"product_lookup", "product_similarity_search"}
-    (commit,) = [e for e in events if e.kind is TOOL and e.name == "save_matches"]
-    assert commit.agent is AgentRole.SUPERVISOR
-    nodes = {(e.name, e.agent) for e in events if e.kind is TraceKind.NODE}
-    assert ("match", AgentRole.MATCHING) in nodes
-    assert ("commit_matches", AgentRole.SUPERVISOR) in nodes
+
+    def near(uow: UnitOfWork) -> int:
+        product_id = require_id(uow.products.add(product(canonical_name="Near")).id)
+        uow.vectors.upsert(product_id, at_distance(0.2))
+        return product_id
+
+    candidate = in_unit(harness.uow_factory, near)
+
+    receipt_id = _run(harness, KIRKLAND_EGGS)
+
+    ((linked, source),) = _linked(harness, receipt_id)
+    assert (source, linked != candidate) == (NEW, True)
+    assert harness.embeddings.calls == 0
+    assert set(_matching_tools(harness, receipt_id)) <= READ_TOOLS
+    _assert_no_model(harness, receipt_id)
 
 
-# --- AC-C-03: the memory demo path (experiment E2) ----------------------------------------------
+# --- PC-TC-59: later receipts link by code ------------------------------------------------------
+
+
+def test_pc_tc_59_store_codes_link_within_their_store_only() -> None:
+    harness = _harness(
+        coded_extraction([C1, C2], store_name=STORE_NAME),
+        coded_extraction(
+            ["1362394 CHOC PISTACHIO 12PK", "1543210 GOLD KIWI"], store_name=STORE_NAME
+        ),
+        coded_extraction(["1362394 CHOC PISTACH"]),
+        coded_extraction([L5]),
+        coded_extraction([L5], store_name=WALMART),
+    )
+
+    first = _run(harness, C1, C2)
+    second = _run(harness, "1362394 CHOC PISTACHIO 12PK", "1543210 GOLD KIWI")
+    loblaws = _run(harness, "1362394 CHOC PISTACH")
+    in_store = _run(harness, L5)
+    walmart = _run(harness, L5)
+
+    choc, kiwi = (require_id(item.product_id) for item in harness.receipt(first).items)
+    assert harness.match_sources(first) == [NEW, NEW]
+    assert _linked(harness, second) == [(choc, CATALOG), (kiwi, CATALOG)]
+    ((loblaws_choc, loblaws_source),) = _linked(harness, loblaws)
+    ((chicken, _),) = _linked(harness, in_store)
+    ((walmart_chicken, walmart_source),) = _linked(harness, walmart)
+    assert (loblaws_source, walmart_source) == (NEW, NEW)
+    assert len({choc, kiwi, require_id(loblaws_choc), chicken, walmart_chicken}) == 5
+    assert _codes(harness) == [
+        (CodeScheme.STORE, STORE_KEY, "1362394", choc, CodeSource.RECEIPT),
+        (CodeScheme.STORE, STORE_KEY, "1543210", kiwi, CodeSource.RECEIPT),
+        (CodeScheme.STORE, LOBLAWS_KEY, "1362394", require_id(loblaws_choc), CodeSource.RECEIPT),
+        (CodeScheme.STORE, LOBLAWS_KEY, "2100580", chicken, CodeSource.RECEIPT),
+        (CodeScheme.STORE, WALMART_KEY, "2100580", walmart_chicken, CodeSource.RECEIPT),
+    ]
+    _assert_no_model(harness, first, second, loblaws, in_store, walmart)
+
+
+@pytest.mark.parametrize("raw_text", [L1, L3], ids=["gtin", "plu"])
+def test_pc_tc_59_barcodes_and_plus_name_one_product_at_every_store(raw_text: str) -> None:
+    harness = _harness(
+        coded_extraction([raw_text]),
+        coded_extraction([raw_text], store_name=WALMART, purchased_on="11/03/2026"),
+        catalog=_plu(),
+    )
+
+    loblaws = _run(harness, raw_text)
+    walmart = _run(harness, raw_text)
+
+    ((shared, first_source),) = _linked(harness, loblaws)
+    assert first_source is NEW
+    assert _linked(harness, walmart) == [(shared, CATALOG)]
+    prices = harness.price_history(require_id(shared))
+    assert sorted((price.store_key, price.receipt_id) for price in prices) == sorted(
+        [(LOBLAWS_KEY, loblaws), (WALMART_KEY, walmart)]
+    )
+    _assert_no_model(harness, loblaws, walmart)
+
+
+# --- PC-TC-60: CATALOG__ENABLED=false ----------------------------------------------------------
+
+
+def test_pc_tc_60_with_the_catalog_off_coded_lines_take_the_uncoded_path() -> None:
+    harness = _harness(one_line_extraction(C1), one_line_extraction(C1), catalog_on=False)
+
+    first = _run(harness, C1)
+    second = _run(harness, C1)
+
+    ((choc, source),) = _linked(harness, first)
+    assert source is NEW
+    _printed_text_product(harness, require_id(choc), "CHOC PISTACH")
+    assert harness.find_by_alias("choc pistach", STORE_KEY) == harness.product(require_id(choc))
+    assert _linked(harness, second) == [(choc, ALIAS)]
+    for receipt_id in (first, second):
+        assert "catalog_lookup" not in _matching_tools(harness, receipt_id)
+    assert _codes(harness) == []
+    _assert_no_model(harness, first, second)
+
+
+# --- S4-AC-01 and AC-C-03: memory for uncoded lines ----------------------------------------------
 
 
 def test_ac_c_03_new_then_alias_then_memory_after_a_correction() -> None:
-    """Receipt A creates products; receipt B (same store, same text) hits the aliases with no
-    embedding and no matching LLM call; after `items correct`, reprocessing B finds the
-    corrected product through correction memory, and the trace says so per line."""
+    """Receipt A creates products; receipt B (same store, same text) hits the aliases; after
+    `items correct`, reprocessing B finds the corrected product through correction memory, and
+    the trace says so per line."""
     harness = _harness(extraction(), extraction(), extraction())
     first = _costco(harness, "a.txt")
     second = _completed(harness.process_image("b"))  # FakeOcr reads the same Costco text
     assert harness.match_sources(second) == [ALIAS, ALIAS, ALIAS]
-    assert harness.embeddings.calls == 4  # all from receipt A
     old_eggs = harness.line(first, 0).product_id
 
     corrected = harness.correct(second, 0, new_product_name="Kirkland Organic Eggs 24")
-    events_before = len(harness.events(second))
-    embeddings_before = harness.embeddings.calls
     again = harness.process_image("b", reprocess=True)
 
     assert _completed(again) == second
     assert again.duplicate is False
     items = harness.receipt(second).items
-    assert (items[0].product_id, items[0].match_source) == (
-        corrected.product_id,
-        MatchSource.MEMORY,
-    )
+    assert (items[0].product_id, items[0].match_source) == (corrected.product_id, MEMORY)
     assert corrected.product_id != old_eggs
     assert harness.match_sources(second)[1:] == [ALIAS, ALIAS]
-    assert harness.embeddings.calls == embeddings_before
-    rerun = harness.events(second)[events_before:]
-    assert not any(e.kind is TOOL and e.name == "product_similarity_search" for e in rerun)
+    assert harness.embeddings.calls == 0
     event = _save_matches_event(harness, second)
     assert _traced_sources(event) == {0: "memory", 1: "alias", 2: "alias"}
     assert "memory 1" in event.summary
     assert "alias 2" in event.summary
+    assert harness.llm.calls == 3
+    assert (TOOL, "product_similarity_search") not in harness.steps(second)
 
 
-# --- slice C review notes 2 and 3 (pinned in docs/tests/agent-core-D.md) ----------------------
+# --- slice C review note 2 (pinned in docs/tests/agent-core-D.md) ------------------------------
 
 
 def test_review_note_2_a_line_a_person_linked_in_the_review_is_not_matched_again() -> None:
     """A review answer names the eggs' product (``DraftPayload.product_names``) and ``persist``
     links the line to it. ``match`` must leave that line alone: correction memory would point
-    it elsewhere, and a person's answer outranks memory, aliases and vectors. The line gets no
-    tool call and no decision; the other lines are matched as usual."""
+    it elsewhere, and a person's answer outranks memory and aliases. The line gets no tool call
+    and no decision; the other lines are matched as usual."""
     harness = build_harness(
         ScriptedLlm(extraction(), inconsistent_extraction()),
         settings=agent_settings(max_text_attempts=1),
@@ -453,22 +603,51 @@ def test_review_note_2_a_line_a_person_linked_in_the_review_is_not_matched_again
     linked = harness.product(require_id(eggs.product_id))
     assert linked.canonical_name == "Person's Eggs"
     assert eggs.product_id != remembered.product_id
-    assert eggs.match_source is not MatchSource.MEMORY
+    assert eggs.match_source is not MEMORY
     assert milk.match_source is ALIAS
     lookups = [e for e in harness.events(second) if e.kind is TOOL and e.name == "product_lookup"]
     assert len(lookups) == 1  # the milk only
     assert _traced_sources(_save_matches_event(harness, second)) == {1: "alias"}
 
 
-def test_review_note_3_an_answer_about_another_line_is_not_a_confirmation() -> None:
-    """The model answers "same" with an offered id and full confidence, but for line 5: the
-    receipt line asked about is 0, so the answer does not count and the line is new."""
-    harness = _band_harness(match_decision("same", 2, confidence=1.0, line_position=5))
-    _in_band(harness)
+# --- review round 1: lines as they are stored -----------------------------------------------
 
-    walmart = _walmart_eggs(harness)
+MASKED_GTIN_LINE = "644200050535 2 PK SOAP"  # a valid UPC-A; "644200050535 2" passes Luhn
 
-    (line,) = harness.receipt(walmart).items
-    assert line.match_source is NEW
-    assert line.product_id not in {1, 2, 3, 4}
-    assert len(_matching_requests(harness)) == 1  # asked once, not again
+
+def test_a_coded_line_that_masking_hides_is_matched_as_an_uncoded_line() -> None:
+    """Fable P1: the line is stored masked, so it has no code: it takes the uncoded path (no
+    code row, a MATCHED alias), and the next receipt finds it by that alias."""
+    harness = _harness(coded_extraction([MASKED_GTIN_LINE]), coded_extraction([MASKED_GTIN_LINE]))
+
+    first = _run(harness, MASKED_GTIN_LINE)
+    second = _run(harness, MASKED_GTIN_LINE)
+
+    (soap,) = harness.product_ids()
+    _printed_text_product(harness, soap, "*********535 2 PK SOAP")
+    assert _linked(harness, first) == [(soap, NEW)]
+    assert _linked(harness, second) == [(soap, ALIAS)]
+    assert _matching_tools(harness, first) == ["product_lookup"]
+    assert _codes(harness) == []
+    _assert_no_model(harness, first, second)
+
+
+def test_a_store_code_on_a_receipt_without_a_store_is_matched_as_an_uncoded_line() -> None:
+    """Fable P2: a store's own code names nothing without a store, so the line goes the uncoded
+    way and no code row is written (the CHECK would refuse one)."""
+    reply = coded_extraction([L5], store_name="")
+    harness = _harness(reply, reply)
+    parked = harness.process_text(L5)
+    assert parked.graph is not None
+    assert parked.graph.status is ReceiptStatus.NEEDS_REVIEW
+    review_id = require_id(parked.graph.review_id)
+
+    receipt_id = require_id(
+        harness.resolve(review_id, force=True, reason="no store on the paper").id
+    )
+
+    assert harness.receipt(receipt_id).status is ReceiptStatus.COMPLETED
+    (chicken,) = harness.product_ids()
+    assert _linked(harness, receipt_id) == [(chicken, NEW)]
+    assert "catalog_lookup" not in _matching_tools(harness, receipt_id)
+    assert _codes(harness) == []

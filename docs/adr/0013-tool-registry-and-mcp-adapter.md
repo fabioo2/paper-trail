@@ -69,3 +69,10 @@ The proposal serves tools through an MCP server and requires that each agent can
   (default 330 s; 240 s until the 2026-11-14 reliability fix). `McpToolGateway` names the scheme's default port (80 or 443) in its
   messages, and reads a foreign server's text-only result as one JSON object (anything else is
   a `ToolOutputError`, since the server did answer).
+
+## Amendment (2026-11-15): product codes (ADR-0018)
+
+- `catalog_lookup` (matching, enrichment; read-only): `{raw_text, store_key}` -> `{code, product, entry}`: the leading code as parsed (`kind`, `printed`, `keys`, `scheme`, `identity`), our product when the code is ours (with its `field_sources`), and the entry of the first catalog that knows it (the store catalog, then the PLU table). A line whose code is no product code asks no catalog.
+- `describe_from_catalog` (supervisor): `{product_id, fields, sources, alias, store_key}` writes only the fields that come with a source, never over a `person` field, applies a person's category correction for the line at that store, masks free text and never embeds.
+- `save_enrichment` is removed from the registry. `save_matches` decisions gain `code` (the line's code identity), `name_source` and `catalog` (the entry, carried for the enrichment agent); it re-resolves each coded decision against `product_codes` inside its transaction and embeds only confirmed new products.
+- `product_lookup` matches only at the given store (a correction, then an exact alias there, under the alias and its pre-0006 form); `product_similarity_search` stays registered but is not called until PR 3.

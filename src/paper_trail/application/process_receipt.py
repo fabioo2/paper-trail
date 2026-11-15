@@ -18,7 +18,12 @@ from paper_trail.domain.models import Receipt, require_id
 from paper_trail.domain.money import DEFAULT_CURRENCY
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.trace import TraceKind
-from paper_trail.ports.agents import GraphOutcome, NothingToResumeError, ReceiptGraphRunner
+from paper_trail.ports.agents import (
+    GraphOutcome,
+    NothingToResumeError,
+    OutdatedCheckpointError,
+    ReceiptGraphRunner,
+)
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.images import ImageStore, StoredImage
 from paper_trail.ports.llm import LlmUnavailableError
@@ -118,7 +123,8 @@ class ProcessReceiptFile:
         """Continue the receipt's thread from its last checkpoint (after a pause, a GPU drop
         or a crash); failures as for ``__call__``. NotFoundError for an unknown receipt;
         ConflictError when it waits for a review (``review resolve`` answers that) or has
-        nothing to resume."""
+        nothing to resume. A receipt marked FAILED by a crash after its matches were saved is
+        COMPLETED again when the resumed run finishes."""
         with self._uow_factory(read_only=True) as uow:
             receipt = uow.receipts.get(receipt_id)
             review = uow.reviews.find_open(receipt_id)
@@ -131,7 +137,10 @@ class ProcessReceiptFile:
                 f" answer it with `paper-trail review resolve {review.id}`"
             )
             raise ConflictError(msg)
-        return self._run(receipt_id, lambda: self._runner.resume(receipt_id))
+        outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
+        if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
+            self._completed(receipt_id)
+        return outcome
 
     def _reprocess(
         self, receipt: Receipt, source_name: str, interrupt_after: str | None
@@ -162,7 +171,7 @@ class ProcessReceiptFile:
     def _run(self, receipt_id: int, run: Callable[[], GraphOutcome]) -> ProcessOutcome:
         try:
             graph = run()
-        except NothingToResumeError:
+        except (NothingToResumeError, OutdatedCheckpointError):
             raise
         except LlmUnavailableError as error:
             self._wait_for_gpu(receipt_id)
@@ -213,6 +222,17 @@ class ProcessReceiptFile:
         receipt_id = require_id(receipt.id)
         log.info("receipt.created", receipt_id=receipt_id, from_image=image is not None)
         return receipt_id
+
+    def _completed(self, receipt_id: int) -> None:
+        """A run that failed after its matches were saved (describing its new products) marked
+        the receipt FAILED; finishing that run completes the receipt again."""
+        with self._uow_factory() as uow:
+            receipt = uow.receipts.get(receipt_id)
+            if receipt is not None and receipt.status is ReceiptStatus.FAILED:
+                uow.receipts.update_status(
+                    receipt_id, ReceiptStatus.COMPLETED, ProcessingStage.DONE
+                )
+                uow.commit()
 
     def _failed(self, receipt_id: int, error: Exception) -> ProcessOutcome:
         failure = str(error) or type(error).__name__

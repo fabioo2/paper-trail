@@ -13,14 +13,16 @@ import pytest
 from paper_trail.observability import configure_logging
 from tests.agent_harness import agent_settings, build_harness
 from tests.extractions import (
-    COSTCO_ENRICHMENTS,
     COSTCO_OCR,
+    L3,
     LINE3_ISSUE,
+    LOBLAWS,
     extraction,
     inconsistent_extraction,
     printed_extraction,
 )
 from tests.factories import receipt_draft
+from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.llm import ScriptedLlm
 from tests.support import REPO_ROOT, MakeSettings, require_id
 
@@ -28,6 +30,21 @@ OCR_SENTINEL = "SENTINEL-OCR-7F3A"
 OUTPUT_SENTINEL = "SENTINEL-LLM-91C2"
 PROMPT_DIR = REPO_ROOT / "src" / "paper_trail" / "agents" / "prompts" / "extraction" / "v1"
 QUIET_LEVELS = {"debug", "notset"}
+# What a catalog.* event may carry besides structlog's own keys: codes and ids, never text.
+CATALOG_LOG_KEYS = {
+    "event",
+    "level",
+    "timestamp",
+    "logger",
+    "scheme",
+    "store_key",
+    "code",
+    "product_id",
+    "existing_product_id",
+    "refused_product_id",
+    "path",
+    "reason",
+}
 
 
 def _lines(stdout: str) -> list[dict[str, Any]]:
@@ -68,28 +85,51 @@ def test_ac_a_14_no_receipt_content_at_info_or_above(
             assert needle not in text, (needle, line.get("event"))
 
 
-def test_ac_a_14_slice_d_vision_and_enrichment_log_no_content(
+def test_ac_a_14_slice_d_vision_and_catalog_log_no_content(
     make_settings: MakeSettings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The slice D stages log like the others: the enrichment's answer (a product name, tags)
-    and the photo never reach a line at INFO or above."""
+    """PC-TC-84: the vision answer, the line's raw text, the PLU entry's name and the product it
+    names never reach a line at INFO or above; ``catalog.*`` events carry codes and ids only."""
     configure_logging(make_settings(log_level="DEBUG", log_format="json"))
-    answers = [dict(answer) for answer in COSTCO_ENRICHMENTS]
-    answers[0]["canonical_name"] = f"Eggs {OUTPUT_SENTINEL}"
-    answers[0]["tags"] = ["sentinel-tag-5d1e"]
-    vision = printed_extraction()
-    llm = ScriptedLlm(inconsistent_extraction(), inconsistent_extraction(), vision, *answers)
+    vision = printed_extraction(
+        store_name=LOBLAWS,
+        subtotal=None,
+        taxes=[],
+        total="4.99",
+        items=[
+            {
+                "raw_text": L3,
+                "description": f"Apple {OUTPUT_SENTINEL}",
+                "quantity": "1",
+                "unit_price": "4.99",
+                "amount": "4.99",
+                "kind": "item",
+            }
+        ],
+    )
+    llm = ScriptedLlm(inconsistent_extraction(), inconsistent_extraction(), vision)
     settings = agent_settings(max_vision_attempts=1, enrichment=True)
-    harness = build_harness(llm, settings=settings, ocr_text=f"{COSTCO_OCR}\n{OCR_SENTINEL}")
+    harness = build_harness(
+        llm,
+        settings=settings,
+        ocr_text=f"{COSTCO_OCR}\n{OCR_SENTINEL}",
+        catalog=FakeCatalog({"3101": TEST_APPLE}),
+    )
     graph = harness.process_image("sentinel-photo").graph
     assert graph is not None
     assert graph.vision_attempts == 1
+    (item,) = harness.receipt(graph.receipt_id).items
+    assert harness.product(require_id(item.product_id)).category is not None  # described
 
     lines = _lines(capsys.readouterr().out)
 
     loud = [line for line in lines if str(line.get("level", "")).lower() not in QUIET_LEVELS]
     assert loud
+    forbidden = (OCR_SENTINEL, OUTPUT_SENTINEL, "sentinel-photo", "Test Apple", "TST APPLE")
     for line in loud:
         text = json.dumps(line)
-        for needle in (OCR_SENTINEL, OUTPUT_SENTINEL, "sentinel-tag-5d1e", "sentinel-photo"):
+        for needle in forbidden:
             assert needle not in text, (needle, line.get("event"))
+    for line in lines:
+        if str(line.get("event", "")).startswith("catalog."):
+            assert set(line) <= CATALOG_LOG_KEYS, line
