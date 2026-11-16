@@ -188,6 +188,20 @@
         "title": "FieldError",
         "type": "object"
       },
+      "FieldSource": {
+        "description": "Where a product's name, brand, size, category or tags came from (ADR-0018).",
+        "enum": [
+          "receipt_text",
+          "person",
+          "plu",
+          "off",
+          "upc",
+          "llm",
+          "legacy_model"
+        ],
+        "title": "FieldSource",
+        "type": "string"
+      },
       "HealthOut": {
         "properties": {
           "build_sha": {
@@ -466,6 +480,92 @@
         "title": "ProcessingStage",
         "type": "string"
       },
+      "ProductOut": {
+        "description": "``field_sources`` maps each stamped field (``canonical_name``, ``brand``, ``size``,\n``category``, ``tags``) to where it came from; ``llm`` is a guess to show as suggested.\n``confirmed``: a person or a product database named it.",
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "canonical_name": {
+            "title": "Canonical Name",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "field_sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldSource"
+            },
+            "title": "Field Sources",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "size_unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Unit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Value"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "canonical_name",
+          "brand",
+          "size_value",
+          "size_unit",
+          "category",
+          "tags",
+          "field_sources",
+          "confirmed"
+        ],
+        "title": "ProductOut",
+        "type": "object"
+      },
       "ReadinessOut": {
         "properties": {
           "components": {
@@ -697,6 +797,19 @@
         ],
         "title": "ReceiptSummaryOut",
         "type": "object"
+      },
+      "Unit": {
+        "enum": [
+          "each",
+          "g",
+          "kg",
+          "ml",
+          "l",
+          "lb",
+          "oz"
+        ],
+        "title": "Unit",
+        "type": "string"
       }
     }
   },
@@ -813,6 +926,69 @@
         "summary": "Readiness",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/products/{product_id}": {
+      "get": {
+        "description": "One product with its field sources; an unknown id is a 404 problem.",
+        "operationId": "getProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get a product",
+        "tags": [
+          "products"
         ]
       }
     },

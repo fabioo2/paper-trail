@@ -2,6 +2,7 @@
 
 from typing import Protocol, Self
 
+from paper_trail.ports.lookups import LookupCache
 from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
     CorrectionRepository,
@@ -32,6 +33,7 @@ class UnitOfWork(Protocol):
     jobs: JobQueue
     reviews: ReviewQueue
     text_search: TextSearchIndex
+    lookups: LookupCache
 
     def __enter__(self) -> Self: ...
 

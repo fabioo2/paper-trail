@@ -63,9 +63,10 @@ DELETED_PATHS = (
 )
 SCANNED = ("src", "tests", "migrations")
 # CE-TC-062: the one module that loads sqlite-vec (for migrations 0002 and 0007).
-SQLITE_VEC_LOADER = "src/paper_trail/adapters/sqlite/migrations.py"
+SQLITE_VEC_LOADER = ("src/paper_trail/adapters/sqlite/migrations.py",)
 # CE-TC-064: only the Anthropic adapter talks to the network (S0-AC-38 egress as well).
-NETWORK_ADAPTER = "src/paper_trail/adapters/anthropic"
+# The Claude API and the product databases (claude-extraction plan D3, CE-TC-260).
+NETWORK_ADAPTERS = ("src/paper_trail/adapters/anthropic", "src/paper_trail/adapters/lookups")
 NETWORK_MODULES = (
     "anthropic",
     "httpx",
@@ -121,7 +122,7 @@ def _offenders(
     root: Path,
     banned: tuple[str, ...],
     *,
-    allowed: str | None = None,
+    allowed: tuple[str, ...] = (),
     folders: tuple[str, ...] = SCANNED,
 ) -> list[str]:
     """``<file>: <module>`` for each import of a ``banned`` module outside ``allowed``."""
@@ -129,7 +130,7 @@ def _offenders(
         {
             f"{path.relative_to(root)}: {module}"
             for path in _python_files(root, folders)
-            if allowed is None or not path.is_relative_to(root / allowed)
+            if not any(path.is_relative_to(root / place) for place in allowed)
             for module in _imports(path, _import_root(path, root))
             for name in banned
             if _matches(module, name)
@@ -203,7 +204,7 @@ def test_ce_tc_061_the_scan_reports_a_planted_import(
 
 def test_ce_tc_062_only_the_migration_runner_imports_sqlite_vec() -> None:
     assert _offenders(REPO_ROOT, ("sqlite_vec",), allowed=SQLITE_VEC_LOADER) == []
-    assert "sqlite_vec" in set(_imports(REPO_ROOT / SQLITE_VEC_LOADER, REPO_ROOT / "src")), (
+    assert "sqlite_vec" in set(_imports(REPO_ROOT / SQLITE_VEC_LOADER[0], REPO_ROOT / "src")), (
         "the migration runner loads it for 0002 and 0007"
     )
 
@@ -232,10 +233,11 @@ def test_ce_tc_062_sqlite_vec_stays_a_dependency() -> None:
 # --- CE-TC-064: only the Anthropic adapter reaches the network ----------------------------------
 
 
-def test_ce_tc_064_only_the_anthropic_adapter_imports_a_network_client() -> None:
-    """``tests`` may (the canned SDK clients and loopback fakes), the package may not."""
+def test_ce_tc_064_only_the_network_adapters_import_a_network_client() -> None:
+    """Only the Anthropic and the lookups adapters may; ``tests`` may too (the canned SDK
+    clients and loopback fakes)."""
     offenders = _offenders(
-        REPO_ROOT, NETWORK_MODULES, allowed=NETWORK_ADAPTER, folders=("src", "migrations")
+        REPO_ROOT, NETWORK_MODULES, allowed=NETWORK_ADAPTERS, folders=("src", "migrations")
     )
 
     assert offenders == []
@@ -247,6 +249,8 @@ def test_ce_tc_064_only_the_anthropic_adapter_imports_a_network_client() -> None
         ("src/paper_trail/agents/nodes/extraction.py", "import anthropic"),
         ("src/paper_trail/application/budget.py", "from anthropic import Anthropic"),
         ("src/paper_trail/bootstrap/agents.py", "import httpx"),
+        ("src/paper_trail/application/enrichment.py", "import httpx2"),
+        ("src/paper_trail/adapters/catalog/plu.py", "from urllib.request import urlopen"),
     ],
 )
 def test_ce_tc_064_the_scan_reports_a_planted_import(
@@ -255,7 +259,7 @@ def test_ce_tc_064_the_scan_reports_a_planted_import(
     root = _plant(tmp_path, relative, statement)
 
     planted = _planted_in(
-        root, NETWORK_MODULES, allowed=NETWORK_ADAPTER, folders=("src", "migrations")
+        root, NETWORK_MODULES, allowed=NETWORK_ADAPTERS, folders=("src", "migrations")
     )
 
     assert planted == {relative}

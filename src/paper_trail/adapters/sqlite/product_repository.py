@@ -36,6 +36,10 @@ class SqliteProductRepository:
         )
         return None if row is None else product_from_row(row)
 
+    def list(self) -> tuple[Product, ...]:
+        rows = self._connection.execute(select(products).order_by(products.c.id)).mappings()
+        return tuple(product_from_row(row) for row in rows)
+
     def update(self, product: Product) -> Product:
         """The ``products_fts`` triggers follow the new name, brand and tags."""
         product_id = require_id(product.id)

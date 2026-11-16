@@ -221,8 +221,10 @@ class ReceiptSummary:
 FIELD_SOURCE_KEYS = ("canonical_name", "brand", "size", "category", "tags")
 # A product is confirmed when one of these named it: a person or a data source, never a model.
 CONFIRMING_SOURCES = frozenset(
-    {FieldSource.PERSON, FieldSource.PLU, FieldSource.OFF, FieldSource.OFF_LLM}
+    {FieldSource.PERSON, FieldSource.PLU, FieldSource.OFF, FieldSource.UPC}
 )
+# The sources enrichment may write over (an empty field too): the printed text and a guess.
+OPEN_SOURCES = frozenset({FieldSource.RECEIPT_TEXT, FieldSource.LLM})
 PERSON_CODE_SOURCES = frozenset(
     {
         CodeSource.MANUAL,

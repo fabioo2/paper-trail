@@ -1,8 +1,8 @@
 """``ReceiptReader`` on the Claude API (claude-extraction plan EC, E1, V11).
 
-One ``client.messages.create`` call per read: the photo as a base64 image block
-(``prepare_image``: upright, long edge at most 2576 px, a JPEG whose base64 fits the API's
-5 MB; the trace's hash is of those bytes), then
+One ``client.messages.create`` call per read: the photo, when the request has one, as a base64
+image block (``prepare_image``: upright, long edge at most 2576 px, a JPEG whose base64 fits
+the API's 5 MB; the trace's hash is of those bytes), then
 the request's text, with the answer model's JSON schema as the structured output format
 (``output_config.format``, the schema made by the SDK's ``transform_schema``, as
 ``messages.parse`` does). ``messages.parse`` itself is not used: it validates the answer inside
@@ -115,8 +115,8 @@ class AnthropicReader:
     def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         adapter = TypeAdapter(schema)
         self._sdk()  # no key: nothing is prepared or sent
-        image = prepare_image(request.image)
-        sent = hashlib.sha256(image).hexdigest()
+        image = None if request.image is None else prepare_image(request.image)
+        sent = None if image is None else hashlib.sha256(image).hexdigest()
         try:
             response = self._create(request, image, adapter)
             usage = ReadUsage(response.usage.input_tokens, response.usage.output_tokens)
@@ -139,14 +139,20 @@ class AnthropicReader:
             raise
         return ReadResult(value=value, usage=usage, stop_reason=stop_reason, image_sha256=sent)
 
-    def _create[M](self, request: ReadRequest, image: bytes, adapter: TypeAdapter[M]) -> Message:
-        data = base64.standard_b64encode(image).decode("ascii")
-        block: ImageBlockParam = {
-            "type": "image",
-            "source": {"type": "base64", "media_type": MEDIA_TYPE, "data": data},
-        }
-        text: TextBlockParam = {"type": "text", "text": request.text}
-        messages: list[MessageParam] = [{"role": "user", "content": [block, text]}]
+    def _create[M](
+        self, request: ReadRequest, image: bytes | None, adapter: TypeAdapter[M]
+    ) -> Message:
+        content: list[ImageBlockParam | TextBlockParam] = []
+        if image is not None:
+            data = base64.standard_b64encode(image).decode("ascii")
+            content.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": MEDIA_TYPE, "data": data},
+                }
+            )
+        content.append({"type": "text", "text": request.text})
+        messages: list[MessageParam] = [{"role": "user", "content": content}]
         try:
             return self._sdk().messages.create(
                 model=request.model,

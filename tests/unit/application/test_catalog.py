@@ -8,8 +8,9 @@ Pinned:
   DomainValidationError ``{code!r} is not a product code at {store_key}`` otherwise.
   ``parse_size`` takes a positive number and a ``Unit`` value, with or without a space.
 - ``CatalogTodo(uow_factory)(*, store=None, limit=None) -> tuple[TodoRow, ...]``: one row per
-  stored code of an unconfirmed product with ITEM lines; most lines first, then the newest
-  last date (undated last), then the code; counts, last paid and last date at ``store`` only.
+  unconfirmed product with ITEM lines, coded or not, with its first code; most lines first,
+  then the newest last date (undated last), then the product id; counts, last paid and last
+  date at ``store`` only.
 - ``AddCatalogCode(uow_factory, clock)``: NAME fills the code's product in place (or creates
   one), stamping ``person``; ``product_id`` adopts the code; a person's name needs ``replace``.
 - ``RemoveCatalogCode``: the first stored identity of the bare code; the product is kept.
@@ -236,18 +237,19 @@ def _todo(factory: UnitOfWorkFactory) -> Todo:
 
 
 def _row(  # noqa: PLR0913, PLR0917 - one TodoRow
-    code: CodeIdentity,
+    code: CodeIdentity | None,
     product_id: int,
     name: str,
     times: int,
     paid: int | None,
     day: int | None,
 ) -> TodoRow:
-    url = COSTCO_URL.format(code.code) if code.store_key == "costco" else None
+    url = COSTCO_URL.format(code.code) if code is not None and code.store_key == "costco" else None
     return TodoRow(
-        code=code,
         product_id=product_id,
-        printed_name=name,
+        name=name,
+        name_source=FieldSource.RECEIPT_TEXT,
+        code=code,
         times_bought=times,
         last_paid=None if paid is None else cad(paid),
         last_date=None if day is None else date(2026, 11, day),
@@ -260,6 +262,7 @@ def _todo_rows(ids: Todo) -> list[TodoRow]:
         _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3),
         _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 2, 899, 2),
         _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1),
+        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1),
     ]
 
 
@@ -329,11 +332,12 @@ def test_pc_tc_114_anything_else_is_not_a_size(text: str) -> None:
 # --- catalog todo (R15) -------------------------------------------------------------------------
 
 
-def test_pc_tc_103_lists_unconfirmed_coded_products_most_lines_first(
+def test_pc_tc_103_lists_unconfirmed_products_most_lines_first(
     factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
-    """Not listed: the person-named eggs, the PLU-named apple and the uncoded product. The
-    barcode's identity, not its printed digits; no link without a store. Read-only."""
+    """Not listed: the person-named eggs and the PLU-named apple; the uncoded product is
+    (CE-TC-241). The barcode's identity, not its printed digits; no link without a store.
+    Read-only."""
     ids = _todo(factory)
     commits = database.commits
 
@@ -344,8 +348,8 @@ def test_pc_tc_103_lists_unconfirmed_coded_products_most_lines_first(
 @pytest.mark.parametrize(
     ("store", "limit", "picked"),
     [
-        ("COSTCO WHOLESALE #1234", None, (0, 2)),
-        ("costco", None, (0, 2)),
+        ("COSTCO WHOLESALE #1234", None, (0, 2, 3)),
+        ("costco", None, (0, 2, 3)),
         ("nowhere", None, ()),
         (None, 1, (0,)),
     ],
@@ -373,7 +377,7 @@ def test_pc_tc_103_a_barcode_bought_at_two_stores_is_counted_per_store(
     ]
 
 
-def test_pc_tc_103_ties_go_to_the_newest_date_then_the_code_and_undated_last(
+def test_pc_tc_103_ties_go_to_the_newest_date_then_the_product_and_undated_last(
     factory: UnitOfWorkFactory,
 ) -> None:
     """I9: a product with no dated purchase has no last paid or date and sorts last."""
@@ -390,14 +394,14 @@ def test_pc_tc_103_ties_go_to_the_newest_date_then_the_code_and_undated_last(
     _bought(factory, STORE_NAME, None, ("4444444 D", 400, pids["4444444 D"]))
 
     assert list(CatalogTodo(factory)()) == [
-        _row(codes["1111111 C"], pids["1111111 C"], "C", 1, 300, 3),
         _row(codes["2222222 B"], pids["2222222 B"], "B", 1, 200, 3),
+        _row(codes["1111111 C"], pids["1111111 C"], "C", 1, 300, 3),
         _row(codes["3333333 A"], pids["3333333 A"], "A", 1, 100, 1),
         _row(codes["4444444 D"], pids["4444444 D"], "D", 1, None, None),
     ]
 
 
-def test_pc_tc_103_tq33_a_product_with_two_codes_is_listed_once_per_code(
+def test_a_product_with_two_codes_is_listed_once_with_its_first(
     factory: UnitOfWorkFactory,
 ) -> None:
     ids = _todo(factory)
@@ -406,18 +410,22 @@ def test_pc_tc_103_tq33_a_product_with_two_codes_is_listed_once_per_code(
 
     assert list(CatalogTodo(factory)(store="costco")) == [
         _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3),
-        _row(second, ids.choc, "CHOC PISTACH", 3, 1299, 3),
         _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1),
+        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1),
     ]
 
 
 def test_pc_tc_156_todo_after_add_product(factory: UnitOfWorkFactory, add: AddCatalogCode) -> None:
-    """The old printed-text product lost its code; the adopted eggs are confirmed."""
+    """The old printed-text product lost its code but is still unconfirmed; the adopted eggs
+    are confirmed."""
     ids = _todo(factory)
 
     add(CodeNaming("costco", "1362394", product_id=ids.eggs))
 
-    assert list(CatalogTodo(factory)()) == _todo_rows(ids)[1:]
+    assert list(CatalogTodo(factory)()) == [
+        _row(None, ids.choc, "CHOC PISTACH", 3, 1299, 3),
+        *_todo_rows(ids)[1:],
+    ]
 
 
 # --- catalog add (R16) --------------------------------------------------------------------------

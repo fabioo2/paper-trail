@@ -64,6 +64,7 @@ def configure_cli(
     monkeypatch.setenv("PAPER_TRAIL_LOG_FORMAT", "json")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("PAPER_TRAIL_LOOKUP__OPEN_FACTS", "false")  # no product database, ever
     if not enrichment:
         monkeypatch.setenv("PAPER_TRAIL_GRAPH__ENRICHMENT", "false")
     if main_migrated:

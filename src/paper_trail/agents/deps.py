@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.config import Settings
 from paper_trail.ports.clock import Clock
+from paper_trail.ports.enrichment import Enricher
 from paper_trail.ports.images import ImageStore
 from paper_trail.ports.reader import ReceiptReader
 from paper_trail.ports.tools import ToolGateway
@@ -20,3 +21,5 @@ class AgentDeps:
     prompts: PromptLibrary
     images: ImageStore  # extract reads the photo here, never through a tool
     reader: ReceiptReader  # Claude reads the photo (claude-extraction plan TF)
+    # Looks up or guesses the products a receipt created (plan D3); None: only catalog entries
+    enricher: Enricher | None = None

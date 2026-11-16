@@ -23,7 +23,7 @@ talking to the production MCP app served over that harness's registry on a loopb
 test_transport_equivalence.py`` runs representative scenarios over both and compares them.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from functools import cache
@@ -39,6 +39,7 @@ from paper_trail.agents.graph import AgentDeps
 from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
 from paper_trail.application.corrections import CorrectLineItem
+from paper_trail.application.enrichment import ProductEnricher, Throttle
 from paper_trail.application.process_receipt import (
     ProcessOutcome,
     ProcessReceiptFile,
@@ -60,6 +61,7 @@ from paper_trail.domain.paging import PageRequest
 from paper_trail.domain.rules.arithmetic import Tolerances
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.catalog import ProductCatalog
+from paper_trail.ports.lookups import ProductLookup
 from paper_trail.ports.reader import ReceiptReader
 from paper_trail.ports.tools import ToolGateway
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
@@ -267,6 +269,8 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
     images: FakeImageStore | None = None,
     wrap_tools: Callable[[ToolGateway], ToolGateway] | None = None,
     catalog: ProductCatalog | None = None,
+    lookups: Sequence[ProductLookup] = (),
+    guesser: ReceiptReader | None = None,
 ) -> Harness:
     """The graph over fakes and a new SQLite database (``scratch_database``), Claude being
     ``reader`` (a ``ScriptedReader``, or one wrapped in ``BudgetedReader``). Pass the same
@@ -274,7 +278,8 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
     process on the same data (resume, review).
     ``catalog`` is the reference catalog asked after the store catalog (``product_codes`` of
     ``uow_factory``), as ``bootstrap`` puts the PLU table there; an empty ``FakeCatalog`` by
-    default."""
+    default. ``lookups`` (fakes) and ``guesser`` (a second ``ScriptedReader``) turn on the
+    lookups and the guess after the catalog entries; with neither, there is no enricher."""
     clock = clock or FakeClock(NOW)
     settings = settings or agent_settings()
     uow_factory = uow_factory or _scratch_uow_factory(clock)
@@ -282,13 +287,27 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
     tracer = FakeTracer(clock)
     tolerances = Tolerances()
     record = RecordReceipt(uow_factory, clock, tolerances)
+    composite = CompositeCatalog(StoreCatalog(uow_factory), catalog or FakeCatalog())
     registry = build_tool_registry(
         ToolServices(
             uow_factory=uow_factory,
             record_receipt=record,
             tolerances=tolerances,
-            catalog=CompositeCatalog(StoreCatalog(uow_factory), catalog or FakeCatalog()),
+            catalog=composite,
         )
+    )
+    enricher = (
+        ProductEnricher(
+            uow_factory,
+            composite,
+            lookups,
+            reader=guesser,
+            model=EXTRACT_MODEL,
+            clock=clock,
+            throttle=Throttle(monotonic=lambda: 0.0, sleep=lambda _: None),
+        )
+        if lookups or guesser is not None
+        else None
     )
     tools = _TRANSPORT.gateway(registry)
     if wrap_tools is not None:
@@ -301,6 +320,7 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
         prompts=PromptLibrary(),
         images=images,
         reader=reader,
+        enricher=enricher,
     )
     checkpointer = checkpointer or InMemorySaver()
     runner = LangGraphReceiptRunner(deps, checkpointer)

@@ -17,6 +17,14 @@ from paper_trail.adapters.anthropic.reader import AnthropicReader
 from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
+from paper_trail.adapters.lookups.http import (
+    OPEN_BEAUTY_FACTS,
+    OPEN_FOOD_FACTS,
+    OPEN_PRODUCTS_FACTS,
+    lookup_client,
+)
+from paper_trail.adapters.lookups.openfacts import OpenFactsLookup
+from paper_trail.adapters.lookups.upcitemdb import UpcItemDbLookup
 from paper_trail.adapters.mcp.gateway import McpToolGateway
 from paper_trail.adapters.sqlite.checkpoints import sqlite_checkpointer
 from paper_trail.adapters.sqlite.engine import create_engine
@@ -28,6 +36,7 @@ from paper_trail.agents.graph import AgentDeps, build_receipt_graph
 from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
 from paper_trail.application.budget import BudgetedReader
+from paper_trail.application.enrichment import EnrichCatalog, ProductEnricher
 from paper_trail.application.process_receipt import ProcessReceiptFile
 from paper_trail.application.receipts import GetReview, ListOpenReviews, ResolveReview
 from paper_trail.bootstrap import (
@@ -40,6 +49,7 @@ from paper_trail.bootstrap import (
 from paper_trail.config import McpSettings, Settings
 from paper_trail.ports.agents import ReceiptGraphRunner
 from paper_trail.ports.clock import Clock
+from paper_trail.ports.lookups import ProductLookup
 from paper_trail.ports.reader import ReceiptReader
 from paper_trail.ports.tools import ToolGateway
 from paper_trail.ports.trace import RunConfig, Tracer, TraceWriter
@@ -167,7 +177,11 @@ def _claude_reader(settings: Settings, clock: Clock, ledger_engine: Engine) -> _
 
 
 def _agent_deps(
-    container: Container, tracer: Tracer, tools: ToolGateway, reader: ReceiptReader
+    container: Container,
+    tracer: Tracer,
+    tools: ToolGateway,
+    reader: ReceiptReader,
+    enricher: ProductEnricher | None = None,
 ) -> AgentDeps:
     settings = container.settings
     return AgentDeps(
@@ -178,7 +192,51 @@ def _agent_deps(
         prompts=PromptLibrary(),
         images=_image_store(settings),
         reader=reader,
+        enricher=enricher,
     )
+
+
+def _product_enricher(
+    container: Container, reader: ReceiptReader, stack: ExitStack
+) -> ProductEnricher:
+    """Lookups and guesses over the container's database: the Open*Facts databases (unless
+    ``LOOKUP__OPEN_FACTS`` is off), then UPCitemdb when ``LOOKUP__UPCITEMDB`` is on, sharing
+    one HTTP client closed with ``stack``; Claude guesses with the extract model."""
+    settings = container.settings
+    lookups: list[ProductLookup] = []
+    if settings.lookup.open_facts or settings.lookup.upcitemdb:
+        client = lookup_client(settings.lookup.timeout_s)
+        stack.callback(client.close)
+        if settings.lookup.open_facts:
+            lookups += [
+                OpenFactsLookup("off", OPEN_FOOD_FACTS, client),
+                OpenFactsLookup("obf", OPEN_BEAUTY_FACTS, client),
+                OpenFactsLookup("opf", OPEN_PRODUCTS_FACTS, client),
+            ]
+        if settings.lookup.upcitemdb:
+            lookups.append(UpcItemDbLookup(client))
+    return ProductEnricher(
+        container.uow_factory,
+        product_catalog(container),
+        lookups,
+        reader=reader,
+        model=settings.claude.extract_model,
+        clock=container.clock,
+    )
+
+
+@contextmanager
+def catalog_enrichment(container: Container, ledger_path: Path) -> Iterator[EnrichCatalog]:
+    """``catalog enrich`` over the container's database; Claude's spend is kept in the main
+    database at ``ledger_path``, whatever the run."""
+    with ExitStack() as stack:
+        ledger_engine = container.engine
+        if ledger_path != container.settings.database_path:
+            ledger_engine = create_engine(ledger_path)
+            stack.callback(ledger_engine.dispose)
+        claude = _claude_reader(container.settings, container.clock, ledger_engine)
+        enricher = _product_enricher(container, claude.reader, stack)
+        yield EnrichCatalog(container.uow_factory, enricher)
 
 
 @contextmanager
@@ -208,8 +266,9 @@ def agent_container(
             _run_tool_gateway(settings, tool_registry(container), tool_server)
         )
         tracer = InMemoryTracer(container.clock)
+        enricher = _product_enricher(container, claude.reader, stack)
         runner = LangGraphReceiptRunner(
-            _agent_deps(container, tracer, tools, claude.reader), checkpointer
+            _agent_deps(container, tracer, tools, claude.reader, enricher), checkpointer
         )
         config = run_config(settings)
         clock, uow_factory = container.clock, container.uow_factory

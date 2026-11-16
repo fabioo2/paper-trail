@@ -351,7 +351,7 @@ _SOURCE_KEYS: dict[str, FieldSourceKey] = {
     "tags": "tags",
 }
 _ENTRY_SOURCES = {"plu": FieldSource.PLU}
-DATA_SOURCES = frozenset({FieldSource.PLU, FieldSource.OFF, FieldSource.OFF_LLM})
+DATA_SOURCES = frozenset({FieldSource.PLU, FieldSource.OFF, FieldSource.UPC, FieldSource.LLM})
 
 
 def entry_product_name(name: str, brand: str | None) -> str:
@@ -389,7 +389,8 @@ def check_field_sources(
     """DomainValidationError unless every given field has exactly its source key and every
     source key has its field (``name`` -> ``canonical_name``, ``size_value``/``size_unit`` ->
     ``size``, the others by their own name), and every source is a data source (``plu``,
-    ``off``, ``off_llm``): a person's values and the printed text are never written this way."""
+    ``off``, ``upc``, ``llm``): a person's values and the printed text are never written this
+    way."""
     given = _given_keys(fields)
     problems = [
         f"field {field} has no source {_SOURCE_KEYS[field]}"

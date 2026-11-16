@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/products/{product_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a product
+         * @description One product with its field sources; an unknown id is a 404 problem.
+         */
+        get: operations["getProduct"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/receipts": {
         parameters: {
             query?: never;
@@ -157,6 +177,12 @@ export interface components {
             /** Type */
             type: string;
         };
+        /**
+         * FieldSource
+         * @description Where a product's name, brand, size, category or tags came from (ADR-0018).
+         * @enum {string}
+         */
+        FieldSource: "receipt_text" | "person" | "plu" | "off" | "upc" | "llm" | "legacy_model";
         /** HealthOut */
         HealthOut: {
             /** Build Sha */
@@ -251,6 +277,32 @@ export interface components {
          * @enum {string}
          */
         ProcessingStage: "queued" | "reading" | "extracting" | "validating" | "matching" | "enriching" | "saving" | "done" | "needs_review" | "failed";
+        /**
+         * ProductOut
+         * @description ``field_sources`` maps each stamped field (``canonical_name``, ``brand``, ``size``,
+         *     ``category``, ``tags``) to where it came from; ``llm`` is a guess to show as suggested.
+         *     ``confirmed``: a person or a product database named it.
+         */
+        ProductOut: {
+            /** Brand */
+            brand: string | null;
+            /** Canonical Name */
+            canonical_name: string;
+            category: components["schemas"]["Category"] | null;
+            /** Confirmed */
+            confirmed: boolean;
+            /** Field Sources */
+            field_sources: {
+                [key: string]: components["schemas"]["FieldSource"];
+            };
+            /** Id */
+            id: number;
+            size_unit: components["schemas"]["Unit"] | null;
+            /** Size Value */
+            size_value: string | null;
+            /** Tags */
+            tags: string[];
+        };
         /** ReadinessOut */
         ReadinessOut: {
             /** Components */
@@ -319,6 +371,11 @@ export interface components {
             store_name: string;
             total: components["schemas"]["MoneyOut"] | null;
         };
+        /**
+         * Unit
+         * @enum {string}
+         */
+        Unit: "each" | "g" | "kg" | "ml" | "l" | "lb" | "oz";
     };
     responses: never;
     parameters: never;
@@ -420,6 +477,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessOut"];
+                };
+            };
+        };
+    };
+    getProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
         };

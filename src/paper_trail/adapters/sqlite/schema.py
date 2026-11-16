@@ -188,3 +188,22 @@ claude_calls = Table(
     Column("output_tokens", Integer, nullable=True),
     Column("cost_usd", DecimalText, nullable=False),
 )
+
+product_lookups = Table(
+    "product_lookups",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("code", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("payload", JsonText, nullable=True),  # the hit; NULL when the code was not found
+    Column("fetched_at", UtcDateTime, nullable=False),
+)
+
+lookup_requests = Table(
+    "lookup_requests",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("source", Text, nullable=False),
+    Column("at", UtcDateTime, nullable=False),
+)

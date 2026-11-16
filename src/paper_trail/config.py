@@ -95,6 +95,19 @@ class CatalogSettings(BaseModel):
     plu_path: Path | None = None
 
 
+class LookupSettings(BaseModel):
+    """Online product databases asked for a barcode (``PAPER_TRAIL_LOOKUP__*``,
+    claude-extraction plan D3, V10). Only the barcode is sent. ``open_facts`` asks Open Food
+    Facts, then Open Beauty Facts and Open Products Facts; ``upcitemdb`` asks UPCitemdb's free
+    trial endpoint last (off by default: its terms do not clearly allow keeping its answers)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    open_facts: bool = True
+    upcitemdb: bool = False
+    timeout_s: float = Field(default=10.0, gt=0, le=60)
+
+
 class PromptSettings(BaseModel):
     """Prompt versions per agent (``PAPER_TRAIL_PROMPTS__*``, agent-core plan 2.5)."""
 
@@ -157,6 +170,7 @@ class Settings(BaseSettings):
     graph: GraphSettings = GraphSettings()
     prompts: PromptSettings = PromptSettings()
     catalog: CatalogSettings = Field(default=CatalogSettings(), validate_default=True)
+    lookup: LookupSettings = LookupSettings()
     tools: ToolsSettings = ToolsSettings()
     mcp: McpSettings = McpSettings()
 

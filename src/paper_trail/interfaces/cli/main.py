@@ -78,7 +78,10 @@ prices_app = typer.Typer(
 )
 app.add_typer(prices_app, name="prices")
 catalog_app = typer.Typer(
-    help="Product codes: name the products receipts print codes for, fix stored codes.",
+    help=(
+        "Products and their codes: confirm, look up or guess products, name the products"
+        " receipts print codes for, fix stored codes."
+    ),
     no_args_is_help=True,
 )
 app.add_typer(catalog_app, name="catalog")
@@ -514,12 +517,43 @@ def catalog_todo(
     as_json: JsonOption = False,
     run: RunOption = None,
 ) -> None:
-    """List the coded products nobody has named yet, most bought first, with a link to open."""
+    """List the products nobody has confirmed yet (printed or guessed), most bought first."""
     from paper_trail.interfaces.cli.catalog import catalog_todo as todo
 
     settings = load_settings()
     configure_agent_logging(settings)
     todo(settings, run, store, limit, as_json=as_json)
+
+
+@catalog_app.command("confirm")
+def catalog_confirm(
+    product_id: Annotated[
+        int, typer.Argument(metavar="PRODUCT_ID", help="The product to confirm.")
+    ],
+    run: RunOption = None,
+) -> None:
+    """Accept a product's current name, brand, size, category and tags as a person's."""
+    from paper_trail.interfaces.cli.catalog import confirm_product
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    confirm_product(settings, run, product_id)
+
+
+@catalog_app.command("enrich")
+def catalog_enrich(
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Look up, guess and write (default: dry run)."),
+    ] = False,
+    run: RunOption = None,
+) -> None:
+    """Look stored products up in the product databases, else have Claude guess them."""
+    from paper_trail.interfaces.cli.catalog import enrich_products
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    enrich_products(settings, run, apply=apply)
 
 
 @catalog_app.command("add")
