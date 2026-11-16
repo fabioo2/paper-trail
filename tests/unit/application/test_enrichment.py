@@ -698,3 +698,12 @@ def test_catalog_enrich_is_a_dry_run_then_applies_once(
     assert first == [EnrichOutcome.GUESSED, EnrichOutcome.LOOKED_UP]
     assert second == []
     assert (guesser.calls, lookups[0].asked) == (2, [GTIN])
+
+
+def test_the_guess_is_given_the_printed_name_without_its_code_or_tax_flags() -> None:
+    target = _target(1, printed_text="06038309143 PC WHL CHKKN MRJ")
+
+    body = guess_text(target, None).removeprefix("<product_data>\n")
+    sent = json.loads(body.removesuffix("\n</product_data>"))
+
+    assert sent["printed_text"] == "PC WHL CHKKN"
