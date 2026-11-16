@@ -49,3 +49,17 @@ def test_both_missing_are_both_reported() -> None:
     codes = [issue.code for issue in check_completeness(" ", None, None)]
 
     assert codes == [IssueCode.MISSING_STORE, IssueCode.MISSING_DATE]
+
+
+def test_a_date_over_a_year_old_is_reported_as_a_misread() -> None:
+    (issue,) = check_completeness("SUPERSTORE", "2013-11-26", date(2013, 11, 26), DAY)
+
+    assert issue.code is IssueCode.MISSING_DATE
+    assert issue.message == (
+        'the purchase date "2013-11-26" reads as 2013-11-26, over a year ago: '
+        "copy the date exactly as printed"
+    )
+
+
+def test_a_date_within_a_year_is_complete() -> None:
+    assert check_completeness("SUPERSTORE", "25/11/08", date(2025, 11, 8), DAY) == ()

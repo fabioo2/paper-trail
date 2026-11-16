@@ -8,7 +8,7 @@ Copy every price exactly as printed. Never adjust a value to make the totals mat
 
 Receipt fields:
 - store_name: the store as printed at the top.
-- purchased_on: the purchase date as YYYY-MM-DD, or null when no date is printed.
+- purchased_on: the purchase date exactly as printed ("26/11/13", "11/13/2026"), without reordering or converting it, or null when no date is printed. The program works out which part is the year.
 - currency: three-letter code; "CAD" unless the receipt shows another currency.
 - subtotal: the printed subtotal, or null when none is printed.
 - taxes: the amount of each tax line (GST, HST, PST, QST, TAX), never its taxable base or rate; [] when none is printed.
