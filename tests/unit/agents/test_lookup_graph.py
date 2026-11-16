@@ -78,7 +78,7 @@ def test_a_barcode_is_looked_up_and_a_printed_line_guessed() -> None:
          "category": FieldSource.LLM, "tags": FieldSource.LLM},
         dict.fromkeys(("canonical_name", "category", "tags"), FieldSource.LLM),
     ]  # fmt: skip
-    assert [request.tag for request in guesser.requests] == ["enrichment/guess-v1"] * 2
+    assert [request.tag for request in guesser.requests] == ["enrichment/guess-v2"] * 2
     assert _notes(harness, outcome.receipt_id) == ["2 of 2 enriched"]
 
 
