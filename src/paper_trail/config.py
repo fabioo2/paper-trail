@@ -41,6 +41,7 @@ class UploadSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    max_bytes: int = Field(default=15_000_000, gt=0)
     max_pixels: int = Field(default=40_000_000, gt=0)  # decompression-bomb guard
 
 

@@ -24,12 +24,15 @@ import pytest
 from alembic import command
 
 from paper_trail.adapters.sqlite.migrations import alembic_config
+from paper_trail.bootstrap import build_container, dispose
+from paper_trail.config import Settings
 from tests.e2e.agent_cli import (
     TEST_API_KEY,
     invoke,
     migrate_main,
     photo,
     receipt_status,
+    rows,
     run_database,
     trace_files,
 )
@@ -228,30 +231,63 @@ def test_s0_ac_24_check_heartbeat_fails_when_file_is_missing(cli_env: dict[str, 
     assert _check_heartbeat() == 1
 
 
-def test_s0_ac_24_and_25_worker_heartbeats_then_stops_promptly_and_gracefully_on_sigterm(
-    cli_env: dict[str, str],
-) -> None:
-    """S0-AC-24/25: fresh heartbeat while running, also with an idle poll longer than the
-    shutdown grace; SIGTERM during that poll -> stopping/stopped logs and exit 0 within the
-    grace, no shutdown timeout; after three missed intervals the heartbeat is stale (exit 1)."""
-    env = {**cli_env, "PAPER_TRAIL_WORKER__POLL_INTERVAL_S": str(SHUTDOWN_GRACE_S * 15)}
-    process = subprocess.Popen(  # noqa: S603 - fixed argv built from sys.executable
-        cli_command("worker"), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    try:
-        assert _wait_until(lambda: _check_heartbeat() == 0, 20), "heartbeat never fresh"
-        time.sleep(3 * HEARTBEAT_INTERVAL_S)  # inside the idle poll, longer than a heartbeat
-        assert _check_heartbeat() == 0, "the idle poll must not let the heartbeat go stale"
+def test_the_worker_needs_the_migrated_database(cli_env: dict[str, str]) -> None:
+    result = invoke("worker")
 
-        process.send_signal(signal.SIGTERM)
-        started = time.monotonic()
-        stdout, stderr = process.communicate(timeout=SHUTDOWN_GRACE_S + 5)
-        elapsed = time.monotonic() - started
+    assert result.exit_code == 1
+    assert "db upgrade" in result.output
+
+
+def test_s0_ac_24_and_25_worker_processes_uploads_heartbeats_then_stops_gracefully_on_sigterm(
+    cli_env: dict[str, str], data_dir: Path, tmp_path: Path
+) -> None:
+    """The worker runs the receipt an upload queued through the real composition root, against
+    a scripted fake Messages API on 127.0.0.1. S0-AC-24/25: fresh heartbeat while running,
+    also with an idle poll longer than the shutdown grace; SIGTERM during that poll ->
+    stopping/stopped logs and exit 0 within the grace, no shutdown timeout; after three missed
+    intervals the heartbeat is stale (exit 1)."""
+    migrate_main(data_dir)
+    container = build_container(Settings())
+    try:
+        upload = container.upload_receipt(photo(tmp_path).read_bytes())
     finally:
-        if process.poll() is None:
-            process.kill()
+        dispose(container)
+    receipt_id = upload.receipt.id
+    assert receipt_id is not None
+    database = run_database(data_dir, None)
+
+    with serve_fake_claude(FakeClaude(answer())) as fake:
+        env = {
+            **cli_env,
+            "PAPER_TRAIL_WORKER__POLL_INTERVAL_S": str(SHUTDOWN_GRACE_S * 15),
+            "PAPER_TRAIL_GRAPH__ENRICHMENT": "false",
+            "ANTHROPIC_BASE_URL": fake.url,
+            "ANTHROPIC_API_KEY": TEST_API_KEY,
+        }
+        process = subprocess.Popen(  # noqa: S603 - fixed argv built from sys.executable
+            cli_command("worker"),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert _wait_until(lambda: receipt_status(database, receipt_id) == "completed", 30)
+            assert _wait_until(lambda: _check_heartbeat() == 0, 20), "heartbeat never fresh"
+            time.sleep(3 * HEARTBEAT_INTERVAL_S)  # inside the idle poll, longer than a heartbeat
+            assert _check_heartbeat() == 0, "the idle poll must not let the heartbeat go stale"
+
+            process.send_signal(signal.SIGTERM)
+            started = time.monotonic()
+            stdout, stderr = process.communicate(timeout=SHUTDOWN_GRACE_S + 5)
+            elapsed = time.monotonic() - started
+        finally:
+            if process.poll() is None:
+                process.kill()
 
     assert process.returncode == 0, stderr
+    assert fake.calls == 1
+    assert rows(database, "SELECT status FROM jobs") == [("succeeded",)]
     assert elapsed < SHUTDOWN_GRACE_S
     events = [r["event"] for r in _json_lines(stdout)]
     assert "worker.shutdown_timeout" not in events

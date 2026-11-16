@@ -1,15 +1,22 @@
-"""Per-request correlation id, access log and last-resort error boundary (PLAN 1.4)."""
+"""Per-request correlation id, access log and last-resort error boundary (PLAN 1.4); the
+request body size limit."""
 
 import logging
 import re
 import time
+from http import HTTPStatus
 from uuid import uuid4
 
 import structlog
+from fastapi import HTTPException
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from paper_trail.interfaces.web.errors import internal_error_response
+from paper_trail.interfaces.web.errors import (
+    internal_error_response,
+    problem_response,
+    too_large_detail,
+)
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -68,3 +75,41 @@ class RequestContextMiddleware:
                     status=status,
                     duration_ms=round((time.perf_counter() - started) * 1000, 2),
                 )
+
+
+class BodySizeLimitMiddleware:
+    """Refuses a request body above ``max_bytes`` with a 413 problem: before reading it when
+    its Content-Length says so, else as soon as more has arrived, so an oversized upload is
+    never spooled whole."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        length = Headers(scope=scope).get("content-length", "")
+        if length.isdigit() and int(length) > self.max_bytes:
+            response = problem_response(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                detail=too_large_detail(self.max_bytes),
+                instance=scope["path"],
+            )
+            await response(scope, receive, send)
+            return
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise HTTPException(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE, too_large_detail(self.max_bytes)
+                    )
+            return message
+
+        await self.app(scope, limited_receive, send)

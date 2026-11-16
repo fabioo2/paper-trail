@@ -3,7 +3,8 @@
 import os
 import signal
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import FrameType
 from typing import Protocol
@@ -34,6 +35,9 @@ class WorkerRunner:
     call finish and then ends the loop; if that takes longer than ``shutdown_grace_s`` after a
     signal, a watchdog exits the process with a failure code.
 
+    While a handler runs, a background thread refreshes the heartbeat and calls every ``tick``
+    (a job's lease renewal) each ``heartbeat_interval_s``, so a long step stays healthy.
+
     ``wait`` blocks for at most the given number of seconds and may return early; it defaults
     to waiting on the runner's internal stop event, which ``request_stop`` sets.
     """
@@ -48,8 +52,10 @@ class WorkerRunner:
         heartbeat_interval_s: float,
         shutdown_grace_s: float,
         wait: Callable[[float], object] | None = None,
+        ticks: Sequence[Callable[[], None]] = (),
     ) -> None:
         self._handlers = tuple(handlers)
+        self._ticks = tuple(ticks)
         self._clock = clock
         self._heartbeat = heartbeat
         self._poll_interval = timedelta(seconds=poll_interval_s)
@@ -93,8 +99,31 @@ class WorkerRunner:
         for handler in self._handlers:
             if self._stop_requested:
                 break
-            busy = handler() or busy
+            with self._beating():
+                busy = handler() or busy
         return busy
+
+    @contextmanager
+    def _beating(self) -> Iterator[None]:
+        """Beat and tick every heartbeat interval from another thread until the block ends."""
+        done = threading.Event()
+
+        def beat() -> None:
+            while not done.wait(self._heartbeat_interval.total_seconds()):
+                try:
+                    self._heartbeat.beat()
+                    for tick in self._ticks:
+                        tick()
+                except Exception:
+                    log.exception("worker.beat_failed")
+
+        thread = threading.Thread(target=beat, name="worker-beat", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            done.set()
+            thread.join()
 
     def _idle(self) -> None:
         """Wait out one poll interval, heartbeating on time and returning early on stop."""

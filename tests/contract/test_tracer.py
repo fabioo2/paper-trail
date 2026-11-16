@@ -69,6 +69,17 @@ def test_seq_continues_when_a_receipt_is_traced_again(tracer: Tracer) -> None:
     assert [event.seq for event in tracer.events(7)] == [1, 2]
 
 
+def test_forget_drops_one_receipts_events(tracer: Tracer) -> None:
+    for receipt_id in (7, 8):
+        with tracer.bind(receipt_id):
+            _emit(tracer)
+
+    tracer.forget(7)
+    tracer.forget(99)
+
+    assert (len(tracer.events(7)), len(tracer.events(8))) == (0, 1)
+
+
 def test_binds_nest(tracer: Tracer) -> None:
     with tracer.bind(1):
         with tracer.bind(2):

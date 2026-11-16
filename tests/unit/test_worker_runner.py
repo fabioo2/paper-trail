@@ -349,3 +349,36 @@ def test_s0_ac_25_request_stop_from_another_thread_wakes_the_idle_wait(tmp_path:
 
     assert exit_code == 0
     assert time.monotonic() - started < 5
+
+
+def test_a_long_handler_call_keeps_the_heartbeat_and_the_ticks_going(tmp_path: Path) -> None:
+    """While one step runs for several heartbeat intervals (a Claude read), another thread
+    refreshes the heartbeat and calls the ticks (the job's lease renewal) every interval."""
+    interval_s = 0.05
+    heartbeat = HeartbeatFile(tmp_path / "worker.heartbeat", SystemClock())
+    ticks: list[float] = []
+    beats_during_call: list[float] = []
+    runner: WorkerRunner
+
+    def long_step(_call: int) -> None:
+        before = heartbeat_path.stat().st_mtime_ns
+        time.sleep(interval_s * 6)
+        beats_during_call.append(heartbeat_path.stat().st_mtime_ns - before)
+        runner.request_stop()
+
+    heartbeat_path = tmp_path / "worker.heartbeat"
+    runner = WorkerRunner(
+        handlers=(ScriptedHandler([True], during_call=long_step),),
+        clock=SystemClock(),
+        heartbeat=heartbeat,
+        poll_interval_s=POLL_S,
+        heartbeat_interval_s=interval_s,
+        shutdown_grace_s=GRACE_S,
+        ticks=(lambda: ticks.append(time.monotonic()),),
+    )
+
+    assert runner.run() == 0
+
+    assert len(ticks) >= 3
+    assert beats_during_call[0] > 0, "the heartbeat must be refreshed during the step"
+    assert "worker-beat" not in {thread.name for thread in threading.enumerate()}

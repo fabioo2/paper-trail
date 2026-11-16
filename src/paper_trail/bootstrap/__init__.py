@@ -13,6 +13,7 @@ from sqlalchemy import Engine
 from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.clock import SystemClock
+from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
 from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.adapters.sqlite.health import DatabaseHealthProbe
 from paper_trail.adapters.sqlite.migrations import current_revision, head_revision, upgrade_to_head
@@ -28,6 +29,7 @@ from paper_trail.application.catalog import (
 from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
 from paper_trail.application.prices import BackfillPrices
+from paper_trail.application.process_receipt import UploadReceipt
 from paper_trail.application.products import GetProduct
 from paper_trail.application.receipts import (
     GetReceipt,
@@ -53,6 +55,7 @@ class Container:
     record_receipt: RecordReceipt
     get_receipt: GetReceipt
     list_receipts: ListReceipts
+    upload_receipt: UploadReceipt
     correct_line_item: CorrectLineItem
     get_product: GetProduct
     backfill_prices: BackfillPrices
@@ -87,6 +90,7 @@ def build_container(settings: Settings) -> Container:
         record_receipt=RecordReceipt(uow_factory, clock, tolerances),
         get_receipt=GetReceipt(uow_factory, tolerances),
         list_receipts=ListReceipts(uow_factory),
+        upload_receipt=UploadReceipt(image_store(settings), uow_factory, clock),
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
         backfill_prices=BackfillPrices(uow_factory),
@@ -96,6 +100,13 @@ def build_container(settings: Settings) -> Container:
         remove_catalog_code=RemoveCatalogCode(uow_factory),
         lookup_catalog_code=LookupCatalogCode(CompositeCatalog(StoreCatalog(uow_factory), plu)),
         tolerances=tolerances,
+    )
+
+
+def image_store(settings: Settings) -> FilesystemImageStore:
+    """Receipt photos under ``<DATA_DIR>/images``, whatever the run."""
+    return FilesystemImageStore(
+        settings.data_dir / IMAGES_DIRNAME, max_pixels=settings.upload.max_pixels
     )
 
 

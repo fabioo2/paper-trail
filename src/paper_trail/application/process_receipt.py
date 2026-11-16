@@ -5,15 +5,18 @@ An image is stored once by content: the same photo again returns the receipt it 
 The receipt exists, PROCESSING, before the graph starts, so a run that a Claude read stops half
 way (the API failed, refused, was cut off, or the monthly budget is reached) leaves the receipt
 FAILED with its checkpoint, to resume (``resume``). A stored photo can be read again on a new
-thread (``reprocess``).
+thread (``reprocess``). A photo uploaded through the API is stored and its receipt created the
+same way (``UploadReceipt``), and the worker runs the graph for it (``process_stored``).
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import PurePosixPath
 
 import structlog
 
-from paper_trail.domain.enums import AgentRole, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import AgentRole, JobKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import Receipt, require_id
 from paper_trail.domain.money import DEFAULT_CURRENCY
@@ -32,6 +35,9 @@ from paper_trail.ports.trace import Tracer
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
 log = structlog.get_logger(__name__)
+
+# The worker runs an uploaded receipt once; a failed run is resumed by hand (``process --resume``).
+UPLOAD_JOB_ATTEMPTS = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +63,62 @@ class ProcessOutcome:
     duplicate: bool  # the image was already processed: no new run
     graph: GraphOutcome | None  # None for a duplicate or a failed run
     failure: str | None = None  # why the run failed (the receipt is FAILED)
+
+
+@dataclass(frozen=True, slots=True)
+class UploadOutcome:
+    receipt: Receipt
+    duplicate: bool  # the image was already stored: its receipt, no new job
+
+
+class UploadReceipt:
+    """A photo uploaded through the API: stored, its receipt created PROCESSING and one
+    ``process_receipt`` job queued for the worker, in one transaction."""
+
+    def __init__(
+        self, image_store: ImageStore, uow_factory: UnitOfWorkFactory, clock: Clock
+    ) -> None:
+        self._image_store = image_store
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    def __call__(self, image: bytes) -> UploadOutcome:
+        """UnsupportedMediaError for bytes that are not an image (or one above the pixel limit),
+        before any receipt exists. An image already stored is a duplicate: its receipt."""
+        stored = self._image_store.save(image)
+        with self._uow_factory() as uow:
+            existing = uow.receipts.find_by_image_sha256(stored.sha256)
+            if existing is not None:
+                return UploadOutcome(receipt=existing, duplicate=True)
+            receipt = uow.receipts.add(new_receipt(stored, self._clock.now()))
+            receipt_id = require_id(receipt.id)
+            uow.jobs.enqueue(JobKind.PROCESS_RECEIPT, receipt_id, max_attempts=UPLOAD_JOB_ATTEMPTS)
+            uow.commit()
+        log.info("receipt.uploaded", receipt_id=receipt_id)
+        return UploadOutcome(receipt=receipt, duplicate=False)
+
+
+def new_receipt(image: StoredImage, now: datetime) -> Receipt:
+    """The receipt of a stored photo before the graph has read it: PROCESSING, at READING."""
+    return Receipt(
+        id=None,
+        status=ReceiptStatus.PROCESSING,
+        stage=ProcessingStage.READING,
+        store_name="",
+        store_key="",
+        purchased_on=None,
+        currency=DEFAULT_CURRENCY,
+        subtotal=None,
+        tax=None,
+        total=None,
+        payment_last4=None,
+        ocr_text=None,
+        image_path=image.relative_path,
+        items=(),
+        created_at=now,
+        updated_at=now,
+        image_sha256=image.sha256,
+    )
 
 
 class ProcessReceiptFile:
@@ -101,7 +163,14 @@ class ProcessReceiptFile:
             return ProcessOutcome(receipt_id=require_id(existing.id), duplicate=True, graph=None)
         if existing is not None:
             return self._reprocess(existing, source.name, interrupt_after)
-        receipt_id = self._create(image)
+        try:
+            receipt_id = self._create(image)
+        except ConflictError:
+            # An upload created the receipt of this photo since ``_find``.
+            existing = self._find(image.sha256)
+            if existing is None:
+                raise
+            return ProcessOutcome(receipt_id=require_id(existing.id), duplicate=True, graph=None)
         return self._run(
             receipt_id,
             lambda: self._runner.start(
@@ -134,6 +203,28 @@ class ProcessReceiptFile:
         if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
             self._completed(receipt_id)
         return outcome
+
+    def process_stored(self, receipt: Receipt) -> ProcessOutcome:
+        """Run the graph over the stored photo of a receipt ``UploadReceipt`` created; when a
+        run of it had started (a worker that died), continue its thread instead. Failures as
+        for ``__call__``; ConflictError for a receipt without a stored photo."""
+        receipt_id = require_id(receipt.id)
+        image_path = receipt.image_path
+        if image_path is None:
+            msg = f"receipt {receipt_id} has no stored photo to read"
+            raise ConflictError(msg)
+        try:
+            return self._run(receipt_id, lambda: self._runner.resume(receipt_id))
+        except NothingToResumeError:
+            pass
+        return self._run(
+            receipt_id,
+            lambda: self._runner.start(
+                receipt_id,
+                source_name=PurePosixPath(image_path).name,
+                image_path=image_path,
+            ),
+        )
 
     def _reprocess(
         self, receipt: Receipt, source_name: str, interrupt_after: str | None
@@ -228,29 +319,8 @@ class ProcessReceiptFile:
             return uow.receipts.find_by_image_sha256(sha256)
 
     def _create(self, image: StoredImage) -> int:
-        now = self._clock.now()
         with self._uow_factory() as uow:
-            receipt = uow.receipts.add(
-                Receipt(
-                    id=None,
-                    status=ReceiptStatus.PROCESSING,
-                    stage=ProcessingStage.READING,
-                    store_name="",
-                    store_key="",
-                    purchased_on=None,
-                    currency=DEFAULT_CURRENCY,
-                    subtotal=None,
-                    tax=None,
-                    total=None,
-                    payment_last4=None,
-                    ocr_text=None,
-                    image_path=image.relative_path,
-                    items=(),
-                    created_at=now,
-                    updated_at=now,
-                    image_sha256=image.sha256,
-                )
-            )
+            receipt = uow.receipts.add(new_receipt(image, self._clock.now()))
             uow.commit()
         receipt_id = require_id(receipt.id)
         log.info("receipt.created", receipt_id=receipt_id)
