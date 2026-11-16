@@ -17,6 +17,7 @@ from paper_trail.agents.tracing import Node
 from paper_trail.config import ClaudeSettings
 from paper_trail.domain.enums import AgentRole, ReviewReason
 from paper_trail.domain.models import JsonValue
+from paper_trail.domain.rules.arithmetic import IssueCode
 from paper_trail.domain.trace import TraceKind
 
 GENERIC_RETRY = "The previous answer was inconsistent. Read the receipt again."
@@ -31,13 +32,15 @@ def attempt_model(settings: ClaudeSettings, attempt: int) -> str:
     return settings.extract_model if attempt <= 1 else settings.retry_model
 
 
-def escalation_route(*, valid: bool, attempts: int, max_attempts: int) -> Escalation:
+def escalation_route(
+    *, valid: bool, attempts: int, max_attempts: int, retry_useful: bool = True
+) -> Escalation:
     """After ``validate``: ``persist`` when the latest reading is valid; else ``extract`` again
     while ``attempts < max_attempts`` (``GRAPH__MAX_ATTEMPTS``, the retry gets the failures as
-    feedback); else ``review`` (reason ``validation_failed``)."""
+    feedback) and a new reading could help; else ``review`` (reason ``validation_failed``)."""
     if valid:
         return "persist"
-    return "extract" if attempts < max_attempts else "review"
+    return "extract" if retry_useful and attempts < max_attempts else "review"
 
 
 def supervisor_node(deps: AgentDeps) -> Node:
@@ -46,7 +49,10 @@ def supervisor_node(deps: AgentDeps) -> Node:
     def supervisor(state: ReceiptState) -> ReceiptState:
         attempts = state.get("attempts", 0)
         target = escalation_route(
-            valid=state.get("valid", False), attempts=attempts, max_attempts=graph.max_attempts
+            valid=state.get("valid", False),
+            attempts=attempts,
+            max_attempts=graph.max_attempts,
+            retry_useful=_retry_useful(state),
         )
         reason = _reason(state) if target == "review" else None
         update: ReceiptState = {
@@ -73,6 +79,15 @@ def supervisor_node(deps: AgentDeps) -> Node:
         return update
 
     return supervisor
+
+
+def _retry_useful(state: ReceiptState) -> bool:
+    """A reading that parsed and fails only because the photo shows no date gains nothing from
+    a second, costlier reading: the person adds the date in review."""
+    if state.get("extraction") is None:
+        return True
+    issues = state.get("issues", [])
+    return not issues or any(issue["code"] != IssueCode.MISSING_DATE.value for issue in issues)
 
 
 def _reason(state: ReceiptState) -> ReviewReason:

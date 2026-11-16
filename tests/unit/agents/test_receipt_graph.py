@@ -333,7 +333,6 @@ FAILED_ATTEMPTS = {
     "discount-above-regular": (_discount_above_regular, ["KS ORG EGGS 24CT", "-1.00"]),
     "receipt-sum": (inconsistent_answer, ["25.46", "25.55"]),
     "weighed": (_weighed, ["LOOSE CARROTS", "1.54"]),
-    "no-date": (_no_date, ["no purchase date was read"]),
     "blank-store": (_blank_store, ["no store name was read"]),
     "unreadable-value": (_unreadable, ['"abc"', "price_paid"]),
     "schema": (_schema, ["price_paid"]),
@@ -619,3 +618,17 @@ def test_pc_tc_62_a_coded_receipts_tool_sequence(tmp_path: Path) -> None:
         "describe_from_catalog",
     ]
     assert scripted(harness).calls == 1
+
+
+def test_a_reading_missing_only_its_date_goes_to_review_without_a_retry() -> None:
+    """The photo shows no date: a second reading cannot find one, so it costs nothing to skip
+    (a missing date together with another failure is still retried: ``two-failures`` above)."""
+    harness = build_harness(ScriptedReader(_no_date(), answer()))
+
+    result = graph(harness.process_image())
+
+    assert scripted(harness).models == [EXTRACT_MODEL]
+    assert (result.status, result.review_reason) == (
+        ReceiptStatus.NEEDS_REVIEW,
+        ReviewReason.VALIDATION_FAILED,
+    )
