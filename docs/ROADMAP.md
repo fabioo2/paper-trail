@@ -2,6 +2,8 @@
 
 Agreed with the project owner on 2026-11-06. This is the high-level roadmap; `docs/PLAN.md` holds the detailed implementation plan derived from it.
 
+> **Update 2026-11-15 ([ADR-0019](adr/0019-claude-reads-receipts.md)):** receipts are now read by the Claude API, not by OCR and Ollama models on a GPU PC. The database, the images and the code stay as described here, but each receipt photo is sent to Anthropic to be read, so "no data leaves the owner's hardware" no longer holds for photos. There is no LLM host, no OCR and no vector search; the sections below are kept as the record of what was planned.
+
 ## Non-negotiable quality bar
 
 Interview-grade software: DRY, KISS, SOLID, standard practices, no shortcuts. Every stage ends in a working, tested, mergeable state. Tooling and a local CI gate (`make ci`) from day one.

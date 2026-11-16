@@ -18,8 +18,8 @@ import pytest
 from typer.testing import CliRunner
 
 from paper_trail.interfaces.cli.main import app
-from tests.e2e.agent_cli import StartOllama, configure_cli, fake_ollama_env
-from tests.extractions import COSTCO_OCR, extraction, inconsistent_extraction
+from tests.e2e.agent_cli import StartClaude, configure_cli, fake_claude_env, photo
+from tests.extractions import answer, inconsistent_answer
 
 BOLD = "\x1b[1m"
 GREEN = "\x1b[32m"
@@ -32,12 +32,12 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    return configure_cli(monkeypatch, tmp_path)
+    return configure_cli(monkeypatch, tmp_path, main_migrated=True)
 
 
 @pytest.fixture
-def ollama(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartOllama]:
-    with fake_ollama_env(monkeypatch) as start:
+def claude(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartClaude]:
+    with fake_claude_env(monkeypatch) as start:
         yield start
 
 
@@ -56,27 +56,25 @@ def _line_with(output: str, text: str) -> str:
 @pytest.mark.parametrize(
     ("reply", "result", "colour"),
     [
-        pytest.param(extraction(), "✔ COMPLETED", GREEN, id="completed"),
-        pytest.param(inconsistent_extraction(), "⏸ NEEDS_REVIEW", YELLOW, id="needs-review"),
+        pytest.param(answer(), "✔ COMPLETED", GREEN, id="completed"),
+        pytest.param(inconsistent_answer(), "⏸ NEEDS_REVIEW", YELLOW, id="needs-review"),
     ],
 )
 def test_a_processed_receipt_prints_its_block_in_colour(
-    ollama: StartOllama, tmp_path: Path, reply: object, result: str, colour: str
+    claude: StartClaude, tmp_path: Path, reply: object, result: str, colour: str
 ) -> None:
-    ollama(then=reply)
-    text = tmp_path / "costco.txt"
-    text.write_text(COSTCO_OCR, encoding="utf-8")
+    claude(then=reply)
 
-    code, output = _process_in_colour("--text-file", str(text))
+    code, output = _process_in_colour(str(photo(tmp_path)))
 
     assert code == 0, output
-    assert BOLD in _line_with(output, "receipt 1 · costco.txt")
+    assert BOLD in _line_with(output, "receipt 1 · costco.png")
     assert colour in _line_with(output, result)
     assert "run: 1 receipts" in output
 
 
-def test_a_skipped_file_and_a_failure_print_in_colour(ollama: StartOllama, tmp_path: Path) -> None:
-    ollama()
+def test_a_skipped_file_and_a_failure_print_in_colour(claude: StartClaude, tmp_path: Path) -> None:
+    claude()
     folder = tmp_path / "inbox"
     folder.mkdir()
     (folder / "notes.md").write_text("not a receipt", encoding="utf-8")

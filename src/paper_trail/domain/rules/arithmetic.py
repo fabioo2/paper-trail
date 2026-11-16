@@ -14,12 +14,14 @@ from paper_trail.domain.enums import LineKind
 from paper_trail.domain.models import LineItem
 from paper_trail.domain.money import Money, sum_money
 
-# Line kinds whose total is a charge and so can never be negative.
-_CHARGES = frozenset({LineKind.ITEM, LineKind.DEPOSIT, LineKind.FEE})
+# Line kinds whose total is a charge and so can never be negative. A deposit can be: a bottle
+# return is a negative deposit (claude-extraction review C7).
+_CHARGES = frozenset({LineKind.ITEM, LineKind.FEE})
 
 
 class IssueCode(StrEnum):
     LINE_MATH = auto()
+    ITEM_PRICE_MATH = auto()  # an item's regular price - discount is not its price paid
     ITEMS_VS_SUBTOTAL = auto()
     SUBTOTAL_PLUS_TAX_VS_TOTAL = auto()
     ITEMS_PLUS_TAX_VS_TOTAL = auto()
@@ -80,10 +82,11 @@ def check_arithmetic(
 
     Rules: (1) quantity x unit price = line total, within ``per_line_cents``; (2) the lines add
     up to the subtotal; (3) subtotal + tax = total; (4) without a subtotal, lines + tax = total;
-    (5) only DISCOUNT lines are negative; (6) every amount is in the receipt's currency; (7) a
-    receipt has at least one line. Rules 2-4 allow ``total_cents``; a missing tax counts as zero
-    and a missing total (still processing) is not checked. When rule 6 fails only its issues
-    are reported, because sums across currencies mean nothing.
+    (5) only DISCOUNT lines, and a DEPOSIT returned (a bottle return), are negative; (6) every
+    amount is in the receipt's currency; (7) a receipt has at least one line. Rules 2-4 allow
+    ``total_cents``; a missing tax counts as zero and a missing total (still processing) is not
+    checked. When rule 6 fails only its issues are reported, because sums across currencies
+    mean nothing.
     """
     mismatches = tuple(_currency_mismatches(receipt))
     if mismatches:

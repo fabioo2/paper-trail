@@ -1,36 +1,29 @@
 """The receipt graph's state: JSON values only, so every checkpoint round-trips (plan 2.4).
 
 Nodes return partial updates; each key is overwritten by the latest update. Text in the state
-is always masked: OCR text is masked by the ``ocr_read`` tool or before a text input starts.
+is always masked: Claude's answer is masked by ``extract`` before it enters the state.
 """
 
 from typing import Any, TypedDict
 
-# The shape of the state below. A thread saved without ``state_version`` (before product codes)
-# cannot be resumed past ``match``: its matches and created products lack codes and entries.
-STATE_VERSION = 2
-OUTDATED_BEFORE = frozenset({"commit_matches", "enrich", "commit_enrichment"})
+# The shape of the state below. A thread saved by an older version (2: OCR and the local
+# models; none: before product codes) cannot be resumed (claude-extraction plan V7).
+STATE_VERSION = 3
 
 
 class ReceiptState(TypedDict, total=False):
-    state_version: int  # STATE_VERSION; absent in threads saved before it
+    state_version: int  # STATE_VERSION; absent in threads saved before product codes
     receipt_id: int
     source_name: str
-    image_path: str | None  # of the stored image; None for a text input
-    ocr_text: str | None  # masked
-    ocr_confidence: float | None
-    # How far the OCR turned the photo to read it (counter-clockwise); the vision attempt sees
-    # the photo turned the same way. Absent in older checkpoints: 0.
-    ocr_rotation: int
-    masked_pans: int
-    # The latest extraction attempt: ExtractionOutput as JSON, or None when it did not parse.
+    image_path: str  # of the stored photo
+    masked_pans: int  # card numbers masked in the latest answer
+    # The latest read: Claude's ReceiptAnswer as JSON (masked), or None when it did not parse.
     extraction: dict[str, Any] | None
     parse_error: str | None
     valid: bool  # the latest extraction adds up
     issues: list[dict[str, Any]]  # its arithmetic issues (IssuePayload JSON)
     feedback: list[str]  # lines for the next attempt's <validation_feedback>
-    text_attempts: int
-    vision_attempts: int
+    attempts: int  # Claude reads made: attempt 1 on the extract model, 2 on the retry model
     route: str  # the supervisor's latest target
     review_reason: str | None
     review_id: int | None
@@ -38,6 +31,9 @@ class ReceiptState(TypedDict, total=False):
     approved: bool  # a person approved what is saved
     status: str | None  # the receipt's status once saved
     saved: bool
+    # The printed product code of each ITEM line of the saved extraction, {position, code}
+    # (``reading_codes``); empty for a person's draft, whose codes are read from its lines.
+    codes: list[dict[str, Any]]
     # The matching agent's decisions, one per matched line: {position, source, product_id,
     # new_product_name, code, name_source, catalog}, the ``save_matches`` tool's input.
     matches: list[dict[str, Any]]

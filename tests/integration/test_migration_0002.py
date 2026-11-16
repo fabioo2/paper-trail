@@ -58,6 +58,13 @@ TRIGGERS_PER_TABLE = {"line_items": 3, "products": 4}  # FTS insert/update/delet
 
 
 @pytest.fixture
+def at_0002(database: Path, engine: Engine) -> Engine:
+    """At 0002: ``product_vectors`` and its delete trigger exist until 0007 drops them."""
+    command.upgrade(alembic_config(database), "0002")
+    return engine
+
+
+@pytest.fixture
 def database(tmp_path: Path) -> Path:
     return tmp_path / "paper_trail.db"
 
@@ -138,9 +145,9 @@ def test_s1_ac_09_fts_tables_are_external_content_with_the_planned_tokenizer(
             assert column in sql, (name, column)
 
 
-def test_s1_ac_09_vector_table_is_768_cosine(migrated_engine: Engine) -> None:
+def test_s1_ac_09_vector_table_is_768_cosine(at_0002: Engine) -> None:
     """S1-AC-09: product_vectors is vec0(embedding float[768] distance_metric=cosine)."""
-    with migrated_engine.connect() as connection:
+    with at_0002.connect() as connection:
         sql = " ".join(_objects(connection, "table")["product_vectors"].lower().split())
 
     assert "using vec0" in sql
@@ -192,9 +199,9 @@ def test_s1_ac_09_alias_uniqueness_treats_null_store_as_a_key(migrated_engine: E
     assert "where status = 'open'" in sql or "where status='open'" in sql
 
 
-def test_s1_ac_09_triggers_keep_fts_and_vectors_in_sync(migrated_engine: Engine) -> None:
+def test_s1_ac_09_triggers_keep_fts_and_vectors_in_sync(at_0002: Engine) -> None:
     """S1-AC-09: FTS triggers on line_items and products, and the vector delete trigger."""
-    with migrated_engine.connect() as connection:
+    with at_0002.connect() as connection:
         rows = connection.execute(
             text("SELECT tbl_name, sql FROM sqlite_master WHERE type = 'trigger'")
         ).all()

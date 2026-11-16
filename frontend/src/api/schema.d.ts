@@ -178,7 +178,7 @@ export interface components {
          * IssueCode
          * @enum {string}
          */
-        IssueCode: "line_math" | "items_vs_subtotal" | "subtotal_plus_tax_vs_total" | "items_plus_tax_vs_total" | "negative_item" | "currency_mismatch" | "empty_receipt" | "missing_store" | "missing_date";
+        IssueCode: "line_math" | "item_price_math" | "items_vs_subtotal" | "subtotal_plus_tax_vs_total" | "items_plus_tax_vs_total" | "negative_item" | "currency_mismatch" | "empty_receipt" | "missing_store" | "missing_date";
         /** LineItemOut */
         LineItemOut: {
             /** Applies To Position */
@@ -203,7 +203,8 @@ export interface components {
         };
         /**
          * LineKind
-         * @description What a receipt line is. Only DISCOUNT lines carry negative totals.
+         * @description What a receipt line is. Only DISCOUNT lines, and a DEPOSIT returned, carry negative
+         *     totals.
          * @enum {string}
          */
         LineKind: "item" | "discount" | "deposit" | "fee";
@@ -249,7 +250,7 @@ export interface components {
          * @description Where a receipt is in the pipeline; reported live from Stage 2 (SSE).
          * @enum {string}
          */
-        ProcessingStage: "queued" | "waiting_for_gpu" | "reading" | "extracting" | "validating" | "matching" | "enriching" | "saving" | "done" | "needs_review" | "failed";
+        ProcessingStage: "queued" | "reading" | "extracting" | "validating" | "matching" | "enriching" | "saving" | "done" | "needs_review" | "failed";
         /** ReadinessOut */
         ReadinessOut: {
             /** Components */

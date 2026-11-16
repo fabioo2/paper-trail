@@ -68,8 +68,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture(autouse=True)
 def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """No test sees the developer's PAPER_TRAIL_* variables or a repo-root ``.env`` file."""
-    for key in [k for k in os.environ if k.startswith("PAPER_TRAIL_")]:
+    """No test sees the developer's PAPER_TRAIL_* variables, their Anthropic key or API URL
+    (claude-extraction plan R3, CE-TC-064), or a repo-root ``.env`` file. A test that needs a
+    key sets a fake one itself."""
+    for key in [k for k in os.environ if k.startswith(("PAPER_TRAIL_", "ANTHROPIC_"))]:
         monkeypatch.delenv(key)
     workdir = tmp_path / "cwd"
     workdir.mkdir()
@@ -89,9 +91,10 @@ def _is_loopback(host: object) -> bool:
 def _loopback_only_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test opens a network connection beyond this machine.
 
-    The LLM host is the owner's gaming PC: tests use a scripted fake LLM or a fake Ollama server
-    on 127.0.0.1, never a real model. A connection to any other address fails loudly here, so a
-    stray ``.env`` or a forgotten override cannot reach a real host from an in-process test.
+    Claude is the Anthropic API: tests use a scripted reader, a canned SDK client or a fake
+    Messages server on 127.0.0.1, never a real model (claude-extraction plan R3, CE-TC-064). A
+    connection to any other address fails loudly here, so a stray ``.env`` or a forgotten
+    override cannot reach a real host from an in-process test.
     """
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex

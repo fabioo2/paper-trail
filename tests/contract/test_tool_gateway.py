@@ -21,6 +21,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from paper_trail.application.payloads import DraftPayload
 from paper_trail.domain.enums import AgentRole, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import JsonValue
@@ -35,9 +36,8 @@ from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import TOOL_TRANSPORTS, Harness, build_harness, mcp_gateway
 from tests.extractions import extraction, inconsistent_extraction, without_confidence
-from tests.factories import receipt
-from tests.fakes.images import fake_png
-from tests.fakes.llm import ScriptedLlm
+from tests.factories import receipt, receipt_draft
+from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import serve_mcp
 from tests.storage import in_unit
 from tests.support import require_id
@@ -45,7 +45,7 @@ from tests.support import require_id
 
 @pytest.fixture
 def harness(uow_factory: UnitOfWorkFactory) -> Harness:
-    return build_harness(ScriptedLlm(), uow_factory=uow_factory)
+    return build_harness(ScriptedReader(), uow_factory=uow_factory)
 
 
 @pytest.fixture(params=TOOL_TRANSPORTS)
@@ -78,25 +78,13 @@ def _open_review(gateway: ToolGateway, receipt_id: int, thread: str) -> int:
     return review_id
 
 
-def test_an_allowed_call_returns_json(harness: Harness, gateway: ToolGateway) -> None:
-    path = harness.images.save(fake_png("receipt")).relative_path
+def test_an_allowed_call_returns_json(gateway: ToolGateway) -> None:
+    payload: dict[str, JsonValue] = {"receipt": without_confidence(extraction())}
 
-    result = gateway.call(AgentRole.EXTRACTION, "ocr_read", {"image_path": path})
+    result = gateway.call(AgentRole.VALIDATION, "check_arithmetic", payload)
 
     assert json.loads(json.dumps(result)) == dict(result)
-    assert set(result) == {"text", "mean_confidence", "rotation_degrees", "masked_pans"}
-
-
-def test_ocr_read_reports_the_rotation_over_every_transport(
-    harness: Harness, gateway: ToolGateway
-) -> None:
-    """docs/tests/ocr-rotation.md: the chosen rotation travels with the text (MCP included)."""
-    harness.ocr.rotation_degrees = 270
-    path = harness.images.save(fake_png("sideways")).relative_path
-
-    result = gateway.call(AgentRole.EXTRACTION, "ocr_read", {"image_path": path})
-
-    assert result["rotation_degrees"] == 270
+    assert set(result) == {"ok", "issues"}
 
 
 def test_results_are_the_same_over_every_transport(harness: Harness, gateway: ToolGateway) -> None:
@@ -135,8 +123,10 @@ def test_invalid_input_is_reported_with_the_field(gateway: ToolGateway) -> None:
 
 
 def test_a_domain_error_of_the_tool_keeps_its_class(gateway: ToolGateway) -> None:
+    draft: JsonValue = DraftPayload.from_draft(receipt_draft()).model_dump(mode="json")
+
     with pytest.raises(NotFoundError):
-        gateway.call(AgentRole.EXTRACTION, "ocr_read", {"image_path": "no/such/image.jpg"})
+        gateway.call(AgentRole.SUPERVISOR, "save_receipt", {"receipt_id": 999, "draft": draft})
 
 
 @pytest.mark.parametrize("role", list(AgentRole))

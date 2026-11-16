@@ -45,12 +45,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
     PATH=/opt/venv/bin:$PATH
-# Tesseract + English data (ADR-0010): the OCR of the runtime image, and of the dev image where
-# the integration tests run it.
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends tesseract-ocr tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
-
 FROM python-base AS python-deps
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app

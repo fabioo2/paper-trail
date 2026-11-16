@@ -118,6 +118,14 @@ def parse_bare_code(code: str, store_key: str) -> ItemCode | None:
     return parse_item_code(f"{code} X", store_key)
 
 
+def parse_code_field(code: str, store_key: str) -> ItemCode | None:
+    """A code read apart from its line (a receipt reading's ``code`` field), spaces ignored,
+    classified with the store's profile exactly as the line ``"<code> X"`` would be (at Costco
+    every code is a store item, whatever its length); None when it is not only digits (a
+    ``(N)`` marker in front allowed)."""
+    return parse_bare_code("".join(code.split()), store_key)
+
+
 def printed_name(raw_text: str) -> str:
     """The name of a product no source knows: the line without its leading code and trailing
     tax-flag or price tokens, case and abbreviations kept; ``raw_text`` when nothing is left."""

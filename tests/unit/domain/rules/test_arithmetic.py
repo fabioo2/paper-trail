@@ -183,22 +183,28 @@ def test_s1_ac_05_totals_have_no_tolerance_by_default() -> None:
     assert check_arithmetic(draft, Tolerances(total_cents=1)).ok
 
 
-@pytest.mark.parametrize("kind", [LineKind.ITEM, LineKind.DEPOSIT, LineKind.FEE])
-def test_s1_ac_05_negative_non_discount_line(kind: LineKind) -> None:
-    """S1-AC-05 rule 5: only DISCOUNT lines may be negative."""
+@pytest.mark.parametrize(
+    ("kind", "codes"),
+    [
+        (LineKind.ITEM, [IssueCode.NEGATIVE_ITEM]),
+        (LineKind.FEE, [IssueCode.NEGATIVE_ITEM]),
+        (LineKind.DEPOSIT, []),
+    ],
+)
+def test_s1_ac_05_negative_non_discount_line(kind: LineKind, codes: list[IssueCode]) -> None:
+    """S1-AC-05 rule 5: only DISCOUNT lines, and a DEPOSIT line returning bottles (ruling C7,
+    as ``check_reading`` reads a negative deposit), may be negative."""
     items = [
         _item(0, 1000),
         line_item(position=1, kind=kind, unit_price=None, line_total=cad(-100)),
     ]
     draft = draft_with(items, subtotal=900, tax=None, total=900)
+    report = check_arithmetic(draft)
 
-    (issue,) = check_arithmetic(draft).issues
-
-    assert issue.code is IssueCode.NEGATIVE_ITEM
-    assert issue.position == 1
-    assert issue.actual == cad(-100)
-    assert "line 2" in issue.message
-    assert "-1.00" in issue.message
+    assert _codes(report) == codes
+    for issue in report.issues:
+        assert (issue.position, issue.actual) == (1, cad(-100))
+        assert ("line 2" in issue.message, "-1.00" in issue.message) == (True, True)
 
 
 def test_s1_ac_05_mixed_currency_is_reported_not_raised() -> None:

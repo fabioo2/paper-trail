@@ -1,9 +1,10 @@
 """``catalog backfill`` on real SQLite: idempotence, integrity, a failure inside a group, a race
 with a correction, and re-normalization with code learning under interruption (barcode-lookup
-plan R18, A3, A4, A7, A8, R11, R12; PC-TC-139, 140, 141, 143, 159, 160, 163).
+plan R18, A3, A4, A7, A8, R11, R12; PC-TC-139, 140, 141, 143, 159, 160, 163), at head without
+the product vectors (claude-extraction CE-TC-054).
 
 Pinned: a second ``apply`` writes nothing (every ``updated_at`` included); a failure inside a
-group leaves that group (source, destination, codes, lines, observations, aliases, vectors,
+group leaves that group (source, destination, codes, lines, observations, aliases,
 ``receipts.updated_at``) exactly as before, earlier groups applied, and a rerun converges to the
 uninterrupted result; membership is read inside the group's unit; the backfill opens no socket
 and does not depend on ``CATALOG__ENABLED``. Failures are injected by patching the SQLite
@@ -28,7 +29,6 @@ from paper_trail.adapters.sqlite.product_code_repository import SqliteProductCod
 from paper_trail.adapters.sqlite.product_repository import SqliteProductRepository
 from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
-from paper_trail.adapters.sqlite.vector_index import SqliteVectorIndex
 from paper_trail.application.catalog import (
     BackfillCatalog,
     CatalogBackfillStoppedError,
@@ -86,14 +86,8 @@ class Db:
     factory: UnitOfWorkFactory
     clock: FakeClock
 
-    def add(self, stored: Product, *, vector: bool = True) -> int:
-        def store(uow: UnitOfWork) -> int:
-            product_id = require_id(uow.products.add(stored).id)
-            if vector:
-                uow.vectors.upsert(product_id, [1.0] + [0.0] * (uow.vectors.dimension - 1))
-            return product_id
-
-        return in_unit(self.factory, store)
+    def add(self, stored: Product) -> int:
+        return require_id(in_unit(self.factory, lambda uow: uow.products.add(stored)).id)
 
     def buy(self, *lines: LineItem, store: str = STORE_NAME, day: int = 0) -> Receipt:
         stored = seed_purchase(
@@ -128,7 +122,7 @@ class Db:
 
     def snapshot(self) -> Rows:
         with self.engine.connect() as connection:
-            rows = {
+            return {
                 table: [
                     dict(row)
                     for row in connection.exec_driver_sql(
@@ -137,13 +131,6 @@ class Db:
                 ]
                 for table in TABLES
             }
-            rows["product_vectors"] = [
-                dict(row)
-                for row in connection.exec_driver_sql(
-                    "SELECT rowid, embedding FROM product_vectors ORDER BY rowid"
-                ).mappings()
-            ]
-        return rows
 
 
 def _item(
@@ -261,8 +248,8 @@ def test_pc_tc_139_a_second_apply_writes_nothing(
 def test_i6_a_dry_run_on_a_populated_database_writes_nothing_and_reports_the_apply(
     open_db: Callable[[str], Db], plu: PluCatalog
 ) -> None:
-    """Every table and every vector's bytes are unchanged by the dry run (its vector deletes
-    roll back with the unit), and its report is the following apply's, line for line."""
+    """Every table is unchanged by the dry run, and its report is the following apply's, line
+    for line."""
     db = open_db("dry-run")
     _rich(db)
     before = db.snapshot()
@@ -271,9 +258,8 @@ def test_i6_a_dry_run_on_a_populated_database_writes_nothing_and_reports_the_app
     after_dry = db.snapshot()
     applied = db.backfill(plu)
 
-    assert len(before["product_vectors"]) == 5
     assert after_dry == before
-    assert any(row.vector_deleted for row in dry.products)
+    assert dry.products
     assert (dry.applied, applied.applied) == (False, True)
     assert replace(dry, applied=True) == applied
 
@@ -375,7 +361,6 @@ FAULTS: dict[str, Fault] = {
         SqlitePriceRepository, "reassign", lambda g: lambda lid, *_: lid == g.stray_line_id,
     ),
     "alias": (SqliteProductRepository, "update_alias", lambda g: lambda *_: True),
-    "vector": (SqliteVectorIndex, "delete", lambda g: lambda pid, *_: pid == g.source),
 }  # fmt: skip
 CASES = [
     *[("new", fault) for fault in FAULTS if fault != "destination-reset"],
@@ -412,7 +397,6 @@ def test_pc_tc_140_a_failing_group_rolls_back_whole_and_a_rerun_finishes(
             + [row for row in done["product_codes"] if row["product_id"] == 1],
             key=lambda row: row["id"],
         ),
-        "product_vectors": [row for row in before["product_vectors"] if row["rowid"] != 1],
     }
     assert stopped.value.step == f"product {group.source}"
     assert db.snapshot() == expected

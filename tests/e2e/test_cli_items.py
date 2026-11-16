@@ -19,39 +19,41 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from typer.testing import Result
 
+from paper_trail.config import DATABASE_FILENAME
 from tests.e2e.agent_cli import (
-    StartOllama,
+    StartClaude,
     configure_cli,
-    fake_ollama_env,
+    fake_claude_env,
     invoke,
+    photo,
     rows,
     run_database,
 )
-from tests.extractions import COSTCO_OCR, EGGS_ALIAS, extraction
+from tests.extractions import EGGS_ALIAS, answer
 
 RUN = "e2"
 
 
 @pytest.fixture
 def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    return configure_cli(monkeypatch, tmp_path)
+    return configure_cli(monkeypatch, tmp_path, main_migrated=True)
 
 
 @pytest.fixture
-def ollama(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartOllama]:
-    with fake_ollama_env(monkeypatch) as start:
+def claude(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartClaude]:
+    with fake_claude_env(monkeypatch) as start:
         yield start
 
 
 @pytest.fixture
-def two_receipts(data_dir: Path, ollama: StartOllama, tmp_path: Path) -> Path:
-    """Receipts 1 and 2: the same Costco text, so 2 hits the aliases 1 created; the database."""
-    ollama(extraction(), extraction())
-    for name in ("a.txt", "b.txt"):
-        text = tmp_path / name
-        text.write_text(COSTCO_OCR, encoding="utf-8")
-        result = invoke("process", "--no-color", "--run", RUN, "--text-file", str(text))
+def two_receipts(data_dir: Path, claude: StartClaude, tmp_path: Path) -> Path:
+    """Receipts 1 and 2: two photos read as the same Costco receipt, so 2 hits the aliases 1
+    created; the database."""
+    claude(answer(), answer())
+    for index in range(2):
+        result = _process(photo(tmp_path, f"{index}.png", index))
         assert result.exit_code == 0, result.output
     return run_database(data_dir, RUN)
 
@@ -65,34 +67,35 @@ def _sources(database: Path, receipt_id: int) -> list[str | None]:
     return [source for (source,) in found]
 
 
+def _process(path: Path) -> Result:
+    return invoke("process", "--no-color", "--run", RUN, str(path))
+
+
 def _correct(*args: str) -> tuple[int, str]:
     result = invoke("items", "correct", *args, "--run", RUN)
     return result.exit_code, result.output
 
 
 def test_ac_c_03_the_second_receipt_matched_by_alias(
-    data_dir: Path, ollama: StartOllama, tmp_path: Path
+    data_dir: Path, claude: StartClaude, tmp_path: Path
 ) -> None:
-    fake = ollama(extraction(), extraction())
+    fake = claude(answer(), answer())
     outputs = []
-    for name in ("a.txt", "b.txt"):
-        text = tmp_path / name
-        text.write_text(COSTCO_OCR, encoding="utf-8")
-        result = invoke("process", "--no-color", "--run", RUN, "--text-file", str(text))
+    for index in range(2):
+        result = _process(photo(tmp_path, f"{index}.png", index))
         assert result.exit_code == 0, result.output
         outputs.append(result.output)
 
     database = run_database(data_dir, RUN)
     assert _sources(database, 1) == ["new", "new", "new"]
     assert _sources(database, 2) == ["alias", "alias", "alias"]
-    assert fake.embed_requests == []  # printed-text products are not embedded (PC-TC-52)
     assert fake.calls == 2
     assert "alias 3" in outputs[1]
     assert "save_matches" in outputs[1]
 
 
 def test_s4_ac_06_correct_with_a_new_product_then_memory(
-    two_receipts: Path, ollama: StartOllama, tmp_path: Path
+    two_receipts: Path, claude: StartClaude, tmp_path: Path
 ) -> None:
     code, output = _correct("2", "0", "--new-product", "Kirkland Organic Eggs 24")
 
@@ -120,14 +123,11 @@ def test_s4_ac_06_correct_with_a_new_product_then_memory(
         EGGS_ALIAS,
     ) == [("user_correction",)]
 
-    fake = ollama(extraction())
-    text = tmp_path / "c.txt"
-    text.write_text(COSTCO_OCR, encoding="utf-8")
-    result = invoke("process", "--no-color", "--run", RUN, "--text-file", str(text))
+    claude(answer())
+    result = _process(photo(tmp_path, "2.png", 2))
 
     assert result.exit_code == 0, result.output
     assert _sources(two_receipts, 3) == ["memory", "alias", "alias"]
-    assert fake.embed_requests == []
     ((linked,),) = rows(
         two_receipts, "SELECT product_id FROM line_items WHERE receipt_id = 3 AND position = 0"
     )
@@ -191,6 +191,8 @@ def test_unknown_things_are_exit_1(two_receipts: Path, args: tuple[str, ...]) ->
 
 
 def test_the_main_database_must_be_migrated(data_dir: Path) -> None:
+    (data_dir / DATABASE_FILENAME).unlink()
+
     result = invoke("items", "correct", "1", "0", "--product-id", "1")
 
     assert result.exit_code == 1, result.output

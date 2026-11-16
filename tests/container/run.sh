@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container-level acceptance checks for Stage 0 (S0-AC-07/08/09/10/12/36/39).
+# Container-level acceptance checks for Stage 0 (S0-AC-07/08/09/10/12).
 #
 # Runs INSIDE a pinned docker CLI container (compose service `container-checks`, profile dev)
 # with the Docker socket mounted and the repository mounted at its host path, so nothing is
@@ -7,20 +7,15 @@
 #
 # It starts a throwaway compose project (`paper-trail-checks`) on its own fresh data volume and
 # a non-default port, so it never touches the owner's running `paper-trail` stack, and removes
-# exactly that project's containers and volume on exit. The single-host check uses its own LLM
-# network and a stand-in `ollama` container (never the real Ollama image), removed on exit too.
+# exactly that project's containers and volume on exit.
 set -eu
 
 IMAGE="paper-trail:${PAPER_TRAIL_IMAGE_TAG:-latest}"
 PROJECT="paper-trail-checks"
 CHECK_PORT="${PAPER_TRAIL_CHECKS_PORT:-18420}"
-# 400 MB in Stage 0, 500 MB once Tesseract is in the image (PLAN S0-AC-08; the agent core
-# pulled Tesseract forward from Stage 2).
+# PLAN S0-AC-08.
 IMAGE_BUDGET_MB="${PAPER_TRAIL_IMAGE_BUDGET_MB:-500}"
 HEALTHY_WITHIN_S=60
-SINGLE_HOST_OVERLAY="deploy/single-host/compose.override.yaml"
-CHECK_LLM_NETWORK="paper-trail-checks-llm"
-OLLAMA_STAND_IN="paper-trail-checks-ollama"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 failures=0
@@ -39,14 +34,8 @@ checks_compose() {
         docker compose --env-file /dev/null -p "$PROJECT" -f compose.yaml "$@"
 }
 
-single_host_compose() {
-    PAPER_TRAIL_LLM_NETWORK="$CHECK_LLM_NETWORK" checks_compose -f "$SINGLE_HOST_OVERLAY" "$@"
-}
-
 cleanup() {
     checks_compose down --volumes --remove-orphans >/dev/null 2>&1 || true
-    docker rm -f "$OLLAMA_STAND_IN" >/dev/null 2>&1 || true
-    docker network rm "$CHECK_LLM_NETWORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
@@ -68,21 +57,6 @@ published="$(runtime_compose config --format json | grep -o '"host_ip": *"[^"]*"
     || fail "S0-AC-10 published host_ip values: $published"
 expect "S0-AC-10 default published port is 8420" \
     sh -c "docker compose --env-file /dev/null -f compose.yaml config --format json | grep -q '\"published\": *\"8420\"'"
-
-# --- S0-AC-39: LLM host compose validates; models resolved -----------------------------------
-llm_config="$(docker compose --env-file deploy/llm/.env.example -f deploy/llm/compose.yaml config)"
-for model in qwen2.5:7b-instruct qwen2.5vl:7b nomic-embed-text; do
-    case "$llm_config" in
-        *"$model"*) pass "S0-AC-39 ollama-init pulls $model" ;;
-        *) fail "S0-AC-39 resolved LLM compose does not mention $model" ;;
-    esac
-done
-
-# --- S0-AC-36 / PLAN 2.4a: single-machine topology resolves -----------------------------------
-expect "S0-AC-36 LLM stack network is named paper-trail-llm" \
-    sh -c "docker compose --env-file deploy/llm/.env.example -f deploy/llm/compose.yaml config --format json | grep -q '\"name\": *\"paper-trail-llm\"'"
-expect "S0-AC-36 single-host overlay attaches worker to the external paper-trail-llm network" \
-    sh -c "docker compose --env-file /dev/null -f compose.yaml -f $SINGLE_HOST_OVERLAY config --format json | grep -q '\"name\": *\"paper-trail-llm\"'"
 
 # --- S0-AC-08: image budget, user, contents, built SPA ---------------------------------------
 # The unpacked size, as the sum of the layers: `docker image inspect .Size` also counts the
@@ -145,30 +119,6 @@ done
 web_ports="$(docker port "$(checks_compose ps -q web)" 8000/tcp 2>/dev/null | sort -u | tr '\n' ' ')"
 [ "$web_ports" = "127.0.0.1:${CHECK_PORT} " ] && pass "S0-AC-10 web bound to 127.0.0.1:${CHECK_PORT} only" \
     || fail "S0-AC-10 web published as: $web_ports"
-
-# --- S0-AC-36 / PLAN 2.4a: the worker reaches `ollama` by name over the shared network --------
-# A stand-in HTTP server (the app image's Python) plays Ollama on a throwaway LLM network; the
-# worker, started with the single-host overlay, must reach it at http://ollama:11434.
-reach_ollama='import urllib.request; urllib.request.urlopen("http://ollama:11434/", timeout=2)'
-docker network create "$CHECK_LLM_NETWORK" >/dev/null
-docker run -d --name "$OLLAMA_STAND_IN" --network "$CHECK_LLM_NETWORK" --network-alias ollama \
-    --read-only --cap-drop ALL --entrypoint python "$IMAGE" -m http.server 11434 >/dev/null
-reached=false
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if single_host_compose run --rm --no-deps -T --entrypoint python worker -c "$reach_ollama" \
-        >/dev/null 2>&1; then
-        reached=true
-        break
-    fi
-    sleep 1
-done
-[ "$reached" = true ] && pass "S0-AC-36 single-host worker reaches http://ollama:11434" \
-    || fail "S0-AC-36 single-host worker cannot reach http://ollama:11434"
-if checks_compose run --rm --no-deps -T --entrypoint python worker -c "$reach_ollama" >/dev/null 2>&1; then
-    fail "S0-AC-36 worker reaches ollama without the overlay (the check proves nothing)"
-else
-    pass "S0-AC-36 without the overlay the worker is isolated from the LLM network"
-fi
 
 if [ "$failures" -gt 0 ]; then
     printf '%s container check(s) failed\n' "$failures" >&2

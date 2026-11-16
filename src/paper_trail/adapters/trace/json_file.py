@@ -1,4 +1,4 @@
-"""JSON trace files on the data volume: ``paper-trail.trace/v1`` (agent-core plan 4.3).
+"""JSON trace files on the data volume: ``paper-trail.trace/v2`` (agent-core plan 4.3).
 
 ``runs/<run>/traces/receipt-<id>-<UTC>.json`` per receipt and ``runs/<run>/summary.json`` per
 invocation, each written atomically. A trace is as sensitive as the database: it lives only on
@@ -18,7 +18,7 @@ from paper_trail.domain.models import JsonValue
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.trace import ReceiptRun, RunConfig, RunSummary
 
-SCHEMA_ID: Final = "paper-trail.trace/v1"
+SCHEMA_ID: Final = "paper-trail.trace/v2"
 SCHEMA_FILE = Path(__file__).with_name("trace.schema.json")
 
 
@@ -29,10 +29,8 @@ class _Strict(BaseModel):
 class TraceConfig(_Strict):
     models: dict[str, str]
     prompt_versions: dict[str, str]
-    examples: bool
     feedback: bool
-    max_text_attempts: int
-    max_vision_attempts: int
+    max_attempts: int
     enrichment: bool
     catalog: bool
     transport: str
@@ -47,12 +45,11 @@ class TraceOutcome(_Strict):
 
 class TraceTotals(_Strict):
     llm_calls: int
-    prompt_tokens: int
-    completion_tokens: int
+    input_tokens: int
+    output_tokens: int
     tool_calls: int
     tool_denied: int
-    text_attempts: int
-    vision_attempts: int
+    attempts: int
 
 
 class TraceEventOut(_Strict):
@@ -67,7 +64,7 @@ class TraceEventOut(_Strict):
 
 
 class TraceDocument(_Strict):
-    schema_: Literal["paper-trail.trace/v1"] = Field(default=SCHEMA_ID, alias="schema")
+    schema_: Literal["paper-trail.trace/v2"] = Field(default=SCHEMA_ID, alias="schema")
     run: str
     receipt_id: int
     source_name: str
@@ -88,7 +85,7 @@ class RunSummaryDocument(_Strict):
     failed: int
     skipped: int
     llm_calls: int
-    mean_text_attempts: float
+    mean_attempts: float
 
 
 class JsonTraceWriter:
@@ -100,10 +97,8 @@ class JsonTraceWriter:
         self._config = TraceConfig(
             models=dict(config.models),
             prompt_versions=dict(config.prompt_versions),
-            examples=config.examples,
             feedback=config.feedback,
-            max_text_attempts=config.max_text_attempts,
-            max_vision_attempts=config.max_vision_attempts,
+            max_attempts=config.max_attempts,
             enrichment=config.enrichment,
             catalog=config.catalog,
             transport=config.transport,
@@ -141,7 +136,7 @@ class JsonTraceWriter:
             failed=summary.failed,
             skipped=summary.skipped,
             llm_calls=summary.llm_calls,
-            mean_text_attempts=summary.mean_text_attempts,
+            mean_attempts=summary.mean_attempts,
         )
         path = self._run_dir / "summary.json"
         _write_atomically(path, document.model_dump_json(indent=2))
@@ -170,12 +165,11 @@ def _totals(run: ReceiptRun) -> TraceTotals:
     tools = [event for event in run.events if event.kind is TraceKind.TOOL]
     return TraceTotals(
         llm_calls=len(llm),
-        prompt_tokens=_tokens(llm, "prompt_tokens"),
-        completion_tokens=_tokens(llm, "completion_tokens"),
+        input_tokens=_tokens(llm, "input_tokens"),
+        output_tokens=_tokens(llm, "output_tokens"),
         tool_calls=len(tools),
         tool_denied=sum(1 for event in tools if event.data.get("allowed") is False),
-        text_attempts=run.text_attempts,
-        vision_attempts=run.vision_attempts,
+        attempts=run.attempts,
     )
 
 

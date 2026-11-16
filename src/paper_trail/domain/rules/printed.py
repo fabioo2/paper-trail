@@ -10,8 +10,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 
-from paper_trail.domain.enums import LineKind
 from paper_trail.domain.errors import PrintedValueError
 
 # An amount with exactly two fraction digits: optional parentheses, a leading minus (ASCII or
@@ -36,13 +36,15 @@ _QUANTITY = re.compile(
     r"(?:[x@]\s*)?(?P<number>\d+(?:[.,]\d+)?)\s*(?:kg|lb|ea|x|@)?\s*(?:[x@].*)?",
     re.IGNORECASE | re.DOTALL,
 )
-# A line that refers to another item's code: Costco's instant savings ("0000392208 / 1362394",
-# "0000398549 / MULTIPLE"), a discount even when its minus sign was not read.
-_ITEM_REFERENCE = re.compile(r"\s*\d{4,}\s*/\s*\S+")
-# A multi-buy price: "N/$X" is N units for X.
-_MULTI_BUY = re.compile(r"(?P<count>\d+)\s*/\s*(?P<price>\$?\s*\d+[.,]\d{2})")
-# What may surround a unit price: "@", "ea", "/kg", "/lb".
-_UNIT_PRICE_NOISE = re.compile(r"@|/\s*(?:kg|lb)\b|\bea\b", re.IGNORECASE)
+# A multi-buy price: "N/$X" and "N for $X" are N units for X; a quantity bought may come first
+# ("2 @ 2/$10.00").
+_MULTI_BUY = re.compile(
+    r"(?:\d+\s+)?(?P<count>\d+)\s*(?:/|for)\s*(?P<price>\$?\s*\d+[.,]\d{2})", re.IGNORECASE
+)
+# What may surround a unit price: "@", a unit suffix ("/kg", "/lb", "ea", "/each").
+_UNIT_PRICE_NOISE = re.compile(r"@|/?\s*\b(?:kg|lb|ea|each)\b\.?", re.IGNORECASE)
+# An amount printed without its units digit (".99"): it is 0.99.
+_NO_UNITS = re.compile(r"(?<![\d.,])([.,]\d{2})\b")
 _AMOUNT_EXAMPLE = 'write the amount exactly as printed, with its cents, e.g. "12.90" or "4.00-"'
 
 
@@ -75,13 +77,25 @@ def parse_quantity(text: str | None) -> Decimal:
 def parse_unit_price(text: str | None) -> int | None:
     """Cents of one unit (or one kg/lb), or None when unreadable: the unit price is optional
     and only feeds the line check. ``N/$X`` is X/N, rounded half-up."""
+    exact = parse_unit_price_exact(text)
+    if exact is None:
+        return None
+    return int((Decimal(exact.numerator) / exact.denominator).quantize(Decimal(1), ROUND_HALF_UP))
+
+
+def parse_unit_price_exact(text: str | None) -> Fraction | None:
+    """Cents of one unit as an exact fraction: ``N/$X`` and ``N for $X`` are X/N (``"3/$10.00"``
+    is 1000/3), any other price its printed cents; a unit suffix (``"/lb"``, ``"ea"``) is
+    ignored and ``".99"`` is 0.99. None when unreadable. The line check multiplies this, so a
+    deal price never loses the cent its rounding would."""
     if text is None:
         return None
-    multi_buy = _MULTI_BUY.fullmatch(text.strip())
+    price = _NO_UNITS.sub(r"0\1", _UNIT_PRICE_NOISE.sub(" ", text)).strip()
+    multi_buy = _MULTI_BUY.fullmatch(price)
     if multi_buy and int(multi_buy["count"]) > 0:
-        price = Decimal(parse_amount(multi_buy["price"]))
-        return int((price / int(multi_buy["count"])).quantize(Decimal(1), ROUND_HALF_UP))
-    return _cents_or_none(_UNIT_PRICE_NOISE.sub(" ", text))
+        return Fraction(parse_amount(multi_buy["price"]), int(multi_buy["count"]))
+    cents = _cents_or_none(price)
+    return None if cents is None else Fraction(cents)
 
 
 def _cents_or_none(text: str) -> int | None:
@@ -89,20 +103,6 @@ def _cents_or_none(text: str) -> int | None:
         return parse_amount(text)
     except PrintedValueError:
         return None
-
-
-def is_item_reference(raw_text: str) -> bool:
-    """Whether the line refers to another item's code (``"0000392208 / 1362394"``): such a line
-    is a saving on that item, so a DISCOUNT."""
-    return _ITEM_REFERENCE.match(raw_text) is not None
-
-
-def line_quantity(quantity: Decimal, unit_price_cents: int | None, cents: int | None) -> Decimal:
-    """The line's quantity: 1 when the printed unit price is the printed amount, whatever
-    quantity was read (a size or count in the name, "KIMCHI 1.5KG", is not a quantity)."""
-    if unit_price_cents is not None and unit_price_cents == cents:
-        return Decimal(1)
-    return quantity
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,66 +166,3 @@ def printed_tax(subtotal_cents: int | None, total_cents: int, taxes: Sequence[in
     if subtotal_cents == total_cents:
         return 0
     return sum(taxes) if taxes else None
-
-
-def line_kind(kind: LineKind, cents: int) -> tuple[LineKind, int]:
-    """The line's kind and signed total: a negative line or a discount is a negative DISCOUNT;
-    anything else stays as given."""
-    if cents < 0 or kind is LineKind.DISCOUNT:
-        return LineKind.DISCOUNT, -abs(cents)
-    return kind, cents
-
-
-@dataclass(frozen=True, slots=True)
-class LineAmount:
-    """A line's parsed numbers; ``cents`` is None when the line has no amount printed."""
-
-    quantity: Decimal
-    unit_price_cents: int | None
-    cents: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class PricedLine:
-    """A line's numbers once every line has its amount."""
-
-    quantity: Decimal
-    unit_price_cents: int | None
-    cents: int
-
-
-def share_amounts(lines: Sequence[LineAmount]) -> list[PricedLine]:
-    """Every line with an amount: a multi-buy whose one printed amount covers several products.
-
-    A run of k >= 1 lines without an amount, followed by a priced line whose quantity is k+1,
-    becomes k+1 lines of quantity 1 and no unit price, the amount split evenly (the remainder
-    cents on the last line). Any other missing amount is a ``PrintedValueError`` naming the
-    line (1-based): the group-size guard stops a model from hiding an unreadable price.
-    """
-    priced: list[PricedLine] = []
-    problems: list[str] = []
-    run = 0  # lines without an amount just before this one
-    for position, line in enumerate(lines):
-        if line.cents is None:
-            run += 1
-            continue
-        if run and line.quantity == run + 1:
-            priced += _split(line.cents, run + 1)
-        else:
-            problems += _no_amount(position - run, run)
-            priced.append(PricedLine(line.quantity, line.unit_price_cents, line.cents))
-        run = 0
-    problems += _no_amount(len(lines) - run, run)
-    if problems:
-        raise PrintedValueError("; ".join(problems))
-    return priced
-
-
-def _split(cents: int, parts: int) -> list[PricedLine]:
-    share = cents // parts
-    shares = [share] * (parts - 1) + [cents - share * (parts - 1)]
-    return [PricedLine(Decimal(1), None, part) for part in shares]
-
-
-def _no_amount(first: int, count: int) -> list[str]:
-    return [f"line {first + offset + 1}: no amount printed" for offset in range(count)]

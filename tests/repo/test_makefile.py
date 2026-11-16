@@ -253,25 +253,47 @@ def test_s0_ac_37_outdated_reports_without_modifying(makefile: Makefile) -> None
         assert mutating not in recipe
 
 
-def test_s0_ac_39_llm_config_validates_the_llm_compose_file(makefile: Makefile) -> None:
-    """S0-AC-39: `make llm-config` runs `docker compose -f deploy/llm/compose.yaml config`."""
-    recipe = _recipe_text(makefile, "llm-config")
-
-    assert "docker compose -f deploy/llm/compose.yaml" in recipe
-    assert " config" in recipe
-    for target in ("llm-up", "llm-down"):
-        assert "deploy/llm/compose.yaml" in _recipe_text(makefile, target)
+# --- CE-TC-072: the live Claude smoke is opt-in --------------------------------------------------
 
 
-@pytest.mark.parametrize("target", ["llm-up", "llm-down"])
-def test_s0_ac_39_llm_targets_match_the_windows_readme_commands(
-    makefile: Makefile, target: str
-) -> None:
-    """S0-AC-39: Windows runs the README's `docker compose` lines; Make runs the very same."""
-    (command,) = makefile.rule(target).commands
+def test_ce_tc_072_smoke_claude_is_listed_and_runs_in_docker(makefile: Makefile) -> None:
+    """``make smoke-claude`` (needs a key) reads the stored receipts with the real API."""
+    rule = makefile.rule("smoke-claude")
 
-    assert command.startswith("docker compose -f deploy/llm/compose.yaml --env-file ")
-    assert command in read_text("README.md")
+    assert rule.help
+    assert rule.commands
+    assert all(command.startswith(CONTAINER_PREFIXES) for command in rule.commands)
+
+
+@pytest.mark.parametrize("gate", ["check", "ci"])
+def test_ce_tc_072_no_gate_calls_the_api(makefile: Makefile, gate: str) -> None:
+    def reached(target: str, seen: set[str]) -> set[str]:
+        if target in seen or target not in makefile.rules:
+            return seen
+        seen.add(target)
+        for prerequisite in makefile.rule(target).prerequisites:
+            reached(prerequisite, seen)
+        return seen
+
+    targets = reached(gate, set())
+
+    assert "smoke-claude" not in targets
+    assert [t for t in targets if "smoke-claude" in _recipe_text(makefile, t)] == []
+
+
+def test_ce_tc_072_ci_does_not_run_the_claude_smoke() -> None:
+    assert "smoke-claude" not in read_text(".github/workflows/ci.yml")
+
+
+def test_ce_tc_072_no_target_mentions_the_local_model_stack(makefile: Makefile) -> None:
+    offenders = [
+        target
+        for target, rule in makefile.rules.items()
+        for text in (target, rule.help or "", *rule.commands)
+        if re.search(r"ollama|tesseract|deploy/llm|llm-", text, re.IGNORECASE)
+    ]
+
+    assert offenders == []
 
 
 @pytest.mark.parametrize("target", ["down", "clean"])

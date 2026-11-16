@@ -272,9 +272,9 @@ def echo_named(named: CodeNamed) -> None:
 
 def echo_backfill(backfill: CatalogBackfill) -> None:
     """Per product ``code | lines`` and what changes: ``name before -> after (source)``,
-    brand, size, category and tags ``before -> after``, ``code attached``, ``vector
-    deleted``; then the splits (line, from product, to product, code), the conflicts, the
-    merge candidates and a totals line (dry run or applied, changes)."""
+    brand, size, category and tags ``before -> after``, ``code attached``; then the splits
+    (line, from product, to product, code), the conflicts, the merge candidates and a totals
+    line (dry run or applied, changes)."""
     for row in backfill.products:
         parts = [f"product {row.product_id}: {row.code or '-'}", str(row.lines)]
         before, after = row.before, row.after
@@ -294,8 +294,6 @@ def echo_backfill(backfill: CatalogBackfill) -> None:
                 parts.append(f"{label} {old or '-'} -> {new or '-'}")
         if row.code_attached:
             parts.append("code attached")
-        if row.vector_deleted:
-            parts.append("vector deleted")
         typer.echo(" | ".join(parts))
     if backfill.splits:
         typer.echo("splits:")

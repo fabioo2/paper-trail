@@ -4,7 +4,7 @@
 /backups/
 # The default receipts folder (PAPER_TRAIL_RECEIPTS_DIR): photos stay local.
 /receipts/
-# Per-host compose changes, e.g. a copy of deploy/single-host/compose.override.yaml.
+# Per-host compose changes.
 /compose.override.yaml
 
 # Python

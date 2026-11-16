@@ -154,3 +154,8 @@ def test_s0_ac_08_runtime_build_metadata_comes_after_the_heavy_layers(dockerfile
 
     for layer in ("useradd", "COPY --from=python-deps", "uv sync", "COPY --from=frontend-build"):
         assert runtime.index(layer) < metadata, f"{layer} must precede the build metadata"
+
+
+def test_ce_tc_063_no_image_installs_tesseract(dockerfile: str) -> None:
+    """Claude reads the photo (claude-extraction plan D1): no stage installs an OCR engine."""
+    assert not re.search(r"tesseract", dockerfile, re.IGNORECASE)

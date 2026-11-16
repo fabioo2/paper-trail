@@ -60,20 +60,12 @@
           "title": "Prompt Versions",
           "type": "object"
         },
-        "examples": {
-          "title": "Examples",
-          "type": "boolean"
-        },
         "feedback": {
           "title": "Feedback",
           "type": "boolean"
         },
-        "max_text_attempts": {
-          "title": "Max Text Attempts",
-          "type": "integer"
-        },
-        "max_vision_attempts": {
-          "title": "Max Vision Attempts",
+        "max_attempts": {
+          "title": "Max Attempts",
           "type": "integer"
         },
         "enrichment": {
@@ -92,10 +84,8 @@
       "required": [
         "models",
         "prompt_versions",
-        "examples",
         "feedback",
-        "max_text_attempts",
-        "max_vision_attempts",
+        "max_attempts",
         "enrichment",
         "catalog",
         "transport"
@@ -231,12 +221,12 @@
           "title": "Llm Calls",
           "type": "integer"
         },
-        "prompt_tokens": {
-          "title": "Prompt Tokens",
+        "input_tokens": {
+          "title": "Input Tokens",
           "type": "integer"
         },
-        "completion_tokens": {
-          "title": "Completion Tokens",
+        "output_tokens": {
+          "title": "Output Tokens",
           "type": "integer"
         },
         "tool_calls": {
@@ -247,23 +237,18 @@
           "title": "Tool Denied",
           "type": "integer"
         },
-        "text_attempts": {
-          "title": "Text Attempts",
-          "type": "integer"
-        },
-        "vision_attempts": {
-          "title": "Vision Attempts",
+        "attempts": {
+          "title": "Attempts",
           "type": "integer"
         }
       },
       "required": [
         "llm_calls",
-        "prompt_tokens",
-        "completion_tokens",
+        "input_tokens",
+        "output_tokens",
         "tool_calls",
         "tool_denied",
-        "text_attempts",
-        "vision_attempts"
+        "attempts"
       ],
       "title": "TraceTotals",
       "type": "object"
@@ -272,8 +257,8 @@
   "additionalProperties": false,
   "properties": {
     "schema": {
-      "const": "paper-trail.trace/v1",
-      "default": "paper-trail.trace/v1",
+      "const": "paper-trail.trace/v2",
+      "default": "paper-trail.trace/v2",
       "title": "Schema",
       "type": "string"
     },

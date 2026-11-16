@@ -14,7 +14,17 @@ from structlog.typing import Processor
 
 from paper_trail.config import Settings
 
-_THIRD_PARTY_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "alembic", "httpx")
+_THIRD_PARTY_LOGGERS = (
+    "uvicorn",
+    "uvicorn.error",
+    "uvicorn.access",
+    "alembic",
+    "httpx",
+    "httpx2",
+)
+# The Claude SDK and its HTTP stack log whole requests at DEBUG (the photo as base64, headers):
+# they never log below WARNING, whatever LOG_LEVEL is (claude-extraction review C4).
+_QUIET_LOGGERS = ("anthropic", "httpx", "httpx2", "httpcore")
 
 
 class _StdoutHandler(logging.StreamHandler[TextIO]):
@@ -81,3 +91,5 @@ def configure_logging(settings: Settings, *, to_stderr: bool = False) -> None:
         logger.handlers.clear()
         logger.setLevel(logging.NOTSET)
         logger.propagate = True
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

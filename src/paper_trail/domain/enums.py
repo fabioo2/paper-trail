@@ -34,7 +34,8 @@ class Category(StrEnum):
 
 
 class LineKind(StrEnum):
-    """What a receipt line is. Only DISCOUNT lines carry negative totals."""
+    """What a receipt line is. Only DISCOUNT lines, and a DEPOSIT returned, carry negative
+    totals."""
 
     ITEM = auto()
     DISCOUNT = auto()
@@ -63,7 +64,6 @@ class ProcessingStage(StrEnum):
     """Where a receipt is in the pipeline; reported live from Stage 2 (SSE)."""
 
     QUEUED = auto()
-    WAITING_FOR_GPU = auto()
     READING = auto()
     EXTRACTING = auto()
     VALIDATING = auto()

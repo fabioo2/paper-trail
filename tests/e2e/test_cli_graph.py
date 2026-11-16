@@ -1,6 +1,6 @@
 """``paper-trail graph --mermaid`` (AC-A-12): the compiled graph as Mermaid, for the report.
 
-Pinned (docs/tests/agent-core-A.md): it needs neither a database nor a configured LLM host
+Pinned (docs/tests/agent-core-A.md): it needs neither a database nor a Claude key
 (nothing is opened or contacted) and prints only the diagram on stdout.
 """
 
@@ -11,18 +11,17 @@ import pytest
 from tests.e2e.agent_cli import configure_cli, invoke
 
 NODES = (
-    "read",
-    "extract_text",
-    "extract_vision",  # slice D
+    "extract",
     "validate",
     "supervisor",
     "review",
     "persist",
     "match",
     "commit_matches",
-    "enrich",  # slice D
+    "enrich",
     "commit_enrichment",
 )
+GONE = ("read", "extract_text", "extract_vision")
 
 
 def test_ac_a_12_graph_prints_mermaid_without_a_database_or_llm(
@@ -36,4 +35,6 @@ def test_ac_a_12_graph_prints_mermaid_without_a_database_or_llm(
     assert "graph TD" in result.stdout
     for node in NODES:
         assert node in result.stdout
+    for node in GONE:
+        assert node not in result.stdout
     assert not (data_dir / "paper_trail.db").exists()

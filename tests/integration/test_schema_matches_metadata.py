@@ -40,7 +40,6 @@ NOT_IN_METADATA = {
     "alembic_version",
     "line_items_fts",
     "products_fts",
-    "product_vectors",
     # LangGraph's SqliteSaver tables (Stage 3) live in the same file but are not ours.
     "checkpoints",
     "writes",
@@ -106,10 +105,12 @@ SEED_ROWS: list[tuple[str, dict[str, Any]]] = [
     ("product_codes", {"product_id": 1, "scheme": "store", "store_key": "costco",
                        "code": "1362394", "source": "manual", "created_at": NOW,
                        "updated_at": NOW}),
+    ("claude_calls", {"at": NOW, "model": "claude-haiku-5-5", "input_tokens": 1500,
+                      "output_tokens": 700, "cost_usd": "0.0005"}),
 ]  # fmt: skip
 
 
-SHADOW_TABLE_PREFIXES = ("line_items_fts_", "products_fts_", "product_vectors_")
+SHADOW_TABLE_PREFIXES = ("line_items_fts_", "products_fts_")
 
 
 def _include_name(name: str | None, type_: str, _parents: dict[str, str | None]) -> bool:
@@ -169,7 +170,8 @@ def test_s1_ac_09_migrated_schema_matches_the_metadata(migrated_engine: Engine) 
 
 
 def test_s1_ac_09_metadata_declares_exactly_the_regular_tables() -> None:
-    """S1-AC-09: schema.py holds the eight regular tables and no virtual table."""
+    """S1-AC-09: schema.py holds the regular tables and no virtual table; CE-TC-049: no vector
+    table, and 0007's ``claude_calls`` (ruling I1)."""
     assert set(metadata.tables) == {
         "receipts",
         "line_items",
@@ -180,6 +182,7 @@ def test_s1_ac_09_metadata_declares_exactly_the_regular_tables() -> None:
         "review_items",
         "corrections",
         "product_codes",
+        "claude_calls",
     }
 
 
@@ -253,12 +256,17 @@ def test_s1_ac_09_enum_check_constraints_match_the_enums(
         ("corrections", "new_value", None),
         ("products", "field_sources", None),
         ("product_codes", "code", None),
+        ("claude_calls", "model", None),
+        ("claude_calls", "cost_usd", None),
+        ("claude_calls", "input_tokens", -1),
+        ("claude_calls", "output_tokens", -1),
     ],
 )
 def test_s1_ac_09_other_constraints(
-    seeded: Engine, table: str, column: str, value: str | None
+    seeded: Engine, table: str, column: str, value: str | int | None
 ) -> None:
-    """PLAN 3.5: currency length 3, payment_last4 four digits, NOT NULL columns."""
+    """PLAN 3.5: currency length 3, payment_last4 four digits, NOT NULL columns; token counts
+    are never negative (0007)."""
     with pytest.raises(IntegrityError):
         _update(seeded, table, column, value)
 

@@ -9,7 +9,7 @@ from paper_trail.bootstrap import build_container, dispose
 from paper_trail.interfaces.web.app import create_app
 from tests.support import SCHEMA_HEAD, MakeSettings
 
-DATABASE_DATA_KEYS = {"revision", "head", "sqlite_version", "sqlite_vec"}
+DATABASE_DATA_KEYS = {"revision", "head", "sqlite_version"}
 
 
 def test_s0_ac_17_health_returns_status_version_and_build_sha(client: TestClient) -> None:
@@ -46,7 +46,10 @@ def test_s0_ac_17_health_does_not_touch_the_database(client: TestClient, tmp_pat
 
 
 def test_s0_ac_18_ready_when_migrated(migrated_client: TestClient) -> None:
-    """S0-AC-18: 200 with a database component carrying revision/head/sqlite/vec data."""
+    """S0-AC-18: 200 with a database component carrying revision/head/sqlite data. CE-TC-042:
+    the database is the only component (no LLM host), without sqlite-vec and without a Claude
+    key (the test environment sets none), and the check makes no outbound call (the suite's
+    loopback-only guard would fail it)."""
     response = migrated_client.get("/api/health/ready")
 
     assert response.status_code == 200
@@ -55,9 +58,9 @@ def test_s0_ac_18_ready_when_migrated(migrated_client: TestClient) -> None:
     (component,) = [c for c in body["components"] if c["name"] == "database"]
     assert component["status"] == "ok"
     assert component["detail"] is None
-    assert component["data"].keys() >= DATABASE_DATA_KEYS
+    assert [c["name"] for c in body["components"]] == ["database"]
+    assert component["data"].keys() == DATABASE_DATA_KEYS
     assert component["data"]["revision"] == component["data"]["head"] == SCHEMA_HEAD
-    assert component["data"]["sqlite_vec"].startswith("v")
 
 
 def test_s0_ac_18_not_ready_when_database_not_migrated(client: TestClient) -> None:

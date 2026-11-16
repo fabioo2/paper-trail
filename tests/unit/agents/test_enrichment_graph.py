@@ -2,9 +2,9 @@
 PC-TC-66..71). Before PR 1a this stage asked the model for a name, brand, size and category;
 now no model is asked anywhere after the extraction.
 
-Scripted LLM holding the extraction reply only (any further request fails the run), the PLU
+Scripted reader holding the extraction answer only (any further read fails the run), the PLU
 table on a ``tmp_path`` file (``PluCatalog``, the production adapter: it tells an organic code
-from a conventional one), fake embeddings, in-process tools; the MCP transport is compared in
+from a conventional one), in-process tools; the MCP transport is compared in
 ``test_transport_equivalence.py``.
 
 Pinned (plan R9, A6; signatures "Agents"):
@@ -48,7 +48,6 @@ from paper_trail.ports.tools import ToolGateway
 from tests.agent_harness import Harness, agent_settings, build_harness
 from tests.extractions import (
     C1,
-    COSTCO_OCR,
     L3,
     L4,
     LOBLAWS,
@@ -58,14 +57,14 @@ from tests.extractions import (
     STORE_KEY,
     STORE_NAME,
     U1,
-    coded_extraction,
-    enrichment,
+    coded_answer,
 )
 from tests.factories import correction
-from tests.fakes.llm import Reply, ScriptedLlm
+from tests.fakes.reader import Reply, ScriptedReader
 from tests.fakes.tools import CrashAfterToolGateway, MisroutedToolGateway, RecordingToolGateway
 from tests.storage import in_unit
 from tests.support import require_id
+from tests.unit.agents.graph_support import fresh_label, scripted
 
 LLM = TraceKind.LLM
 TOOL = TraceKind.TOOL
@@ -106,13 +105,13 @@ def _harness(
     """A process on a fresh database, or on ``harness``'s data (a second process)."""
     if harness is None:
         return build_harness(
-            ScriptedLlm(*replies),
+            ScriptedReader(*replies),
             settings=agent_settings(enrichment=enrichment_on),
             catalog=plu,
             wrap_tools=wrap_tools,
         )
     return build_harness(
-        ScriptedLlm(*replies),
+        ScriptedReader(*replies),
         settings=harness.settings,
         checkpointer=harness.checkpointer,
         uow_factory=harness.uow_factory,
@@ -129,8 +128,8 @@ def _completed(outcome: ProcessOutcome) -> int:
     return outcome.receipt_id
 
 
-def _process(harness: Harness, name: str = "receipt.txt") -> int:
-    return _completed(harness.process_text(COSTCO_OCR, name))
+def _process(harness: Harness) -> int:
+    return _completed(harness.process_image(fresh_label()))
 
 
 def _products(harness: Harness, receipt_id: int) -> list[Product]:
@@ -146,8 +145,8 @@ def _events(harness: Harness, receipt_id: int, kind: TraceKind, name: str) -> li
 
 
 def _assert_no_model_after_extraction(harness: Harness, receipt_id: int) -> None:
-    """Zero model requests (signatures "Tests"): the extraction is the only request."""
-    assert harness.llm.calls == 1
+    """Zero model requests (signatures "Tests"): the extraction is the only read."""
+    assert scripted(harness).calls == 1
     asked = [
         event
         for event in harness.events(receipt_id)
@@ -195,7 +194,7 @@ def test_pc_tc_66_a_plu_hit_fills_what_the_source_supplies(
     raw_text: str,
     expected: tuple[str, Category, tuple[str, ...], dict[str, FieldSource]],
 ) -> None:
-    harness = _harness(plu, coded_extraction([raw_text]))
+    harness = _harness(plu, coded_answer([raw_text]))
 
     receipt_id = _process(harness)
 
@@ -205,14 +204,13 @@ def test_pc_tc_66_a_plu_hit_fills_what_the_source_supplies(
     describes = _events(harness, receipt_id, TOOL, DESCRIBE)
     assert [event.agent for event in describes] == [AgentRole.SUPERVISOR]
     _assert_no_model_after_extraction(harness, receipt_id)
-    assert harness.embeddings.calls == 1  # the confirmed new product, in save_matches
 
 
 # --- PC-TC-67: a miss changes nothing -------------------------------------------------------------
 
 
 def test_pc_tc_67_a_miss_leaves_printed_text_products_as_they_are(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([C1, U1], store_name=STORE_NAME))
+    harness = _harness(plu, coded_answer([C1, U1], store_name=STORE_NAME))
 
     receipt_id = _process(harness)
 
@@ -223,14 +221,13 @@ def test_pc_tc_67_a_miss_leaves_printed_text_products_as_they_are(plu: PluCatalo
     ]
     assert _events(harness, receipt_id, TOOL, DESCRIBE) == []
     _assert_no_model_after_extraction(harness, receipt_id)
-    assert harness.embeddings.calls == 0
 
 
 # --- PC-TC-68: the entry comes from matching; only this receipt's new products ------------------
 
 
 def test_pc_tc_68_enrichment_uses_the_entry_matching_found(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([L3, C1]))
+    harness = _harness(plu, coded_answer([L3, C1]))
 
     receipt_id = _process(harness)
 
@@ -249,19 +246,19 @@ def test_pc_tc_68_enrichment_uses_the_entry_matching_found(plu: PluCatalog) -> N
 
 
 def test_pc_tc_68_the_next_identical_receipt_describes_nothing(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([L3, C1]), coded_extraction([L3, C1]))
-    first = _process(harness, "a.txt")
+    harness = _harness(plu, coded_answer([L3, C1]), coded_answer([L3, C1]))
+    first = _process(harness)
 
-    second = _process(harness, "b.txt")
+    second = _process(harness)
 
     assert harness.match_sources(second) == [MatchSource.CATALOG] * 2
     assert _products(harness, second) == _products(harness, first)
     assert _events(harness, second, TOOL, DESCRIBE) == []
-    assert harness.llm.calls == 2  # the two extractions
+    assert scripted(harness).calls == 2  # the two extractions
 
 
 def test_pc_tc_68_two_lines_of_one_new_product_describe_it_once(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([L3, L3]))
+    harness = _harness(plu, coded_answer([L3, L3]))
 
     receipt_id = _process(harness)
 
@@ -273,8 +270,8 @@ def test_pc_tc_68_two_lines_of_one_new_product_describe_it_once(plu: PluCatalog)
 # --- PC-TC-69: no model in enrich; the switch -----------------------------------------------------
 
 
-def test_pc_tc_69_a_queued_enrichment_reply_is_never_asked_for(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([L3]), enrichment())
+def test_pc_tc_69_a_queued_reply_is_never_asked_for(plu: PluCatalog) -> None:
+    harness = _harness(plu, coded_answer([L3]), coded_answer([L3]))
 
     receipt_id = _process(harness)
 
@@ -283,7 +280,7 @@ def test_pc_tc_69_a_queued_enrichment_reply_is_never_asked_for(plu: PluCatalog) 
 
 
 def test_with_enrichment_off_the_stage_does_not_run(plu: PluCatalog) -> None:
-    harness = _harness(plu, coded_extraction([L3]), enrichment_on=False)
+    harness = _harness(plu, coded_answer([L3]), enrichment_on=False)
 
     receipt_id = _process(harness)
 
@@ -324,7 +321,7 @@ def test_pc_tc_70_a_persons_category_correction_reaches_every_new_product(
 ) -> None:
     raw_text, store_name, store_key = line
     harness = _harness(
-        plu, coded_extraction([raw_text], store_name=store_name), enrichment_on=enrichment_on
+        plu, coded_answer([raw_text], store_name=store_name), enrichment_on=enrichment_on
     )
     _remember_category(harness, raw_text, store_key)
 
@@ -340,7 +337,7 @@ def test_pc_tc_70_a_persons_category_correction_reaches_every_new_product(
 def test_pc_tc_70_a_correction_at_another_store_is_not_applied(
     plu: PluCatalog,
 ) -> None:
-    harness = _harness(plu, coded_extraction([L3]))
+    harness = _harness(plu, coded_answer([L3]))
     _remember_category(harness, L3, "walmart")
 
     receipt_id = _process(harness)
@@ -366,7 +363,7 @@ def test_commit_enrichment_describes_each_product_with_its_line_and_store(
         recorder.append(RecordingToolGateway(gateway))
         return recorder[0]
 
-    harness = _harness(plu, coded_extraction([L3, L4]), wrap_tools=record)
+    harness = _harness(plu, coded_answer([L3, L4]), wrap_tools=record)
 
     receipt_id = _process(harness)
 
@@ -407,12 +404,12 @@ def test_describe_from_catalog_called_by_the_enrichment_agent_is_denied(
 ) -> None:
     harness = _harness(
         plu,
-        coded_extraction([L3]),
+        coded_answer([L3]),
         wrap_tools=lambda gateway: MisroutedToolGateway(gateway, DESCRIBE, AgentRole.ENRICHMENT),
     )
 
     with capture_logs() as logs:
-        outcome = harness.process_text(COSTCO_OCR)
+        outcome = harness.process_image(fresh_label())
 
     assert outcome.graph is None
     assert outcome.failure is not None
@@ -427,15 +424,15 @@ def test_describe_from_catalog_called_by_the_enrichment_agent_is_denied(
 
 
 def test_pc_tc_71_a_crash_during_enrichment_resumes_the_describes_only(plu: PluCatalog) -> None:
-    twin = _harness(plu, coded_extraction([L3, L4]))
+    twin = _harness(plu, coded_answer([L3, L4]))
     twin_id = _process(twin)
     expected = _products(twin, twin_id)
     first = _harness(
         plu,
-        coded_extraction([L3, L4]),
+        coded_answer([L3, L4]),
         wrap_tools=lambda gateway: CrashAfterToolGateway(gateway, DESCRIBE),
     )
-    crashed = first.process_text(COSTCO_OCR)
+    crashed = first.process_image(fresh_label())
     assert crashed.failure is not None
     receipt_id = crashed.receipt_id
     assert first.match_sources(receipt_id) == [MatchSource.NEW] * 2
@@ -445,7 +442,7 @@ def test_pc_tc_71_a_crash_during_enrichment_resumes_the_describes_only(plu: PluC
 
     assert resumed.graph is not None
     assert resumed.graph.resumed_from == "enrich"
-    assert second.llm.calls == 0
+    assert scripted(second).calls == 0
     assert second.node_runs(receipt_id) == ["commit_enrichment"]
     assert len(_events(second, receipt_id, TOOL, DESCRIBE)) == 2
     assert _products(second, receipt_id) == expected

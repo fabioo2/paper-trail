@@ -41,12 +41,13 @@ from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import Harness, build_harness
 from tests.e2e.agent_cli import invoke
 from tests.extractions import inconsistent_extraction, without_confidence
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import call_tool, list_tools, result_text, role_url, serve_mcp
 from tests.support import CopyMigrated, cli_command, free_port
 
-# PLAN 7, barcode-lookup PC-TC-44
-MATCHING_TOOLS = frozenset({"product_lookup", "product_similarity_search", "catalog_lookup"})
+# PLAN 7, barcode-lookup PC-TC-44, claude-extraction CE-TC-066
+MATCHING_TOOLS = frozenset({"product_lookup", "catalog_lookup"})
+REMOVED_TOOLS = frozenset({"ocr_read", "product_similarity_search"})
 WRITE_TOOLS = frozenset({"save_receipt", "open_review", "save_matches", "describe_from_catalog"})
 SUPERVISOR_SLICE_A_TOOLS = frozenset({"save_receipt", "open_review"})
 INITIALIZE = {
@@ -65,7 +66,7 @@ PRIVATE_STORE = "PRIVATE GROCER 4471"
 
 @pytest.fixture
 def harness() -> Harness:
-    return build_harness(ScriptedLlm())
+    return build_harness(ScriptedReader())
 
 
 @pytest.fixture
@@ -89,8 +90,8 @@ def test_s5_ac_03_each_role_lists_exactly_its_tools(
 
 
 def test_s5_ac_03_matching_sees_only_its_read_tools(harness: Harness, server: str) -> None:
-    """PLAN 7 and PC-TC-44: `product_lookup`, `product_similarity_search` and
-    `catalog_lookup`, never a write tool."""
+    """PLAN 7, PC-TC-44 and CE-TC-066: `product_lookup` and `catalog_lookup`, never a write
+    tool."""
     names = {tool.name for tool in list_tools(server, AgentRole.MATCHING)}
 
     assert names == MATCHING_TOOLS
@@ -140,11 +141,37 @@ def test_an_allowed_call_returns_the_output_as_structured_content(
     assert result.structured_content == dict(expected)
 
 
-def test_invalid_input_is_an_error_result_naming_the_field(server: str) -> None:
-    result = call_tool(server, AgentRole.EXTRACTION, "ocr_read", {"image_path": 42})
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_ce_tc_066_no_role_lists_a_removed_tool(server: str, role: AgentRole) -> None:
+    assert not {tool.name for tool in list_tools(server, role)} & REMOVED_TOOLS
+
+
+def test_ce_tc_066_a_removed_tool_is_unknown_over_mcp(server: str) -> None:
+    result = call_tool(server, AgentRole.MATCHING, "product_similarity_search", {"text": "x"})
 
     assert result.is_error is True
-    assert "image_path" in result_text(result)
+    assert "product_similarity_search" in result_text(result)
+
+
+def test_ce_tc_066_the_text_lookup_answers_as_in_process(harness: Harness, server: str) -> None:
+    """``product_lookup`` (a person's correction, then the store's exact alias) is the text
+    search that replaces the similarity search; it gives the same JSON over both transports."""
+    payload: dict[str, JsonValue] = {"alias": "KS ORG EGGS 24CT", "store_key": "costco"}
+    expected = InProcessToolGateway(harness.registry).call(
+        AgentRole.MATCHING, "product_lookup", payload
+    )
+
+    result = call_tool(server, AgentRole.MATCHING, "product_lookup", payload)
+
+    assert result.is_error is False
+    assert result.structured_content == dict(expected)
+
+
+def test_invalid_input_is_an_error_result_naming_the_field(server: str) -> None:
+    result = call_tool(server, AgentRole.MATCHING, "product_lookup", {"alias": 42})
+
+    assert result.is_error is True
+    assert "alias" in result_text(result)
 
 
 def test_an_unknown_role_has_no_endpoint(server: str) -> None:

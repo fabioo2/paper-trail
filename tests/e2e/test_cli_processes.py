@@ -24,9 +24,17 @@ import pytest
 from alembic import command
 
 from paper_trail.adapters.sqlite.migrations import alembic_config
-from tests.e2e.agent_cli import invoke, receipt_status, run_database, trace_files
-from tests.extractions import COSTCO_OCR, printed_extraction
-from tests.fakes.ollama_server import FakeOllama, serve_fake_ollama
+from tests.e2e.agent_cli import (
+    TEST_API_KEY,
+    invoke,
+    migrate_main,
+    photo,
+    receipt_status,
+    run_database,
+    trace_files,
+)
+from tests.extractions import answer
+from tests.fakes.anthropic_server import FakeClaude, serve_fake_claude
 from tests.support import SCHEMA_HEAD, cli_command, free_port, run_cli
 
 REQUIRED_LOG_KEYS = {"timestamp", "level", "event", "logger"}
@@ -259,27 +267,24 @@ def test_ac_a_10_process_runs_a_receipt_through_the_agents_in_a_real_process(
     cli_env: dict[str, str], data_dir: Path, tmp_path: Path
 ) -> None:
     """AC-A-10: `paper-trail process` as the `cli` container runs it: the real composition root,
-    SQLite, Ollama adapter and trace writer, against a scripted fake Ollama on 127.0.0.1. With
-    the production defaults: after the extraction no model and no embedding is asked for
-    (PC-TC-89), and the same receipt again is matched by alias."""
-    receipts = [tmp_path / "costco.txt", tmp_path / "costco-again.txt"]
-    for receipt in receipts:
-        receipt.write_text(COSTCO_OCR, encoding="utf-8")
+    SQLite, Anthropic adapter and trace writer, against a scripted fake Messages API on
+    127.0.0.1 (``ANTHROPIC_BASE_URL``). With the production defaults: after the read no model is
+    asked for (PC-TC-89), and the same receipt again is matched by alias."""
+    migrate_main(data_dir)  # a --run needs the main database (R3, C1)
+    receipts = [photo(tmp_path, "costco.png", 0), photo(tmp_path, "costco-again.png", 1)]
 
     outputs: list[str] = []
-    with serve_fake_ollama(FakeOllama(printed_extraction(), printed_extraction())) as fake:
-        env = {**cli_env, "PAPER_TRAIL_OLLAMA__BASE_URL": fake.url}
+    with serve_fake_claude(FakeClaude(answer(), answer())) as fake:
+        env = {**cli_env, "ANTHROPIC_BASE_URL": fake.url, "ANTHROPIC_API_KEY": TEST_API_KEY}
         for receipt in receipts:
             result = run_cli(
-                cli_command("process", "--no-color", "--run", "e2e", "--text-file", str(receipt)),
-                env,
+                cli_command("process", "--no-color", "--run", "e2e", str(receipt)), env
             )
             assert result.returncode == 0, result.stderr
             outputs.append(result.stdout)
 
     assert "COMPLETED" in outputs[0]
-    assert fake.calls == 2  # the two extractions only
-    assert fake.embed_requests == []
+    assert fake.calls == 2  # the two reads only
     assert "alias 3" in outputs[1]
     assert receipt_status(run_database(data_dir, "e2e"), 1) == "completed"
     assert len(trace_files(data_dir, "e2e")) == 2

@@ -23,7 +23,7 @@ jobs:
         run: make lint typecheck test
         env:
           # One test worker per CPU of the runner (2 vCPUs): the Makefile's cap of 6 is for the
-          # owner's shared host and oversubscribed the runner until a Tesseract run timed out.
+          # owner's shared host and oversubscribed the runner until its runs timed out.
           PYTEST_WORKERS: auto
       - uses: actions/upload-artifact@v7
         if: always()

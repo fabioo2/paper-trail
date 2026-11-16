@@ -52,7 +52,7 @@ def sqlite_uow_factory(engine: Engine, clock: Clock) -> UnitOfWorkFactory:
 def table_values(database: Path) -> Iterator[tuple[str, str, str]]:
     """(table, column, value) for every non-NULL cell of every table in the database file.
 
-    BLOBs (FTS5 index pages, vectors) are decoded as Latin-1 so that digits stored in them are
+    BLOBs (FTS5 index pages) are decoded as Latin-1 so that digits stored in them are
     still visible to a text scan.
     """
     with closing(sqlite3.connect(database)) as connection:
@@ -61,10 +61,7 @@ def table_values(database: Path) -> Iterator[tuple[str, str, str]]:
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         ]
         for table in tables:
-            try:
-                cursor = connection.execute(f'SELECT * FROM "{table}"')  # noqa: S608 - names from sqlite_master
-            except sqlite3.OperationalError:
-                continue  # virtual tables whose module (vec0) is not loaded in this connection
+            cursor = connection.execute(f'SELECT * FROM "{table}"')  # noqa: S608 - names from sqlite_master
             columns = [description[0] for description in cursor.description]
             for row in cursor:
                 for column, value in zip(columns, row, strict=True):

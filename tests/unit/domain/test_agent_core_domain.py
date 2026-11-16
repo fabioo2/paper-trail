@@ -97,8 +97,8 @@ def test_trace_event_is_frozen() -> None:
         receipt_id=1,
         agent=AgentRole.EXTRACTION,
         kind=TraceKind.TOOL,
-        name="ocr_read",
-        summary="1,284 chars",
+        name="check_arithmetic",
+        summary="ok",
         data={"allowed": True},
         duration_ms=12,
     )

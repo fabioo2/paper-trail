@@ -82,7 +82,7 @@ class ProductRepository(Protocol):
 
     def update(self, product: Product) -> Product:
         """Replace the stored product's name, brand, size, category, tags and field sources;
-        its id, ``created_at``, aliases, codes, vector and prices are kept. Returns it as
+        its id, ``created_at``, aliases, codes and prices are kept. Returns it as
         stored; NotFoundError (nothing changed) for an unknown id."""
         ...
 

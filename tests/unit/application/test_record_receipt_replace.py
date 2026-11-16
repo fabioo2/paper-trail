@@ -39,7 +39,6 @@ from tests.factories import (
     simple_draft,
 )
 from tests.fakes.clock import FakeClock
-from tests.fakes.embeddings import FakeEmbeddings
 from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
 from tests.storage import in_unit
 from tests.support import require_id
@@ -241,7 +240,7 @@ def test_tc_60_61_matching_prices_the_item_from_the_stored_link_and_never_the_di
         for position, name in enumerate(SIMPLE_PRODUCTS)
     ]
 
-    record.record_matches(receipt_id, choices, FakeEmbeddings())
+    record.record_matches(receipt_id, choices)
 
     saved = database.state.receipts[receipt_id]
     discount = saved.items[4]
@@ -300,7 +299,7 @@ def test_tc_125_matching_leaves_a_negative_item_line_unpriced_and_completes(
         MatchChoice(1, MatchSource.NEW, new_product_name="Milk"),
     ]
 
-    recorded = record.record_matches(receipt_id, choices, FakeEmbeddings())
+    recorded = record.record_matches(receipt_id, choices)
 
     saved = database.state.receipts[receipt_id]
     assert (saved.status, recorded.prices, recorded.unpriced) == (

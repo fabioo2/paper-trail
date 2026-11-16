@@ -1,4 +1,5 @@
-"""DatabaseHealthProbe against real SQLite files (S0-AC-18)."""
+"""DatabaseHealthProbe against real SQLite files (S0-AC-18); CE-TC-042: readiness no longer
+asks for sqlite-vec or the vector table."""
 
 import sqlite3
 from collections.abc import Iterator
@@ -15,8 +16,6 @@ from paper_trail.adapters.sqlite.migrations import upgrade_to_head
 from paper_trail.domain.health import HealthStatus
 from tests.support import SCHEMA_HEAD
 
-DATA_KEYS = {"revision", "head", "sqlite_version", "sqlite_vec"}
-
 
 @pytest.fixture
 def engine(tmp_path: Path) -> Iterator[Engine]:
@@ -31,17 +30,19 @@ def test_s0_ac_18_probe_is_named_database(engine: Engine) -> None:
 
 
 def test_s0_ac_18_ok_at_head_with_component_data(engine: Engine) -> None:
-    """S0-AC-18: at head the probe is OK and reports revision, head, sqlite and vec versions."""
+    """S0-AC-18: at head the probe is OK and reports revision, head and the SQLite version;
+    CE-TC-042: exactly those, on a connection without sqlite-vec."""
     upgrade_to_head(engine)
 
     health = DatabaseHealthProbe(engine).check()
 
     assert health.status is HealthStatus.OK
     assert health.detail is None
-    assert health.data.keys() >= DATA_KEYS
-    assert health.data["revision"] == health.data["head"] == SCHEMA_HEAD
-    assert health.data["sqlite_version"] == sqlite3.sqlite_version
-    assert health.data["sqlite_vec"].startswith("v")
+    assert health.data == {
+        "revision": SCHEMA_HEAD,
+        "head": SCHEMA_HEAD,
+        "sqlite_version": sqlite3.sqlite_version,
+    }
 
 
 def test_s0_ac_18_error_when_not_migrated(engine: Engine) -> None:
@@ -124,30 +125,3 @@ def test_s0_ac_18_probe_requires_a_file_database() -> None:
             DatabaseHealthProbe(engine)
     finally:
         engine.dispose()
-
-
-def test_s1_ac_09_ok_reports_the_vector_dimension(engine: Engine) -> None:
-    """PLAN 3.6: readiness also checks that product_vectors holds 768-d embeddings."""
-    upgrade_to_head(engine)
-
-    health = DatabaseHealthProbe(engine).check()
-
-    assert health.status is HealthStatus.OK
-    assert health.data["vector_dimension"] == "768"
-
-
-def test_s1_ac_09_error_when_the_vector_dimension_is_wrong(engine: Engine) -> None:
-    """PLAN 3.6: a vec0 table of another dimension (e.g. a different embedding model) is ERROR."""
-    upgrade_to_head(engine)
-    with engine.begin() as connection:
-        connection.exec_driver_sql("DROP TABLE product_vectors")
-        connection.exec_driver_sql(
-            "CREATE VIRTUAL TABLE product_vectors"
-            " USING vec0(embedding float[384] distance_metric=cosine)"
-        )
-
-    health = DatabaseHealthProbe(engine).check()
-
-    assert health.status is HealthStatus.ERROR
-    assert health.detail
-    assert "768" in health.detail

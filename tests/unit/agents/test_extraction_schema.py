@@ -1,13 +1,17 @@
-"""The extraction model's output schema and its mapping to a draft (S3-AC-11, PLAN 5).
+"""Claude's answer schema and its conversion to cents (claude-extraction plan E1, ADR-0017), and
+the ``check_arithmetic`` tool's receipt payload.
 
-Pinned (docs/tests/agent-core-A.md):
-- ``ExtractionOutput`` / ``ExtractedLine`` forbid extra fields at both levels; every ``*_cents``
-  field is a strict JSON integer (no float, no numeric string, no bool); ``quantity`` is a
-  positive decimal *string*; ``currency`` matches ``^[A-Z]{3}$``; ``payment_last4`` is four
-  ASCII digits; ``confidence`` is within 0..1; ``purchased_on`` is a string or null.
-- ``to_draft(*, today, ocr_text, image_path)`` builds the ``ReceiptDraft``: money in the
-  receipt's currency, ``position`` = list index, ``purchased_on`` through
-  ``parse_receipt_date(text, today)``, no product names.
+Pinned (test-cases.md "Extraction schema", CE-TC-003…005, 008; rulings CQ8, CQ20, I2):
+- ``ReceiptAnswer`` forbids unknown fields at every level; every money value is a JSON
+  string, never a number; ``code``, ``department``, ``quantity``, ``unit_price``, ``discount``,
+  ``subtotal``, ``purchased_on`` and ``payment_last4`` may be null; ``unit`` is exactly
+  ``each``, ``kg`` or ``lb``; an adjustment's ``kind`` is ``deposit``, ``fee`` or
+  ``order_discount``.
+- ``to_reading`` converts in code: a null quantity is 1, a null discount zero; a discount and
+  an order discount count by their size whatever sign is printed (an order discount reduces
+  the receipt), a deposit or fee as printed. Every unreadable value is listed in one
+  ``PrintedValueError`` naming the item and field and quoting the text.
+- ``ExtractedReceipt.to_draft`` (the tool payload) maps every field and parses the date.
 """
 
 import json
@@ -17,163 +21,379 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from paper_trail.agents.schemas import ExtractionOutput
-from paper_trail.domain.enums import LineKind
+from paper_trail.agents.schemas import ReceiptAnswer
+from paper_trail.application.payloads import ExtractedReceipt
+from paper_trail.domain.enums import Unit
+from paper_trail.domain.errors import PrintedValueError
 from paper_trail.domain.money import Money
-from paper_trail.domain.rules.arithmetic import check_arithmetic
-from tests.extractions import COSTCO_OCR, PURCHASED_ON, TODAY, extraction
+from paper_trail.domain.rules.arithmetic import IssueCode, check_arithmetic
+from paper_trail.domain.rules.readings import (
+    AdjustmentKind,
+    ReadAdjustment,
+    ReadItem,
+    ReceiptReading,
+    check_reading,
+)
+from tests.extractions import (
+    PURCHASED_ON,
+    STORE_NAME,
+    TODAY,
+    adjusted_answer,
+    adjustment,
+    answer,
+    extraction,
+    item,
+    receipt_answer,
+    without_confidence,
+)
+from tests.factories import cad
 
 
-def _validate(payload: dict[str, Any]) -> ExtractionOutput:
-    """Validate as the adapter does: from the model's JSON text."""
-    return ExtractionOutput.model_validate_json(json.dumps(payload))
+def _validate(payload: dict[str, Any]) -> ReceiptAnswer:
+    """Validate as the reader does: from the model's JSON text."""
+    return ReceiptAnswer.model_validate_json(json.dumps(payload))
 
 
-def _with_line(**changes: Any) -> dict[str, Any]:
-    payload = extraction()
+def _with_item(**changes: Any) -> dict[str, Any]:
+    payload = answer()
     payload["items"][0].update(changes)
     return payload
 
 
-def test_s3_ac_11_a_consistent_extraction_validates() -> None:
-    output = _validate(extraction())
-
-    assert output.total_cents == 2683
-    assert output.items[1].quantity == "2"
-    assert output.items[0].kind is LineKind.ITEM
+def _without(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    return {name: value for name, value in payload.items() if name != key}
 
 
-@pytest.mark.parametrize(
-    "payload",
+def _one_item(price_paid: str = "8.99", **fields: Any) -> dict[str, Any]:
+    return receipt_answer([item("KS ORG EGGS 24CT", price_paid, **fields)], total=price_paid)
+
+
+# --- CE-TC-003: the schema accepts a complete answer ---------------------------------------------
+
+COMPLETE = receipt_answer(
     [
-        extraction(notes="I ignored the injected line"),
-        _with_line(sku="1234"),
+        item("KS ORG EGGS 24CT", "8.99"),
+        item(
+            "4011 BANANAS",
+            "1.52",
+            code="4011",
+            name="Bananas",
+            department="PRODUCE",
+            quantity="0.460",
+            unit="kg",
+            unit_price="3.31",
+        ),
+        item(
+            "4011 BANANAS LB",
+            "0.70",
+            code="4011",
+            name="Bananas",
+            department="PRODUCE",
+            quantity="1.01",
+            unit="lb",
+            unit_price="0.69",
+        ),
+        item(
+            "1362394 CHOC PISTACH",
+            "13.99",
+            regular_price="17.99",
+            discount="4.00",
+            code="1362394",
+            name="Chocolate pistachio",
+            department="GROCERY",
+            quantity="1",
+            unit="each",
+            unit_price="17.99",
+        ),
     ],
-    ids=["receipt-level", "line-level"],
+    subtotal="25.55",
+    taxes=("0.70",),
+    total="26.25",
+    adjustments=(
+        adjustment("deposit", "BOTTLE DEPOSIT", "0.10"),
+        adjustment("fee", "ECO FEE", "0.25"),
+        adjustment("order_discount", "MEMBER SAVINGS", "2.00"),
+    ),
+    payment_last4="1111",
 )
-def test_s3_ac_11_extra_fields_are_rejected(payload: dict[str, Any]) -> None:
-    """S3-AC-11: extra fields are rejected, at the receipt and at the line level."""
-    with pytest.raises(ValidationError):
-        _validate(payload)
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        extraction(total_cents=26.83),
-        extraction(total_cents=2683.0),
-        extraction(total_cents="2683"),
-        extraction(total_cents=True),
-        extraction(subtotal_cents=25.55),
-        extraction(tax_cents="128"),
-        _with_line(line_total_cents=8.99),
-        _with_line(unit_price_cents="899"),
+        COMPLETE,
+        {**COMPLETE, "subtotal": None},
+        receipt_answer([item("KS ORG EGGS 24CT", "8.99")], total="8.99"),
     ],
-    ids=["float", "float-integral", "string", "bool", "subtotal", "tax", "line-total", "unit"],
+    ids=["complete", "no-subtotal", "no-taxes-no-adjustments"],
 )
-def test_s3_ac_11_money_fields_must_be_integers(payload: dict[str, Any]) -> None:
-    """S3-AC-11: money fields must be integer cents."""
-    with pytest.raises(ValidationError):
-        _validate(payload)
+def test_ce_tc_003_a_complete_answer_parses_as_given(payload: dict[str, Any]) -> None:
+    assert _validate(payload).model_dump(mode="json") == payload
+
+
+# --- CE-TC-004: the schema refuses what the contract forbids --------------------------------------
+
+
+def _with_adjustment(**changes: Any) -> dict[str, Any]:
+    payload = adjusted_answer()
+    payload["adjustments"][0].update(changes)
+    return payload
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "field"),
     [
-        _with_line(quantity=2),
-        _with_line(quantity="0"),
-        _with_line(quantity="-1"),
-        _with_line(quantity="two"),
-        _with_line(kind="coupon"),
-        extraction(currency="cad"),
-        extraction(currency="CADX"),
-        extraction(payment_last4="111"),
-        extraction(payment_last4="11a1"),
-        extraction(confidence=1.2),
-        extraction(confidence=-0.1),
-        extraction(items="eggs"),
-        {key: value for key, value in extraction().items() if key != "total_cents"},
+        (_with_item(price_paid=4.69), "price_paid"),
+        (answer(total=42.04), "total"),
+        (_with_adjustment(amount=0.10), "amount"),
+        (answer(total=None), "total"),
+        (_without(answer(), "store_name"), "store_name"),
+        ({**answer(), "items": [_without(item("EGGS", "8.99"), "price_paid")]}, "price_paid"),
+        (_with_item(regular_price=None), "regular_price"),
+        (_with_item(unit="g"), "unit"),
+        (_with_adjustment(kind="coupon"), "kind"),
+        (answer(payment_last4="12345"), "payment_last4"),
+        (answer(confidence=0.92), "confidence"),
+        (_with_item(kind="item"), "kind"),
+        ({**answer(), "lines": []}, "lines"),
+        (_without(answer(), "items"), "items"),
+        (answer(adjustments=None), "adjustments"),
+        (answer(taxes=None), "taxes"),
     ],
     ids=[
-        "quantity-number",
-        "quantity-zero",
-        "quantity-negative",
-        "quantity-word",
-        "kind",
-        "currency-lowercase",
-        "currency-long",
-        "last4-short",
-        "last4-letter",
-        "confidence-high",
-        "confidence-low",
-        "items-not-a-list",
-        "missing-total",
+        "paid-number",
+        "total-number",
+        "adjustment-number",
+        "total-null",
+        "store-missing",
+        "paid-missing",
+        "regular-null",
+        "unit-g",
+        "kind-coupon",
+        "last4-five-digits",
+        "confidence",
+        "item-kind",
+        "lines",
+        "items-missing",
+        "adjustments-null",
+        "taxes-null",
     ],
 )
-def test_s3_ac_11_malformed_values_are_rejected(payload: dict[str, Any]) -> None:
-    with pytest.raises(ValidationError):
+def test_ce_tc_004_the_schema_refuses_what_the_contract_forbids(
+    payload: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError, match=field):
         _validate(payload)
 
 
-def test_s3_ac_11_the_json_schema_types_money_as_integers_and_forbids_extras() -> None:
-    """The schema sent to Ollama as ``format`` carries the same constraints (ADR-0009)."""
-    schema = ExtractionOutput.model_json_schema()
-    line_schema = schema["$defs"]["ExtractedLine"]
+def test_ce_tc_004_the_schema_sent_to_claude_types_money_as_strings_and_forbids_extras() -> None:
+    schema = ReceiptAnswer.model_json_schema()
+    item_schema = schema["$defs"]["ItemAnswer"]
+    adjustment_schema = schema["$defs"]["AdjustmentAnswer"]
 
-    assert schema["additionalProperties"] is False
-    assert line_schema["additionalProperties"] is False
-    assert schema["properties"]["total_cents"]["type"] == "integer"
-    assert line_schema["properties"]["line_total_cents"]["type"] == "integer"
-    purchased_on = json.dumps(schema["properties"]["purchased_on"])
-    assert '"string"' in purchased_on
-    assert '"format": "date"' not in purchased_on  # a string, parsed in code
+    assert [
+        definition["additionalProperties"]
+        for definition in (schema, item_schema, adjustment_schema)
+    ] == [False, False, False]
+    assert schema["properties"]["total"]["type"] == "string"
+    assert item_schema["properties"]["price_paid"]["type"] == "string"
+    assert adjustment_schema["properties"]["amount"]["type"] == "string"
 
 
-def test_to_draft_maps_every_field() -> None:
-    """PLAN 5: to_draft() maps to ReceiptDraft; the MM/DD/YYYY date is normalized."""
-    draft = _validate(extraction()).to_draft(
-        today=TODAY, ocr_text=COSTCO_OCR, image_path="ab/cd/abcd.jpg"
+# --- CE-TC-005, 008: printed strings become cents in code ----------------------------------------
+
+
+def test_ce_tc_005_an_answer_converts_to_a_reading_in_cents() -> None:
+    reading = _validate(adjusted_answer()).to_reading()
+
+    assert reading == ReceiptReading(
+        store_name=STORE_NAME,
+        purchased_on="2026-11-01",
+        currency="CAD",
+        subtotal=cad(635),
+        taxes=(cad(83),),
+        total=cad(718),
+        payment_last4=None,
+        items=(
+            ReadItem(
+                printed_text="KS ORG EGGS 24CT",
+                code=None,
+                name="Ks Org Eggs 24Ct",
+                department=None,
+                quantity=Decimal(1),
+                unit=Unit.EACH,
+                unit_price=None,
+                regular_price=cad(500),
+                discount=cad(0),
+                price_paid=cad(500),
+            ),
+            ReadItem(
+                printed_text="KS SOURDOUGH",
+                code=None,
+                name="Ks Sourdough",
+                department=None,
+                quantity=Decimal(1),
+                unit=Unit.EACH,
+                unit_price=None,
+                regular_price=cad(300),
+                discount=cad(0),
+                price_paid=cad(300),
+            ),
+        ),
+        adjustments=(
+            ReadAdjustment(AdjustmentKind.DEPOSIT, "BOTTLE DEPOSIT", cad(10)),
+            ReadAdjustment(AdjustmentKind.FEE, "ECO FEE", cad(25)),
+            ReadAdjustment(AdjustmentKind.ORDER_DISCOUNT, "MEMBER SAVINGS", cad(-200)),
+        ),
     )
 
-    assert draft.store_name == "COSTCO WHOLESALE #1234"
-    assert draft.purchased_on == PURCHASED_ON
-    assert draft.currency == "CAD"
-    assert (draft.subtotal, draft.tax, draft.total) == (
+
+@pytest.mark.parametrize(
+    ("printed", "cents"),
+    [("4.69", 469), ("$4.69", 469), ("17.08 A", 1708)],
+    ids=["plain", "dollar-sign", "tax-flag"],
+)
+def test_ce_tc_005_money_is_read_as_printed(printed: str, cents: int) -> None:
+    reading = _validate(_one_item(regular_price=printed, price_paid=printed)).to_reading()
+
+    assert (reading.items[0].regular_price, reading.items[0].price_paid) == (
+        cad(cents),
+        cad(cents),
+    )
+
+
+@pytest.mark.parametrize(
+    ("printed", "quantity", "unit"),
+    [("0.365", Decimal("0.365"), "kg"), ("2", Decimal(2), "each"), (None, Decimal(1), "lb")],
+    ids=["weight", "count", "none-is-one"],
+)
+def test_ce_tc_005_quantity_and_unit_are_read(
+    printed: str | None, quantity: Decimal, unit: str
+) -> None:
+    reading = _validate(_one_item(quantity=printed, unit=unit)).to_reading()
+
+    assert (reading.items[0].quantity, reading.items[0].unit) == (quantity, Unit(unit))
+
+
+@pytest.mark.parametrize("printed", ["0.30", "0.30-", "-0.30"])
+def test_ce_tc_008_an_item_discount_is_its_size_whatever_its_sign(printed: str) -> None:
+    payload = _one_item(regular_price="4.99", discount=printed, price_paid="4.69")
+
+    assert _validate(payload).to_reading().items[0].discount == cad(30)
+
+
+@pytest.mark.parametrize(
+    ("kind", "printed", "cents"),
+    [
+        ("order_discount", "2.00", -200),
+        ("order_discount", "2.00-", -200),
+        ("order_discount", "-2.00", -200),
+        ("deposit", "0.10", 10),
+        ("fee", "0.25", 25),
+        ("deposit", "0.10-", -10),
+    ],
+    ids=["order-plain", "order-trailing", "order-leading", "deposit", "fee", "bottle-return"],
+)
+def test_ce_tc_008_adjustments_count_with_their_sign(kind: str, printed: str, cents: int) -> None:
+    payload = answer(adjustments=[adjustment(kind, "ADJUSTMENT", printed)])
+
+    assert _validate(payload).to_reading().adjustments[0].amount == cad(cents)
+
+
+def test_ce_tc_005_a_missing_discount_is_zero() -> None:
+    assert _validate(answer()).to_reading().items[0].discount == cad(0)
+
+
+def test_ce_tc_005_an_unreadable_value_is_named_and_quoted() -> None:
+    with pytest.raises(PrintedValueError) as raised:
+        _validate(_with_item(price_paid="abc")).to_reading()
+
+    message = str(raised.value)
+    assert ("abc" in message, "item 1" in message, "price_paid" in message) == (True, True, True)
+
+
+def test_ce_tc_005_every_unreadable_value_is_listed_in_one_failure() -> None:
+    payload = answer(total="??")
+    payload["items"][0]["price_paid"] = "abc"
+    payload["items"][2]["regular_price"] = "x.yz"
+
+    with pytest.raises(PrintedValueError) as raised:
+        _validate(payload).to_reading()
+
+    message = str(raised.value)
+    assert [quoted in message for quoted in ("abc", "x.yz", "??", "item 1", "item 3")] == [True] * 5
+
+
+# --- the check_arithmetic tool's receipt payload (ExtractedReceipt, kept) ------------------------
+
+
+def test_extracted_receipt_maps_every_field_to_a_draft() -> None:
+    """PLAN 5: to_draft() maps to ReceiptDraft; the MM/DD/YYYY date is normalized."""
+    receipt = ExtractedReceipt.model_validate(without_confidence(extraction()))
+
+    draft = receipt.to_draft(today=TODAY, ocr_text=None, image_path="ab/cd/abcd.jpg")
+
+    assert (draft.store_name, draft.purchased_on, draft.currency) == (
+        STORE_NAME,
+        PURCHASED_ON,
+        "CAD",
+    )
+    assert (draft.subtotal, draft.tax, draft.total, draft.payment_last4) == (
         Money(2555, "CAD"),
         Money(128, "CAD"),
         Money(2683, "CAD"),
+        "1111",
     )
-    assert draft.payment_last4 == "1111"
-    assert (draft.ocr_text, draft.image_path) == (COSTCO_OCR, "ab/cd/abcd.jpg")
-    assert [item.position for item in draft.items] == [0, 1, 2]
-    milk = draft.items[1]
-    assert (milk.raw_text, milk.description) == ("KS 2% MILK 4L", "Kirkland 2% Milk 4 L")
-    assert (milk.quantity, milk.unit_price, milk.line_total) == (
-        Decimal("2"),
-        Money(329, "CAD"),
-        Money(658, "CAD"),
-    )
-    assert dict(draft.product_names) == {}
+    assert [(line.position, line.raw_text, line.quantity) for line in draft.items] == [
+        (0, "KS ORG EGGS 24CT", Decimal(1)),
+        (1, "KS 2% MILK 4L", Decimal(2)),
+        (2, "KS SOURDOUGH", Decimal(2)),
+    ]
     assert check_arithmetic(draft).ok
 
 
-def test_to_draft_uses_the_receipt_currency_and_keeps_missing_amounts_missing() -> None:
-    payload = extraction(currency="USD", subtotal_cents=None, tax_cents=None, payment_last4=None)
-    payload["items"][0]["unit_price_cents"] = None
-
-    draft = _validate(payload).to_draft(today=TODAY, ocr_text=None, image_path=None)
-
-    assert draft.total == Money(2683, "USD")
-    assert (draft.subtotal, draft.tax, draft.payment_last4) == (None, None, None)
-    assert draft.items[0].unit_price is None
-    assert {item.line_total.currency for item in draft.items} == {"USD"}
-
-
 @pytest.mark.parametrize("purchased_on", [None, "", "yesterday", "12/01/2026", "2026-02-30"])
-def test_to_draft_stores_an_unknown_date_rather_than_failing(purchased_on: str | None) -> None:
-    """PLAN 5: an unparseable, impossible or future date becomes None."""
-    draft = _validate(extraction(purchased_on=purchased_on)).to_draft(
-        today=TODAY, ocr_text=None, image_path=None
+def test_extracted_receipt_stores_an_unknown_date_rather_than_failing(
+    purchased_on: str | None,
+) -> None:
+    receipt = ExtractedReceipt.model_validate(
+        without_confidence(extraction(purchased_on=purchased_on))
     )
 
-    assert draft.purchased_on is None
+    assert receipt.to_draft(today=TODAY, ocr_text=None, image_path=None).purchased_on is None
+
+
+# --- C12: a deal price is an exact fraction per unit ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("quantity", "unit_price", "paid", "ok"),
+    [
+        ("6", "3/$10.00", "20.00", True),
+        ("2", "2/$10.00", "10.00", True),
+        ("3", "3.33", "10.00", True),
+        ("12", "8.99", "8.99", False),
+        ("2", "2 for 5.00", "5.00", True),
+        ("2", "2 for 5.00", "7.00", False),
+        ("2", "see tag", "7.00", False),
+    ],
+    ids=[
+        "6-at-3-for-10",
+        "2-at-2-for-10",
+        "rounded-unit-price",
+        "ks-soda-12pk",
+        "2-for-5-adds-up",
+        "2-for-5-against-7",
+        "unreadable-unit-price-C14",
+    ],
+)
+def test_c12_quantity_times_a_printed_unit_price_is_checked_exactly(
+    quantity: str, unit_price: str, paid: str, ok: bool
+) -> None:
+    """Ruling C12: "N/$X" is X/N per unit, multiplied exactly before the 1-cent comparison
+    (6 x 10.00/3 = 20.00, where 6 x 3.33 = 19.98 would fail)."""
+    payload = _one_item(price_paid=paid, quantity=quantity, unit_price=unit_price)
+
+    report = check_reading(_validate(payload).to_reading())
+
+    assert [issue.code for issue in report.issues] == ([] if ok else [IssueCode.LINE_MATH])

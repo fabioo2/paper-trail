@@ -19,11 +19,6 @@ def fake_png(label: str) -> bytes:
     return PNG_SIGNATURE + label.encode()
 
 
-def turned(rotation_degrees: int) -> bytes:
-    """What ``FakeImageStore.open_upright`` appends to a photo it was asked to turn."""
-    return f"|turned {rotation_degrees}".encode()
-
-
 def is_image(data: bytes) -> bool:
     """JPEG, PNG, WebP or HEIC/HEIF, by magic bytes (never by file name or content type)."""
     return (
@@ -54,8 +49,3 @@ class FakeImageStore:
         except KeyError:
             msg = f"no stored image at {relative_path!r}"
             raise NotFoundError(msg) from None
-
-    def open_upright(self, relative_path: str, rotation_degrees: int) -> bytes:
-        """``open``'s bytes; turned, with ``turned(rotation_degrees)`` appended (no decoding)."""
-        data = self.open(relative_path)
-        return data + turned(rotation_degrees) if rotation_degrees % 360 else data

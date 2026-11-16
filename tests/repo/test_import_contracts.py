@@ -45,7 +45,10 @@ VIOLATIONS = [
     ("paper_trail.agents.nodes.persist", "paper_trail.ports.unit_of_work", "S5-AC-06: no UoW"),
     ("paper_trail.agents.runner", "paper_trail.ports.queues", "S5-AC-06: no queue port"),
     ("paper_trail.agents.prompts", "paper_trail.ports.search", "S5-AC-06: no search port"),
-    ("paper_trail.agents.nodes.read", "paper_trail.adapters.mcp", "S5-AC-06: no adapter"),
+    ("paper_trail.agents.nodes.extraction", "paper_trail.adapters.mcp", "S5-AC-06: no adapter"),
+    # CE-TC-064: the reader port stays SDK-free; only adapters/anthropic imports the SDK.
+    ("paper_trail.ports.reader", "anthropic", "2: ports import no infrastructure package"),
+    ("paper_trail.domain.rules.budget", "anthropic", "1: domain imports no third-party packages"),
     ("paper_trail.adapters.mcp", "paper_trail.interfaces", "5: adapters not interfaces"),
     ("paper_trail.interfaces.mcp", "paper_trail.adapters", "6: interfaces not adapters"),
 ]

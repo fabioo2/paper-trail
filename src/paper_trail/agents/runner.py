@@ -1,10 +1,10 @@
 """``ReceiptGraphRunner`` on LangGraph: one checkpointed thread per receipt (ADR-0008).
 
 Each run compiles the graph over ports decorated for that receipt's trace, binds the tracer to
-the receipt, and invokes with durable (synchronous) checkpoints, so a run that stops because
-the LLM host went away, or at a static breakpoint (``interrupt_after``), resumes from its last
-completed node. That node is read from the checkpoint history: the latest checkpoint's parent
-was written just before it ran.
+the receipt, and invokes with durable (synchronous) checkpoints, so a run that a Claude read
+stopped, or a static breakpoint (``interrupt_after``), resumes from its last completed node.
+That node is read from the checkpoint history: the latest checkpoint's parent was written just
+before it ran.
 """
 
 from dataclasses import replace
@@ -17,8 +17,9 @@ from langgraph.types import Command, StateSnapshot
 from paper_trail.agents.deps import AgentDeps
 from paper_trail.agents.drafts import extraction_draft
 from paper_trail.agents.graph import ReceiptGraph, build_receipt_graph
-from paper_trail.agents.state import OUTDATED_BEFORE, STATE_VERSION, ReceiptState, thread_id
-from paper_trail.agents.tracing import TracingLlm, TracingToolGateway
+from paper_trail.agents.nodes.review import ACCEPT
+from paper_trail.agents.state import STATE_VERSION, ReceiptState, thread_id
+from paper_trail.agents.tracing import TracingReader, TracingToolGateway
 from paper_trail.application.payloads import DraftPayload
 from paper_trail.domain.enums import AgentRole, ReceiptStatus, ReviewReason
 from paper_trail.domain.errors import ConflictError
@@ -42,18 +43,15 @@ class LangGraphReceiptRunner:
         receipt_id: int,
         *,
         source_name: str,
-        image_path: str | None = None,
-        ocr_text: str | None = None,
+        image_path: str,
         interrupt_after: str | None = None,
     ) -> GraphOutcome:
         initial: ReceiptState = {
             "receipt_id": receipt_id,
             "source_name": source_name,
             "image_path": image_path,
-            "ocr_text": ocr_text,
             "state_version": STATE_VERSION,
-            "text_attempts": 0,
-            "vision_attempts": 0,
+            "attempts": 0,
             "approved": False,
         }
         return self._run(receipt_id, initial, interrupt_after=interrupt_after)
@@ -65,9 +63,10 @@ class LangGraphReceiptRunner:
         start."""
         graph = build_receipt_graph(self._deps, self._checkpointer)
         snapshot = self._snapshot(graph, receipt_id)
+        outdated = bool(snapshot.values) and _state(snapshot).get("state_version") != STATE_VERSION
         if _paused_for_review(snapshot):
             answer = (
-                None if draft is None else DraftPayload.from_draft(draft).model_dump(mode="json")
+                ACCEPT if draft is None else DraftPayload.from_draft(draft).model_dump(mode="json")
             )
             return self._run(receipt_id, Command(resume=answer), resumed_from=REVIEW_NODE)
         if draft is not None:
@@ -77,9 +76,8 @@ class LangGraphReceiptRunner:
             state = "has finished" if snapshot.values else "does not exist"
             msg = f"nothing to resume: the agents' run of receipt {receipt_id} {state}"
             raise NothingToResumeError(msg)
-        if "state_version" not in snapshot.values and OUTDATED_BEFORE.intersection(snapshot.next):
-            msg = f"run {receipt_id} was saved by an older version; reprocess the receipt"
-            raise OutdatedCheckpointError(msg)
+        if outdated:
+            raise OutdatedCheckpointError(_outdated(receipt_id))
         # LangGraph continues a paused or failed thread from None, not Command(resume=...).
         return self._run(receipt_id, None, resumed_from=_last_completed(graph, snapshot))
 
@@ -89,7 +87,11 @@ class LangGraphReceiptRunner:
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:
         snapshot = self._snapshot(build_receipt_graph(self._deps, self._checkpointer), receipt_id)
         state = _state(snapshot)
-        if not _paused_for_review(snapshot) or state.get("extraction") is None:
+        if (
+            not _paused_for_review(snapshot)
+            or state.get("extraction") is None
+            or state.get("state_version") != STATE_VERSION
+        ):
             return None
         return extraction_draft(self._deps, state)
 
@@ -104,7 +106,7 @@ class LangGraphReceiptRunner:
         tracer = self._deps.tracer
         traced = replace(
             self._deps,
-            llm=TracingLlm(self._deps.llm, tracer, receipt_id),
+            reader=TracingReader(self._deps.reader, tracer, receipt_id),
             tools=TracingToolGateway(self._deps.tools, tracer),
         )
         with tracer.bind(receipt_id):
@@ -159,6 +161,14 @@ def _state(snapshot: StateSnapshot) -> ReceiptState:
     return cast("ReceiptState", snapshot.values)
 
 
+def _outdated(receipt_id: int) -> str:
+    return (
+        f"run {receipt_id} was saved by an older version that read receipts with OCR; answer its"
+        " review with a corrected file (`paper-trail review resolve ID --file F`) or read the"
+        " photo again (`paper-trail process PHOTO --reprocess`)"
+    )
+
+
 def _paused_for_review(snapshot: StateSnapshot) -> bool:
     return REVIEW_NODE in snapshot.next
 
@@ -193,8 +203,7 @@ def _outcome(
         status=status,
         review_id=state.get("review_id") if in_review else None,
         review_reason=ReviewReason(reason) if in_review and reason is not None else None,
-        text_attempts=state.get("text_attempts", 0),
-        vision_attempts=state.get("vision_attempts", 0),
+        attempts=state.get("attempts", 0),
         paused_at=paused_at,
         resumed_from=resumed_from,
     )

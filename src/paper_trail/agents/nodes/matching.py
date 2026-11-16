@@ -4,10 +4,12 @@ reading only and asking no model (barcode-lookup plan 4.1, ADR-0018).
 For every ITEM line, in order, whose alias (``normalize_alias`` of its raw text) names a
 product rather than a kind of line (``is_generic_alias``):
 
-- a line that starts with a product code (``catalog_lookup``): the code's product when the code
-  is ours (``catalog``); else a person's correction for the line at that store (``memory``,
-  which teaches the code); else a new product named by the source that knows the code (PLU),
-  else by its printed text. A shared text never links a coded line (an alias is not used).
+- a line with a product code (``catalog_lookup``): the code Claude read on the line
+  (``codes``, from ``persist``; nothing is parsed out of its text), or for a person's draft the
+  code its raw text starts with; the code's product when the code is ours (``catalog``); else a
+  person's correction for the line at that store (``memory``, which teaches the code); else a
+  new product named by the source that knows the code (PLU), else by its printed text. A
+  shared text never links a coded line (an alias is not used).
 - any other line, and every line with ``CATALOG__ENABLED`` off: ``product_lookup`` at the
   receipt's store (a person's correction, then the store's exact alias), else a new product
   named by its printed text.
@@ -32,7 +34,12 @@ from paper_trail.agents.tracing import Node, match_counts_summary
 from paper_trail.application.payloads import entry_product_name
 from paper_trail.domain.enums import AgentRole, CodeScheme, FieldSource, LineKind, MatchSource
 from paper_trail.domain.models import JsonValue, LineItem
-from paper_trail.domain.rules.item_codes import parse_item_code, printed_name
+from paper_trail.domain.rules.item_codes import (
+    ItemCode,
+    parse_code_field,
+    parse_item_code,
+    printed_name,
+)
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.rules.normalization import (
     is_generic_alias,
@@ -52,16 +59,29 @@ def match_node(deps: AgentDeps) -> Node:
         store_key = normalize_store_name(mask_pans(draft.store_name).text)
         matches: list[dict[str, Any]] = []
         named = draft.product_names  # linked by a person's review answer
+        codes = (
+            None
+            if state.get("draft") is not None
+            else {
+                as_int(entry["position"]): as_str(entry["code"]) for entry in state.get("codes", [])
+            }
+        )
         for read in sorted(draft.items, key=lambda item: item.position):
             if read.position in named:
                 continue
             line = replace(read, raw_text=mask_pans(read.raw_text).text)
             if line.kind is LineKind.ITEM and not is_generic_alias(normalize_alias(line.raw_text)):
-                parsed = parse_item_code(line.raw_text, store_key) if catalog else None
+                code = None if codes is None else codes.get(line.position)
+                parsed = _parsed(line, store_key, codes, code) if catalog else None
                 coded = parsed is not None and parsed.identity_at(store_key) is not None
-                matches.append(
-                    _by_code(deps, line, store_key) if coded else _by_text(deps, line, store_key)
+                decision = (
+                    _by_code(deps, line, store_key, code)
+                    if coded
+                    else _by_text(deps, line, store_key)
                 )
+                if codes is not None and decision["source"] == MatchSource.NEW.value:
+                    decision["category_source"] = FieldSource.RECEIPT_TEXT.value
+                matches.append(decision)
         if matches:
             counts = _counts(matches)
             deps.tracer.emit(
@@ -76,11 +96,25 @@ def match_node(deps: AgentDeps) -> Node:
     return match
 
 
-def _by_code(deps: AgentDeps, line: LineItem, store_key: str) -> dict[str, Any]:
-    """The decision for a line that starts with a product code: its code's product, a
-    person's correction, a source entry, else its printed text."""
+def _parsed(
+    line: LineItem, store_key: str, codes: dict[int, str] | None, code: str | None
+) -> ItemCode | None:
+    """The line's code: Claude's for an extraction (none when it read none: nothing is parsed
+    out of the text), the raw text's leading one for a person's draft."""
+    if codes is None:
+        return parse_item_code(line.raw_text, store_key)
+    return None if code is None else parse_code_field(code, store_key)
+
+
+def _by_code(
+    deps: AgentDeps, line: LineItem, store_key: str, printed: str | None
+) -> dict[str, Any]:
+    """The decision for a line with a product code: its code's product, a person's
+    correction, a source entry, else its printed text."""
     found = deps.tools.call(
-        AgentRole.MATCHING, "catalog_lookup", {"raw_text": line.raw_text, "store_key": store_key}
+        AgentRole.MATCHING,
+        "catalog_lookup",
+        {"raw_text": line.raw_text, "store_key": store_key, "code": printed},
     )
     code = as_dict(found["code"])
     scheme = as_str(code["scheme"])
@@ -89,18 +123,19 @@ def _by_code(deps: AgentDeps, line: LineItem, store_key: str) -> dict[str, Any]:
         "store_key": store_key if scheme == CodeScheme.STORE.value else "",
         "code": as_str(code["identity"]),
     }
+    coded: dict[str, Any] = {"code": ref} | ({} if printed is None else {"printed_code": printed})
     if found["product"] is not None:
         product_id = as_int(as_dict(found["product"])["id"])
-        return _linked(line, MatchSource.CATALOG, product_id) | {"code": ref}
+        return _linked(line, MatchSource.CATALOG, product_id) | coded
     remembered = _lookup(deps, line, store_key)
     if remembered is not None and remembered[0] is MatchSource.MEMORY:
-        return _linked(line, MatchSource.MEMORY, remembered[1]) | {"code": ref}
+        return _linked(line, MatchSource.MEMORY, remembered[1]) | coded
     entry = found["entry"]
     if isinstance(entry, dict) and isinstance(entry.get("name"), str):
         brand = entry.get("brand")
         name = entry_product_name(as_str(entry["name"]), brand if isinstance(brand, str) else None)
-        return _new(line, name, FieldSource.PLU) | {"code": ref, "catalog": entry}
-    return _new(line, printed_name(line.raw_text), FieldSource.RECEIPT_TEXT) | {"code": ref}
+        return _new(line, name, FieldSource.PLU) | coded | {"catalog": entry}
+    return _new(line, printed_name(line.raw_text), FieldSource.RECEIPT_TEXT) | coded
 
 
 def _by_text(deps: AgentDeps, line: LineItem, store_key: str) -> dict[str, Any]:

@@ -18,8 +18,6 @@ from paper_trail.domain.errors import (
     UnsupportedMediaError,
 )
 from paper_trail.domain.models import JsonValue
-from paper_trail.ports.llm import LlmOutputError, LlmUnavailableError
-from paper_trail.ports.ocr import OcrError
 from paper_trail.ports.tools import (
     ToolFailedError,
     ToolInputError,
@@ -42,11 +40,6 @@ _KINDS: tuple[tuple[str, type[Exception]], ...] = (
     ("unsupported_media", UnsupportedMediaError),
     ("invalid", DomainValidationError),
     ("domain", DomainError),
-    ("ocr", OcrError),
-    # The embedding host: unavailable stops the run with its checkpoint (S3-AC-10) on both
-    # transports, so it must not arrive as a ToolFailedError.
-    ("llm_unavailable", LlmUnavailableError),
-    ("llm_output", LlmOutputError),
 )
 _CLASSES = dict(_KINDS)
 

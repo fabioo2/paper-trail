@@ -1,10 +1,11 @@
-"""Processing one receipt file: store it, create the receipt, run the graph (agent-core plan 2.2).
+"""Processing one receipt photo: store it, create the receipt, run the graph (agent-core plan
+2.2, claude-extraction plan V7, V11).
 
 An image is stored once by content: the same photo again returns the receipt it already made.
-A text (OCR output from a file) is masked before anything else and never deduplicated. Either
-way the receipt exists, PROCESSING, before the graph starts, so a run that stops half way
-(the LLM host went away: WAITING_FOR_GPU) leaves something to resume (``resume``). A stored
-photo can be run again on a new thread (``reprocess``).
+The receipt exists, PROCESSING, before the graph starts, so a run that a Claude read stops half
+way (the API failed, refused, was cut off, or the monthly budget is reached) leaves the receipt
+FAILED with its checkpoint, to resume (``resume``). A stored photo can be read again on a new
+thread (``reprocess``).
 """
 
 from collections.abc import Callable
@@ -26,7 +27,7 @@ from paper_trail.ports.agents import (
 )
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.images import ImageStore, StoredImage
-from paper_trail.ports.llm import LlmUnavailableError
+from paper_trail.ports.reader import ReaderError
 from paper_trail.ports.trace import Tracer
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
@@ -35,24 +36,18 @@ log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ReceiptSource:
-    """A receipt to process: a photo, or OCR text. Exactly one of the two."""
+    """A receipt photo to process."""
 
     name: str  # shown in the trace, e.g. the file name
-    image: bytes | None = None
-    text: str | None = None
-
-    def __post_init__(self) -> None:
-        if (self.image is None) == (self.text is None):
-            msg = f"{self.name}: a receipt source is either an image or a text"
-            raise ValueError(msg)
+    image: bytes
 
 
-class ProcessingStoppedError(LlmUnavailableError):
-    """The LLM host went away while ``receipt_id`` was being processed; the receipt stays
-    PROCESSING with its checkpoint, to be resumed."""
+class ProcessingStoppedError(ReaderError):
+    """A Claude read stopped the run of ``receipt_id``: the receipt is FAILED and keeps its
+    checkpoint, to be resumed."""
 
-    def __init__(self, receipt_id: int, cause: LlmUnavailableError) -> None:
-        super().__init__(str(cause))
+    def __init__(self, receipt_id: int, cause: ReaderError) -> None:
+        super().__init__(mask_pans(str(cause)).text)
         self.receipt_id = receipt_id
 
 
@@ -65,19 +60,25 @@ class ProcessOutcome:
 
 
 class ProcessReceiptFile:
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the ports it works with, and the optional reader check
         self,
         image_store: ImageStore,
         uow_factory: UnitOfWorkFactory,
         runner: ReceiptGraphRunner,
         tracer: Tracer,
         clock: Clock,
+        *,
+        reader_check: Callable[[], None] | None = None,
     ) -> None:
+        """``reader_check`` raises a ``ReaderError`` when no read could be made now (no key,
+        the budget reached), without making one: ``reprocess`` asks it before it changes the
+        receipt."""
         self._image_store = image_store
         self._uow_factory = uow_factory
         self._runner = runner
         self._tracer = tracer
         self._clock = clock
+        self._reader_check = reader_check
 
     def __call__(
         self,
@@ -87,41 +88,33 @@ class ProcessReceiptFile:
         interrupt_after: str | None = None,
     ) -> ProcessOutcome:
         """Process ``source``. UnsupportedMediaError (before any receipt exists) for an image
-        that is not one; ProcessingStoppedError (an LlmUnavailableError) when the LLM host is
-        unreachable, with the receipt left PROCESSING and WAITING_FOR_GPU. Any other failure
-        marks the receipt FAILED and is returned, so a batch can go on.
+        that is not one; ProcessingStoppedError (a ReaderError) when a Claude read stops the
+        run, with the receipt FAILED and its checkpoint kept. Any other failure marks the
+        receipt FAILED and is returned, so a batch can go on.
 
-        An image already stored is a duplicate, unless ``reprocess``: then its receipt runs
-        again on a new thread from its stored OCR text, and its OPEN review is dismissed. With
+        An image already stored is a duplicate, unless ``reprocess``: then Claude reads its
+        stored photo again on a new thread, and its OPEN review is dismissed. With
         ``interrupt_after`` the run pauses after that node, its checkpoint kept."""
-        image: StoredImage | None = None
-        ocr_text: str | None = None
-        if source.image is not None:
-            image = self._image_store.save(source.image)
-            existing = self._find(image.sha256)
-            if existing is not None and not reprocess:
-                return ProcessOutcome(
-                    receipt_id=require_id(existing.id), duplicate=True, graph=None
-                )
-            if existing is not None:
-                return self._reprocess(existing, source.name, interrupt_after)
-        else:
-            ocr_text = mask_pans(source.text or "").text
-        receipt_id = self._create(image, ocr_text)
+        image = self._image_store.save(source.image)
+        existing = self._find(image.sha256)
+        if existing is not None and not reprocess:
+            return ProcessOutcome(receipt_id=require_id(existing.id), duplicate=True, graph=None)
+        if existing is not None:
+            return self._reprocess(existing, source.name, interrupt_after)
+        receipt_id = self._create(image)
         return self._run(
             receipt_id,
             lambda: self._runner.start(
                 receipt_id,
                 source_name=source.name,
-                image_path=None if image is None else image.relative_path,
-                ocr_text=ocr_text,
+                image_path=image.relative_path,
                 interrupt_after=interrupt_after,
             ),
         )
 
     def resume(self, receipt_id: int) -> ProcessOutcome:
-        """Continue the receipt's thread from its last checkpoint (after a pause, a GPU drop
-        or a crash); failures as for ``__call__``. NotFoundError for an unknown receipt;
+        """Continue the receipt's thread from its last checkpoint (after a pause, a stopped
+        read or a crash); failures as for ``__call__``. NotFoundError for an unknown receipt;
         ConflictError when it waits for a review (``review resolve`` answers that) or has
         nothing to resume. A receipt marked FAILED by a crash after its matches were saved is
         COMPLETED again when the resumed run finishes."""
@@ -145,12 +138,28 @@ class ProcessReceiptFile:
     def _reprocess(
         self, receipt: Receipt, source_name: str, interrupt_after: str | None
     ) -> ProcessOutcome:
-        """A new thread for a stored receipt, from its OCR text (from its image if none)."""
+        """A new thread for a stored receipt: Claude reads its stored photo again. A receipt
+        without one cannot be read again (ConflictError). The key and the budget are checked
+        first (``reader_check``): a ProcessingStoppedError then leaves the receipt as it was.
+        When the new run fails before anything is saved (a stopped read, a corrupt stored
+        photo), the receipt gets its previous status back (FAILED instead when that was a
+        review this run dismissed)."""
         receipt_id = require_id(receipt.id)
+        image_path = receipt.image_path
+        if image_path is None:
+            msg = f"receipt {receipt_id} has no stored photo to read again"
+            raise ConflictError(msg)
+        if self._reader_check is not None:
+            try:
+                self._reader_check()
+            except ReaderError as error:
+                raise ProcessingStoppedError(receipt_id, error) from error
+        previous: tuple[ReceiptStatus, ProcessingStage] | None = (receipt.status, receipt.stage)
         with self._uow_factory() as uow:
             review = uow.reviews.find_open(receipt_id)
             if review is not None:
                 uow.reviews.dismiss(require_id(review.id))
+                previous = None
             uow.receipts.update_status(
                 receipt_id, ReceiptStatus.PROCESSING, ProcessingStage.READING
             )
@@ -162,39 +171,63 @@ class ProcessReceiptFile:
             lambda: self._runner.start(
                 receipt_id,
                 source_name=source_name,
-                image_path=receipt.image_path,
-                ocr_text=receipt.ocr_text,
+                image_path=image_path,
                 interrupt_after=interrupt_after,
             ),
+            restore=previous,
         )
 
-    def _run(self, receipt_id: int, run: Callable[[], GraphOutcome]) -> ProcessOutcome:
+    def _run(
+        self,
+        receipt_id: int,
+        run: Callable[[], GraphOutcome],
+        *,
+        restore: tuple[ReceiptStatus, ProcessingStage] | None = None,
+    ) -> ProcessOutcome:
+        """``run`` the graph. A ReaderError fails the receipt (keeping its checkpoint) and
+        stops the batch; any other failure fails it and is returned. With ``restore``, a
+        receipt the failed run had not saved yet (still at stage READING, where ``reprocess``
+        put it) gets that status and stage back instead."""
         try:
             graph = run()
         except (NothingToResumeError, OutdatedCheckpointError):
             raise
-        except LlmUnavailableError as error:
-            self._wait_for_gpu(receipt_id)
+        except ReaderError as error:
+            self._settle_failure(receipt_id, error, restore)
             raise ProcessingStoppedError(receipt_id, error) from error
         except Exception as error:  # one receipt's failure must not stop a batch
-            return self._failed(receipt_id, error)
+            return self._settle_failure(receipt_id, error, restore)
         return ProcessOutcome(receipt_id=receipt_id, duplicate=False, graph=graph)
+
+    def _settle_failure(
+        self,
+        receipt_id: int,
+        error: Exception,
+        restore: tuple[ReceiptStatus, ProcessingStage] | None,
+    ) -> ProcessOutcome:
+        unsaved = restore is not None and self._unsaved(receipt_id)
+        outcome = self._failed(receipt_id, error)
+        if unsaved and restore is not None:
+            self._restore(receipt_id, *restore)
+        return outcome
+
+    def _unsaved(self, receipt_id: int) -> bool:
+        """Whether the run has not saved the receipt yet (nor parked it for review)."""
+        with self._uow_factory(read_only=True) as uow:
+            receipt = uow.receipts.get(receipt_id)
+        return receipt is not None and receipt.stage is ProcessingStage.READING
+
+    def _restore(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
+        """The status and stage a receipt had before a run that failed before saving it."""
+        with self._uow_factory() as uow:
+            uow.receipts.update_status(receipt_id, status, stage)
+            uow.commit()
 
     def _find(self, sha256: str) -> Receipt | None:
         with self._uow_factory(read_only=True) as uow:
             return uow.receipts.find_by_image_sha256(sha256)
 
-    def _wait_for_gpu(self, receipt_id: int) -> None:
-        """S3-AC-10: a receipt not yet saved waits for the GPU; a saved one keeps its state."""
-        with self._uow_factory() as uow:
-            receipt = uow.receipts.get(receipt_id)
-            if receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
-                uow.receipts.update_status(
-                    receipt_id, ReceiptStatus.PROCESSING, ProcessingStage.WAITING_FOR_GPU
-                )
-                uow.commit()
-
-    def _create(self, image: StoredImage | None, ocr_text: str | None) -> int:
+    def _create(self, image: StoredImage) -> int:
         now = self._clock.now()
         with self._uow_factory() as uow:
             receipt = uow.receipts.add(
@@ -210,17 +243,17 @@ class ProcessReceiptFile:
                     tax=None,
                     total=None,
                     payment_last4=None,
-                    ocr_text=ocr_text,
-                    image_path=None if image is None else image.relative_path,
+                    ocr_text=None,
+                    image_path=image.relative_path,
                     items=(),
                     created_at=now,
                     updated_at=now,
-                    image_sha256=None if image is None else image.sha256,
+                    image_sha256=image.sha256,
                 )
             )
             uow.commit()
         receipt_id = require_id(receipt.id)
-        log.info("receipt.created", receipt_id=receipt_id, from_image=image is not None)
+        log.info("receipt.created", receipt_id=receipt_id)
         return receipt_id
 
     def _completed(self, receipt_id: int) -> None:
@@ -235,7 +268,8 @@ class ProcessReceiptFile:
                 uow.commit()
 
     def _failed(self, receipt_id: int, error: Exception) -> ProcessOutcome:
-        failure = str(error) or type(error).__name__
+        # The message may quote what a model read: card numbers masked before it is kept.
+        failure = mask_pans(str(error)).text or type(error).__name__
         with self._uow_factory() as uow:
             uow.receipts.update_status(receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED)
             uow.commit()

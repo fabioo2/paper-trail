@@ -1,30 +1,33 @@
-"""Composition root of the agent core (agent-core plan 2, 4): the graph, its tools, the LLM.
+"""Composition root of the agent core (agent-core plan 2, 4): the graph, its tools, Claude.
 
 Only the agent commands (``process``, ``review``, ``items``, ``tools``, ``mcp``, ``graph``)
-import this module, so LangGraph, the MCP SDK and the model adapters load only for them.
+import this module, so LangGraph, the MCP SDK and the Anthropic SDK load only for them.
 """
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
+from sqlalchemy import Engine
 
+from paper_trail.adapters.anthropic.reader import AnthropicReader
 from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
 from paper_trail.adapters.mcp.gateway import McpToolGateway
-from paper_trail.adapters.ollama.embeddings import OllamaEmbeddings
-from paper_trail.adapters.ollama.llm import OllamaLlm
 from paper_trail.adapters.sqlite.checkpoints import sqlite_checkpointer
+from paper_trail.adapters.sqlite.engine import create_engine
+from paper_trail.adapters.sqlite.spend_ledger import SqliteSpendLedger
 from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
-from paper_trail.adapters.tesseract.ocr import TesseractOcr
 from paper_trail.adapters.trace.json_file import JsonTraceWriter
 from paper_trail.adapters.trace.memory import InMemoryTracer
 from paper_trail.agents.graph import AgentDeps, build_receipt_graph
-from paper_trail.agents.nodes.supervisor import graph_limits
 from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
+from paper_trail.application.budget import BudgetedReader
 from paper_trail.application.process_receipt import ProcessReceiptFile
 from paper_trail.application.receipts import GetReview, ListOpenReviews, ResolveReview
 from paper_trail.bootstrap import (
@@ -37,6 +40,7 @@ from paper_trail.bootstrap import (
 from paper_trail.config import McpSettings, Settings
 from paper_trail.ports.agents import ReceiptGraphRunner
 from paper_trail.ports.clock import Clock
+from paper_trail.ports.reader import ReceiptReader
 from paper_trail.ports.tools import ToolGateway
 from paper_trail.ports.trace import RunConfig, Tracer, TraceWriter
 from paper_trail.tools.handlers import ToolServices
@@ -67,22 +71,11 @@ class AgentContainer:
 
 def run_config(settings: Settings) -> RunConfig:
     """What a trace records about the configuration of a run: the values the graph runs with."""
-    limits = graph_limits(settings)
     return RunConfig(
-        models={
-            "text": settings.ollama.text_model,
-            "vision": settings.ollama.vision_model,
-            "embed": settings.ollama.embed_model,
-        },
-        prompt_versions={
-            "extraction": settings.prompts.extraction_version,
-            "matching": settings.prompts.matching_version,
-            "enrichment": settings.prompts.enrichment_version,
-        },
-        examples=settings.prompts.examples,
-        feedback=limits.feedback,
-        max_text_attempts=limits.max_text_attempts,
-        max_vision_attempts=limits.max_vision_attempts,
+        models={"extract": settings.claude.extract_model, "retry": settings.claude.retry_model},
+        prompt_versions={"extraction": settings.prompts.extraction_version},
+        feedback=settings.graph.feedback,
+        max_attempts=settings.graph.max_attempts,
         enrichment=settings.graph.enrichment,
         catalog=settings.catalog.enabled,
         transport=settings.tools.transport,
@@ -96,16 +89,12 @@ def _image_store(settings: Settings) -> FilesystemImageStore:
 
 
 def tool_registry(container: Container) -> ToolRegistry:
-    """Every tool, over the container's database and the shared image store."""
-    settings = container.settings
+    """Every tool, over the container's database."""
     return build_tool_registry(
         ToolServices(
-            ocr=TesseractOcr(settings.ocr),
-            image_store=_image_store(settings),
             uow_factory=container.uow_factory,
             record_receipt=container.record_receipt,
             tolerances=container.tolerances,
-            embeddings=OllamaEmbeddings(settings.ollama),
             catalog=product_catalog(container),
         )
     )
@@ -152,36 +141,75 @@ def tools_gateway(settings: Settings) -> Iterator[ToolGateway]:
         dispose(container)
 
 
-def _agent_deps(settings: Settings, clock: Clock, tracer: Tracer, tools: ToolGateway) -> AgentDeps:
+@dataclass(frozen=True, slots=True)
+class _ClaudeReader:
+    """Every Claude read is checked against the month's budget and its cost recorded in the
+    ledger (``BudgetedReader``); the runner adds the per-receipt tracing (review I10)."""
+
+    api: AnthropicReader
+    reader: BudgetedReader
+
+    def check(self) -> None:
+        """No read could be made now: no key, or the budget reached (no call is made)."""
+        self.api.check()
+        self.reader.check()
+
+
+def _claude_reader(settings: Settings, clock: Clock, ledger_engine: Engine) -> _ClaudeReader:
+    api = AnthropicReader(settings.claude)
+    # A reservation older than a whole read could take (three attempts and their backoff) was
+    # left by a dead process.
+    abandon_after = timedelta(seconds=settings.claude.timeout_s * 3 + 120)
+    ledger = SqliteSpendLedger(ledger_engine, clock=clock, abandon_after=abandon_after)
+    return _ClaudeReader(
+        api, BudgetedReader(api, ledger, clock, settings.claude.monthly_budget_usd)
+    )
+
+
+def _agent_deps(
+    container: Container, tracer: Tracer, tools: ToolGateway, reader: ReceiptReader
+) -> AgentDeps:
+    settings = container.settings
     return AgentDeps(
-        llm=OllamaLlm(settings.ollama),
         tools=tools,
         tracer=tracer,
-        clock=clock,
+        clock=container.clock,
         settings=settings,
         prompts=PromptLibrary(),
         images=_image_store(settings),
+        reader=reader,
     )
 
 
 @contextmanager
 def agent_container(
-    settings: Settings, run: str, *, tool_server: ToolServer | None = None
+    settings: Settings,
+    run: str,
+    *,
+    tool_server: ToolServer | None = None,
+    ledger_path: Path | None = None,
 ) -> Iterator[AgentContainer]:
     """Wire the agents over ``settings.database_path`` (which must be migrated) with LangGraph's
     checkpoints in the same file. Traces go to ``<DATA_DIR>/runs/<run>/``; images to
-    ``<DATA_DIR>/images`` whatever the run. With ``TOOLS__TRANSPORT=mcp`` the tools are served
-    by ``tool_server`` and called over MCP."""
+    ``<DATA_DIR>/images`` whatever the run. The Claude spend is recorded in ``ledger_path``
+    (the main database, migrated, whatever the run; default ``settings.database_path``), so a
+    named run never starts a budget of its own. With ``TOOLS__TRANSPORT=mcp`` the tools are
+    served by ``tool_server`` and called over MCP."""
     with ExitStack() as stack:
         container = build_container(settings)
         stack.callback(dispose, container)
+        ledger_engine = container.engine
+        if ledger_path is not None and ledger_path != settings.database_path:
+            ledger_engine = create_engine(ledger_path)
+            stack.callback(ledger_engine.dispose)
+        claude = _claude_reader(settings, container.clock, ledger_engine)
         checkpointer = stack.enter_context(sqlite_checkpointer(settings.database_path))
         tools = stack.enter_context(
             _run_tool_gateway(settings, tool_registry(container), tool_server)
         )
         tracer = InMemoryTracer(container.clock)
         runner = LangGraphReceiptRunner(
-            _agent_deps(settings, container.clock, tracer, tools), checkpointer
+            _agent_deps(container, tracer, tools, claude.reader), checkpointer
         )
         config = run_config(settings)
         clock, uow_factory = container.clock, container.uow_factory
@@ -193,7 +221,12 @@ def agent_container(
             trace_writer=JsonTraceWriter(settings.data_dir / RUNS_DIRNAME / run, run, config),
             runner=runner,
             process_receipt=ProcessReceiptFile(
-                _image_store(settings), uow_factory, runner, tracer, clock
+                _image_store(settings),
+                uow_factory,
+                runner,
+                tracer,
+                clock,
+                reader_check=claude.check,
             ),
             resolve_review=ResolveReview(uow_factory, runner, container.record_receipt, clock),
             list_open_reviews=ListOpenReviews(uow_factory),
@@ -202,11 +235,13 @@ def agent_container(
 
 
 def receipt_graph_mermaid(settings: Settings) -> str:
-    """The compiled receipt graph as Mermaid. Opens no database and contacts no LLM host."""
+    """The compiled receipt graph as Mermaid. Connects to no database (the container's engine
+    and the ledger's are lazy) and calls no model."""
     container = build_container(settings)
     try:
         tools = InProcessToolGateway(tool_registry(container))
-        deps = _agent_deps(settings, container.clock, InMemoryTracer(container.clock), tools)
+        claude = _claude_reader(settings, container.clock, container.engine)
+        deps = _agent_deps(container, InMemoryTracer(container.clock), tools, claude.reader)
         return build_receipt_graph(deps, InMemorySaver()).get_graph().draw_mermaid()
     finally:
         dispose(container)

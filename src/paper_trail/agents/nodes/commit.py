@@ -1,9 +1,9 @@
 """The supervisor's writes of what the specialists decided.
 
 ``commit_matches`` writes the matching agent's decisions with ``save_matches``: one call per
-run, also with no decisions. The tool links the lines, creates the new products (a confirmed one
-with its vector) and their codes, remembers the aliases of uncoded lines and records the prices
-in one unit of work, and completes the receipt. It is idempotent, so a run resumed after a crash
+run, also with no decisions. The tool links the lines, creates the new products and their
+codes, remembers the aliases of uncoded lines and records the prices in one unit of work, and
+completes the receipt. It is idempotent, so a run resumed after a crash
 here repeats it safely. The lines it linked to new products are what the enrichment agent
 describes next, each with the catalog entry matching named it from (none for a printed-text
 product).

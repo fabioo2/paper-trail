@@ -4,10 +4,13 @@ The migration scripts live in the repository's top-level ``migrations/`` directo
 built for the runtime image ships them inside the package as ``paper_trail/migrations``.
 """
 
+import sqlite3
 from functools import cache
 from importlib import resources
 from pathlib import Path
+from typing import cast
 
+import sqlite_vec
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -67,9 +70,27 @@ def current_revision(engine: Engine) -> str | None:
         return revision_of(connection)
 
 
+def load_sqlite_vec(connection: Connection) -> None:
+    """Load sqlite-vec into ``connection``'s SQLite connection, for the migrations that create
+    and drop ``product_vectors`` (0002, 0007). Only the migration runner loads it; the
+    application's engine does not (claude-extraction plan V1)."""
+    sqlite = cast("sqlite3.Connection", connection.connection.dbapi_connection)
+    sqlite.enable_load_extension(True)
+    try:
+        sqlite_vec.load(sqlite)
+    finally:
+        sqlite.enable_load_extension(False)
+
+
 def upgrade_to_head(engine: Engine) -> None:
-    """Upgrade the database to the head revision in one transaction. Idempotent."""
-    with engine.begin() as connection:
-        config = _config()
-        config.attributes[CONNECTION_ATTRIBUTE] = connection
-        command.upgrade(config, "head")
+    """Upgrade the database to the head revision in one transaction. Idempotent. The connection
+    loads sqlite-vec for the migrations and is then discarded, so the pool never hands it out."""
+    with engine.connect() as connection:
+        try:
+            load_sqlite_vec(connection)
+            with connection.begin():
+                config = _config()
+                config.attributes[CONNECTION_ATTRIBUTE] = connection
+                command.upgrade(config, "head")
+        finally:
+            connection.invalidate()

@@ -1,29 +1,28 @@
 """``paper-trail process --interrupt-after / --resume / --reprocess`` end to end (AC-C-04,
-AC-C-05, S3-AC-08, S3-AC-10; experiment E2's checkpointer step).
+AC-C-05, S3-AC-08; claude-extraction CE-TC-056, 057, 059, 060).
 
-Real composition root, SQLite with LangGraph's checkpoints, real Ollama adapters for chat and
-embeddings; the model is a scripted fake Ollama on 127.0.0.1. A second CLI invocation is a
-second process: it only shares the run's database file.
+Real composition root, SQLite with LangGraph's checkpoints, the real Anthropic adapter; the
+model is a scripted fake Messages API on 127.0.0.1. A second CLI invocation is a second
+process: it only shares the run's database file (and gets a fake API of its own).
 
-Pinned (docs/tests/agent-core-C.md):
-- ``--interrupt-after NODE`` takes a node of the graph (``agents.graph.NODE_NAMES``); any other
-  name is exit 2 listing the valid ones, before anything runs. A paused receipt prints
-  ``paused after <node>`` and the hint ``paper-trail process --resume <id>``; exit 0; its trace
-  file has ``outcome.status`` ``processing``.
-- ``--resume ID`` continues the receipt's thread in this run's database and prints its block;
-  the trace file has ``outcome.resumed_from`` (the node the run continued after). It takes no
-  PATH, no ``--text-file`` and no ``--reprocess`` (exit 2). Exit 1 for an unknown receipt, one
-  with nothing to resume, or one waiting for a review (the message names ``review resolve``);
-  exit 4 when the LLM host is down again.
-- Exit 4 (LLM host down) prints the hint ``paper-trail process --resume <id>``; a receipt not
-  yet saved is PROCESSING/WAITING_FOR_GPU (S3-AC-10).
-- ``--reprocess`` re-runs a stored photo's receipt (same id, not "duplicate") from its stored OCR
-  text; with ``--text-file`` it is exit 2 (a text is never deduplicated, so never reprocessed).
+Pinned:
+- ``--interrupt-after NODE`` takes a node of the graph (the 9 of ``agents.graph.NODE_NAMES``);
+  any other name is exit 2 listing the valid ones, before anything runs. A paused receipt
+  prints ``paused after <node>`` and the hint ``paper-trail process --resume <id>``; exit 0.
+- ``--resume ID`` continues the receipt's thread; the trace has ``outcome.resumed_from``. It
+  takes no PATH and no ``--reprocess`` (exit 2). Exit 1 for an unknown receipt, one with
+  nothing to resume, or one waiting for a review (the message names ``review resolve``); exit
+  2 for a run saved at state version 2 (the message names ``review resolve`` and
+  ``process --reprocess``); exit 4 when Claude is unavailable again.
+- Claude unavailable: exit 4 with the hint; the receipt is FAILED with its checkpoint (V11).
+- ``--reprocess`` re-reads a stored photo's receipt with Claude (same id, not "duplicate").
 """
 
 import copy
 import json
+import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -33,37 +32,50 @@ from langchain_core.runnables import RunnableConfig
 from paper_trail.adapters.sqlite.checkpoints import sqlite_checkpointer
 from paper_trail.agents.state import thread_id
 from tests.e2e.agent_cli import (
-    StartOllama,
+    StartClaude,
     configure_cli,
-    fake_ollama_env,
+    fake_claude_env,
     invoke,
+    photo,
     receipt_status,
     rows,
     run_database,
     trace_files,
 )
-from tests.extractions import COSTCO_OCR, extraction, inconsistent_extraction
-from tests.images import PRINTED_RECEIPTS
+from tests.extractions import answer, inconsistent_answer, metro_answer
+from tests.fakes.anthropic_server import UNAVAILABLE
 
 RUN = "e2"
+EXTRACT_MODEL = "claude-haiku-5-5"
+RETRY_MODEL = "claude-opus-5-5"
+NODE_NAMES = (
+    "extract",
+    "validate",
+    "supervisor",
+    "review",
+    "persist",
+    "match",
+    "commit_matches",
+    "enrich",
+    "commit_enrichment",
+)
+OLD_STATE_VERSION = 2
 
 
 @pytest.fixture
 def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    return configure_cli(monkeypatch, tmp_path)
+    return configure_cli(monkeypatch, tmp_path, main_migrated=True)
 
 
 @pytest.fixture
-def ollama(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartOllama]:
-    with fake_ollama_env(monkeypatch) as start:
+def claude(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartClaude]:
+    with fake_claude_env(monkeypatch) as start:
         yield start
 
 
 @pytest.fixture
-def receipt_text(tmp_path: Path) -> Path:
-    path = tmp_path / "costco.txt"
-    path.write_text(COSTCO_OCR, encoding="utf-8")
-    return path
+def receipt(tmp_path: Path) -> Path:
+    return photo(tmp_path)
 
 
 def _process(*args: str) -> tuple[int, str]:
@@ -84,41 +96,37 @@ def _latest_outcome(data_dir: Path) -> dict[str, Any]:
     return outcome
 
 
-def _stage(data_dir: Path, receipt_id: int = 1) -> str:
-    ((stage,),) = rows(
-        run_database(data_dir, RUN), "SELECT stage FROM receipts WHERE id = ?", receipt_id
-    )
-    return str(stage)
+def _status_and_stage(data_dir: Path) -> list[tuple[Any, ...]]:
+    return rows(run_database(data_dir, RUN), "SELECT status, stage FROM receipts")
 
 
-# --- AC-C-04 / S3-AC-08 ---------------------------------------------------------------------------
+# --- AC-C-04 / S3-AC-08 / CE-TC-059: breakpoints --------------------------------------------------
 
 
-def test_ac_c_04_interrupt_after_extraction_then_resume_without_a_new_extraction(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+def test_ac_c_04_interrupt_after_extract_then_resume_without_a_new_read(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    first = ollama(extraction())
+    first = claude(answer())
 
-    code, output = _process("--text-file", str(receipt_text), "--interrupt-after", "extract_text")
+    code, output = _process(str(receipt), "--interrupt-after", "extract")
 
     assert code == 0, output
-    assert "paused after extract_text" in output
+    assert "paused after extract" in output
     assert "paper-trail process --resume 1" in output
     assert first.calls == 1
     database = run_database(data_dir, RUN)
     assert receipt_status(database, 1) == "processing"
     assert _latest_outcome(data_dir)["status"] == "processing"
 
-    second = ollama()  # a new process; any chat request would get no scripted reply
+    second = claude()  # a new process; any request would get no scripted reply
     code, output = _process("--resume", "1")
 
     assert code == 0, output
     assert "COMPLETED" in output
     assert second.calls == 0
-    assert second.embed_requests == []  # printed-text products are not embedded (PC-TC-52)
     assert receipt_status(database, 1) == "completed"
     outcome = _latest_outcome(data_dir)
-    assert (outcome["status"], outcome["resumed_from"]) == ("completed", "extract_text")
+    assert (outcome["status"], outcome["resumed_from"]) == ("completed", "extract")
     assert rows(database, "SELECT match_source FROM line_items ORDER BY position") == [
         ("new",),
         ("new",),
@@ -126,78 +134,95 @@ def test_ac_c_04_interrupt_after_extraction_then_resume_without_a_new_extraction
     ]
 
 
-def test_an_unknown_breakpoint_is_a_usage_error(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+@pytest.mark.parametrize("node", ["read", "extract_text", "extract_vision", "lunch"])
+def test_ce_tc_059_an_unknown_breakpoint_is_a_usage_error_listing_the_nine_nodes(
+    data_dir: Path, claude: StartClaude, receipt: Path, node: str
 ) -> None:
-    fake = ollama(extraction())
+    fake = claude(answer())
 
-    code, output = _process("--text-file", str(receipt_text), "--interrupt-after", "lunch")
+    code, output = _process(str(receipt), "--interrupt-after", node)
 
     assert code == 2, output
-    assert "extract_text" in output
+    for name in NODE_NAMES:
+        assert name in output, name
     assert fake.calls == 0
     database = run_database(data_dir, RUN)
     if database.exists():  # the run may have been migrated; nothing was processed in it
         assert rows(database, "SELECT count(*) FROM receipts") == [(0,)]
 
 
-# --- AC-C-05 / S3-AC-10 ---------------------------------------------------------------------------
+# --- AC-C-05 / CE-TC-056: Claude unavailable, then resume -----------------------------------------
 
 
-def test_ac_c_05_the_gpu_drops_then_resume_continues_from_the_last_completed_node(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+def test_ce_tc_056_claude_down_on_the_first_read_then_resume_completes(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    """The first attempt is answered, the retry is not (the fake has no reply left and answers
-    500): exit 4 with the resume hint. The resumed process asks only for the retry."""
-    ollama(inconsistent_extraction())
+    claude(UNAVAILABLE)
 
-    code, output = _process("--text-file", str(receipt_text))
+    code, output = _process(str(receipt))
 
     assert code == 4, output
-    assert "paper-trail process --resume 1" in output
+    assert f"paper-trail process --resume 1 --run {RUN}" in output
+    assert _status_and_stage(data_dir) == [("failed", "failed")]
     database = run_database(data_dir, RUN)
-    assert receipt_status(database, 1) == "processing"
-    assert _stage(data_dir) == "waiting_for_gpu"
+    assert rows(database, "SELECT DISTINCT thread_id FROM checkpoints") == [("receipt-1",)]
 
-    second = ollama(extraction())
+    second = claude(answer())
     code, output = _process("--resume", "1")
 
     assert code == 0, output
-    assert second.calls == 1
-    assert receipt_status(database, 1) == "completed"
-    assert _latest_outcome(data_dir)["resumed_from"] == "supervisor"
+    assert second.models == [EXTRACT_MODEL]
+    assert _status_and_stage(data_dir) == [("completed", "done")]
+    assert rows(database, "SELECT count(*) FROM receipts") == [(1,)]
 
 
-def test_resume_with_the_gpu_still_down_is_exit_4(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+def test_ce_tc_056_resume_with_claude_still_down_is_exit_4_and_still_resumable(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    ollama(inconsistent_extraction())
-    assert _process("--text-file", str(receipt_text))[0] == 4
-    ollama()  # still no reply for the retry
+    claude(UNAVAILABLE)
+    assert _process(str(receipt))[0] == 4
+    claude(UNAVAILABLE)
 
     code, output = _process("--resume", "1")
 
     assert code == 4, output
-    assert receipt_status(run_database(data_dir, RUN), 1) == "processing"
+    assert "paper-trail process --resume 1" in output
+    assert _status_and_stage(data_dir) == [("failed", "failed")]
+
+    claude(answer())
+    assert _process("--resume", "1")[0] == 0
+
+
+def test_a_failed_receipt_processed_again_without_resume_is_a_duplicate(
+    data_dir: Path, claude: StartClaude, receipt: Path
+) -> None:
+    """The way back for a FAILED receipt is ``--resume`` (or ``--reprocess``): the same photo
+    again is the receipt it already made, and nothing is read."""
+    claude(UNAVAILABLE)
+    assert _process(str(receipt))[0] == 4
+    fake = claude(answer())
+
+    code, output = _process(str(receipt))
+
+    assert code == 0, output
+    assert "duplicate" in output.lower()
+    assert fake.calls == 0
+    assert _status_and_stage(data_dir) == [("failed", "failed")]
 
 
 # --- what --resume refuses ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "extra",
-    [("costco.txt",), ("--text-file", "costco.txt"), ("--reprocess",)],
-    ids=["path", "text-file", "reprocess"],
-)
+@pytest.mark.parametrize("extra", [("costco.png",), ("--reprocess",)], ids=["path", "reprocess"])
 def test_resume_takes_nothing_else(
     data_dir: Path,
-    ollama: StartOllama,
-    receipt_text: Path,
+    claude: StartClaude,
+    receipt: Path,
     extra: tuple[str, ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.chdir(receipt_text.parent)
-    fake = ollama(extraction())
+    monkeypatch.chdir(receipt.parent)
+    fake = claude(answer())
 
     code, output = _process("--resume", "1", *extra)
 
@@ -206,8 +231,8 @@ def test_resume_takes_nothing_else(
     assert fake.calls == 0
 
 
-def test_resume_of_an_unknown_receipt_is_exit_1(data_dir: Path, ollama: StartOllama) -> None:
-    ollama()
+def test_resume_of_an_unknown_receipt_is_exit_1(data_dir: Path, claude: StartClaude) -> None:
+    claude()
 
     code, output = _process("--resume", "42")
 
@@ -216,10 +241,10 @@ def test_resume_of_an_unknown_receipt_is_exit_1(data_dir: Path, ollama: StartOll
 
 
 def test_resume_of_a_finished_receipt_is_exit_1(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    ollama(extraction())
-    assert _process("--text-file", str(receipt_text))[0] == 0
+    claude(answer())
+    assert _process(str(receipt))[0] == 0
 
     code, output = _process("--resume", "1")
 
@@ -228,10 +253,10 @@ def test_resume_of_a_finished_receipt_is_exit_1(
 
 
 def test_resume_of_a_receipt_waiting_for_review_points_to_review_resolve(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    ollama(then=inconsistent_extraction())
-    assert _process("--text-file", str(receipt_text))[0] == 0
+    claude(then=inconsistent_answer())
+    assert _process(str(receipt))[0] == 0
 
     code, output = _process("--resume", "1")
 
@@ -240,9 +265,12 @@ def test_resume_of_a_receipt_waiting_for_review_points_to_review_resolve(
     assert receipt_status(run_database(data_dir, RUN), 1) == "needs_review"
 
 
-def _strip_state_version(database: Path, receipt_id: int) -> None:
-    """Rewrite the receipt's latest checkpoint without ``state_version``: what a version from
-    before product codes saved (PC-TC-72)."""
+# --- CE-TC-057: a run saved at state version 2 ------------------------------------------------
+
+
+def _save_as_version_2(database: Path, receipt_id: int) -> None:
+    """Rewrite the receipt's latest checkpoint as the version before Claude saved it
+    (``state_version`` 2): the OCR/Ollama graph's state."""
     config: RunnableConfig = {
         "configurable": {"thread_id": thread_id(receipt_id), "checkpoint_ns": ""}
     }
@@ -250,68 +278,111 @@ def _strip_state_version(database: Path, receipt_id: int) -> None:
         saved = saver.get_tuple(config)
         assert saved is not None
         checkpoint = copy.copy(saved.checkpoint)
-        values = {k: v for k, v in checkpoint["channel_values"].items() if k != "state_version"}
-        versions = {k: v for k, v in checkpoint["channel_versions"].items() if k in values}
+        versions = dict(checkpoint["channel_versions"])
+        values = dict(checkpoint["channel_values"])
+        values["state_version"] = OLD_STATE_VERSION
+        versions["state_version"] = max(versions.values())
         checkpoint["channel_values"] = values
         checkpoint["channel_versions"] = versions
         saver.put(saved.parent_config or config, checkpoint, saved.metadata, versions)
 
 
-def test_pc_tc_72_resume_of_a_run_saved_by_an_older_version_is_exit_2(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+def test_ce_tc_057_resume_of_a_version_2_run_is_exit_2_naming_both_ways_out(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    ollama(extraction())
-    assert _process("--text-file", str(receipt_text), "--interrupt-after", "match")[0] == 0
+    claude(answer())
+    assert _process(str(receipt), "--interrupt-after", "extract")[0] == 0
     database = run_database(data_dir, RUN)
-    _strip_state_version(database, 1)
-    fake = ollama()
+    _save_as_version_2(database, 1)
+    before = rows(database, "SELECT status, stage, total_cents FROM receipts")
+    fake = claude()
 
     code, output = _process("--resume", "1")
 
     assert code == 2, output
-    assert "run 1 was saved by an older version; reprocess the receipt" in output
+    assert "review resolve" in output
+    assert "--reprocess" in output
     assert fake.calls == 0
-    assert receipt_status(database, 1) == "processing"
+    assert rows(database, "SELECT status, stage, total_cents FROM receipts") == before
+    assert rows(database, "SELECT count(*) FROM line_items") == [(0,)]
     assert rows(database, "SELECT count(*) FROM products") == [(0,)]
 
 
-# --- --reprocess --------------------------------------------------------------------------------
+# --- CE-TC-060: --reprocess re-reads the stored photo -------------------------------------------
 
 
-def test_reprocess_reruns_a_stored_photo_from_its_ocr_text(
-    data_dir: Path, ollama: StartOllama, tmp_path: Path
+def test_ce_tc_060_reprocess_rereads_the_stored_photo_with_claude(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    photo = tmp_path / "costco.png"
-    photo.write_bytes(PRINTED_RECEIPTS[0].render())
-    fake = ollama(extraction(), extraction())
-    assert _process(str(photo))[0] == 0
+    fake = claude(answer(), metro_answer())
+    assert _process(str(receipt))[0] == 0
+    database = run_database(data_dir, RUN)
+    with_ocr = "UPDATE receipts SET ocr_text = 'OLD OCR TEXT' WHERE id = 1"
+    _execute(database, with_ocr)
 
-    code, output = _process(str(photo), "--reprocess")
+    code, output = _process(str(receipt), "--reprocess")
 
     assert code == 0, output
     assert "duplicate" not in output.lower()
     assert "receipt 1" in output
     assert fake.calls == 2
-    database = run_database(data_dir, RUN)
-    assert rows(database, "SELECT count(*) FROM receipts") == [(1,)]
+    assert fake.image_sha256(1) == fake.image_sha256(0)
+    assert rows(database, "SELECT id, ocr_text FROM receipts") == [(1, "OLD OCR TEXT")]
     assert receipt_status(database, 1) == "completed"
-    assert rows(database, "SELECT match_source FROM line_items ORDER BY position") == [
-        ("alias",),
-        ("alias",),
-        ("alias",),
-    ]
-    events = _latest_trace(data_dir)["events"]
-    assert [event for event in events if event["name"] == "ocr_read"] == []
-    assert events[0]["name"] != "read"
+    assert rows(database, "SELECT count(*), sum(line_total_cents) FROM line_items") == [(12, 4204)]
 
 
-def test_reprocess_with_a_text_file_is_a_usage_error(
-    data_dir: Path, ollama: StartOllama, receipt_text: Path
+def test_r8_reprocess_with_claude_down_keeps_the_receipt_as_it_was(
+    data_dir: Path, claude: StartClaude, receipt: Path
 ) -> None:
-    fake = ollama(extraction())
+    """Review round 1, R8: a reprocess that stops before ``persist`` restores the receipt's
+    status and stage; its lines are untouched."""
+    claude(answer())
+    assert _process(str(receipt))[0] == 0
+    database = run_database(data_dir, RUN)
+    lines = rows(database, "SELECT position, raw_text, line_total_cents FROM line_items")
+    fake = claude(UNAVAILABLE)
 
-    code, output = _process("--text-file", str(receipt_text), "--reprocess")
+    code, output = _process(str(receipt), "--reprocess")
 
-    assert code == 2, output
-    assert "No such option" not in output
+    assert code == 4, output
+    assert fake.calls >= 1
+    assert _status_and_stage(data_dir) == [("completed", "done")]
+    assert rows(database, "SELECT position, raw_text, line_total_cents FROM line_items") == lines
+
+
+def test_ce_tc_060_reprocess_is_the_way_out_of_a_version_2_run(
+    data_dir: Path, claude: StartClaude, receipt: Path
+) -> None:
+    claude(answer())
+    assert _process(str(receipt), "--interrupt-after", "extract")[0] == 0
+    database = run_database(data_dir, RUN)
+    _save_as_version_2(database, 1)
+    fake = claude(answer())
+
+    code, output = _process(str(receipt), "--reprocess")
+
+    assert code == 0, output
+    assert fake.models == [EXTRACT_MODEL]
+    assert receipt_status(database, 1) == "completed"
+    assert rows(database, "SELECT count(*) FROM receipts") == [(1,)]
+
+
+def test_ce_tc_060_a_receipt_without_a_stored_image_cannot_be_reprocessed(
+    data_dir: Path, claude: StartClaude, receipt: Path
+) -> None:
+    claude(answer())
+    assert _process(str(receipt))[0] == 0
+    database = run_database(data_dir, RUN)
+    _execute(database, "UPDATE receipts SET image_path = NULL WHERE id = 1")
+    fake = claude(answer())
+
+    code, output = _process(str(receipt), "--reprocess")
+
+    assert code == 1, output
     assert fake.calls == 0
+
+
+def _execute(database: Path, sql: str) -> None:
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(sql)

@@ -35,17 +35,6 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class OcrReadInput(_Model):
-    image_path: StrictStr  # relative to the image store, as stored on the receipt
-
-
-class OcrReadOutput(_Model):
-    text: str  # card numbers masked
-    mean_confidence: float | None
-    rotation_degrees: int  # how far the OCR turned the image to read it
-    masked_pans: int
-
-
 class CheckArithmeticInput(_Model):
     receipt: ExtractedReceipt
 
@@ -59,6 +48,9 @@ class SaveReceiptInput(_Model):
     receipt_id: StrictInt
     draft: DraftPayload
     force: bool = False  # a person approved the draft: COMPLETED even if it does not add up
+    # False for a draft mapped from a Claude reading: its discount links are kept as they are
+    # and no other is added (an order discount stays at receipt level).
+    attribute_discounts: bool = True
 
 
 class ReceiptLevelDiscountOut(_Model):
@@ -124,20 +116,6 @@ class ProductLookupOutput(_Model):
     source: Literal[MatchSource.MEMORY, MatchSource.ALIAS] | None  # memory, or an exact alias
 
 
-class SimilaritySearchInput(_Model):
-    text: StrictStr  # embedded as given
-    k: StrictInt = Field(ge=1, le=10)
-
-
-class CandidateOut(_Model):
-    product: ProductOut
-    distance: float  # cosine distance, 0 = the same direction
-
-
-class SimilaritySearchOutput(_Model):
-    candidates: list[CandidateOut]  # nearest first
-
-
 class ItemCodeOut(_Model):
     """A line's leading code as parsed at the store (``ItemCode``); ``identity`` is what
     ``product_codes`` stores it under (None for kind ``none``)."""
@@ -160,8 +138,9 @@ class ItemCodeOut(_Model):
 
 
 class CatalogLookupInput(_Model):
-    raw_text: StrictStr  # the line's raw text; parsed by the tool
+    raw_text: StrictStr  # the line's raw text; parsed by the tool when ``code`` is None
     store_key: StrictStr
+    code: StrictStr | None = None  # the code a reading gave the line, read instead of the text
 
 
 class CatalogLookupOutput(_Model):
@@ -185,8 +164,9 @@ class MatchDecisionIn(_Model):
     """One line's product: an existing one, or a new one (source ``new``) named here.
 
     ``code``: the line's code identity when it was matched by its code; ``name_source``: where
-    a new product's name came from (``receipt_text`` when absent); ``catalog``: the source
-    entry it was named from, kept for the enrichment agent (not written)."""
+    a new product's name came from (``receipt_text`` when absent); ``category_source``: where
+    the line's own category came from (``person`` when absent); ``catalog``: the source entry
+    it was named from, kept for the enrichment agent (not written)."""
 
     position: StrictInt = Field(ge=0)
     source: MatchSource
@@ -194,6 +174,8 @@ class MatchDecisionIn(_Model):
     new_product_name: StrictStr | None = Field(default=None, min_length=1)
     code: CodeRefIn | None = None
     name_source: FieldSource | None = None
+    category_source: FieldSource | None = None
+    printed_code: StrictStr | None = None  # the code a reading gave the line, if ``code`` is it
     catalog: CatalogEntryPayload | None = None
 
     @model_validator(mode="after")
@@ -213,6 +195,8 @@ class MatchDecisionIn(_Model):
             new_product_name=self.new_product_name,
             code=None if self.code is None else self.code.to_identity(),
             name_source=self.name_source,
+            category_source=self.category_source,
+            printed_code=self.printed_code,
         )
 
 

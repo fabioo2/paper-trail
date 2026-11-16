@@ -91,8 +91,8 @@ def schema_0005(tmp_path_factory: pytest.TempPathFactory) -> Schema:
 
 
 @pytest.fixture(scope="module")
-def schema_head(tmp_path_factory: pytest.TempPathFactory) -> Schema:
-    return _built_schema(tmp_path_factory, "head")
+def schema_0006(tmp_path_factory: pytest.TempPathFactory) -> Schema:
+    return _built_schema(tmp_path_factory, "0006")
 
 
 def _schema(connection: Connection) -> Schema:
@@ -214,7 +214,7 @@ def _without_field_sources(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def test_pc_tc_13_upgrade_creates_exactly_the_contract(database: Path, engine: Engine) -> None:
     seeded = _seed_0005(database, engine, ("new", "alias", None))
 
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0006")
 
     with engine.connect() as connection:
         columns = [
@@ -261,7 +261,7 @@ def test_pc_tc_14_existing_products_are_stamped_legacy_model_per_filled_field(
 ) -> None:
     _seed_0005(database, engine, ())
 
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0006")
 
     with engine.begin() as connection:
         _product(connection, "Inserted after 0006")
@@ -273,7 +273,7 @@ def test_pc_tc_14_existing_products_are_stamped_legacy_model_per_filled_field(
 def at_head(database: Path, engine: Engine) -> Engine:
     """Seeded at 0005 (lines: new, alias, NULL), upgraded to head."""
     _seed_0005(database, engine, ("new", "alias", None))
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0006")
     return engine
 
 
@@ -398,7 +398,7 @@ def test_pc_tc_19_downgrade_without_catalog_lines(
 ) -> None:
     seeded = _seed_0005(database, engine, ("new", "alias", None))
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006")
     with engine.begin() as connection:
         _code(connection, 1)
         _code(connection, 2, "gtin", "", "0060383064877")
@@ -420,7 +420,7 @@ def test_pc_tc_20_downgrade_is_refused_while_lines_say_catalog(
 ) -> None:
     seeded = _seed_0005(database, engine, ("new", "alias", None, "new", "new"))
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006")
     with engine.begin() as connection:
         _code(connection, 1)
         connection.execute(
@@ -448,20 +448,20 @@ def test_pc_tc_20_downgrade_is_refused_while_lines_say_catalog(
 
 
 def test_pc_tc_21_upgrade_downgrade_upgrade(
-    database: Path, engine: Engine, schema_head: Schema
+    database: Path, engine: Engine, schema_0006: Schema
 ) -> None:
     seeded = _seed_0005(database, engine, ("new", "alias", None))
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006")
     command.downgrade(config, "0005")
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006")
 
     with engine.connect() as connection:
         rows = _all_rows(connection, (*SEEDED_TABLES, "product_codes"))
         assert (current_revision(engine), _schema(connection), _field_sources(connection)) == (
             "0006",
-            schema_head,
+            schema_0006,
             [expected for _, expected in STAMPS],
         )
     assert {**rows, "products": _without_field_sources(rows["products"])} == {
@@ -599,7 +599,7 @@ def _assert_survived(engine: Engine, seeded: Rows, line_tables: LineTables) -> N
 
 @pytest.mark.parametrize(
     "steps",
-    [("head",), ("head", "0005"), ("head", "0005", "head")],
+    [("0006",), ("0006", "0005"), ("0006", "0005", "0006")],
     ids=["after upgrade", "after downgrade", "after second upgrade"],
 )
 def test_pc_tc_101_a_populated_database_survives_every_step(
@@ -611,7 +611,7 @@ def test_pc_tc_101_a_populated_database_survives_every_step(
     config = alembic_config(database)
 
     for target in steps:
-        if target == "head":
+        if target == "0006":
             command.upgrade(config, target)
         else:
             command.downgrade(config, target)
@@ -653,7 +653,7 @@ def test_pc_tc_102_a_failure_mid_migration_leaves_the_previous_revision_and_retr
         line_tables = _line_tables(connection)
     config = alembic_config(database)
     if direction == "downgrade":
-        command.upgrade(config, "head")
+        command.upgrade(config, "0006")
     start = current_revision(engine)
     with engine.connect() as connection:
         before = (_schema(connection), _all_rows(connection, POPULATED_TABLES))
@@ -666,7 +666,7 @@ def test_pc_tc_102_a_failure_mid_migration_leaves_the_previous_revision_and_retr
             raise InjectedFaultError(failing_sql)
 
     run = command.upgrade if direction == "upgrade" else command.downgrade
-    target = "head" if direction == "upgrade" else "0005"
+    target = "0006" if direction == "upgrade" else "0005"
     monkeypatch.setattr(alembic.op, "execute", failing)
 
     with pytest.raises(InjectedFaultError):

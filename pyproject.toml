@@ -6,8 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20",
+    "anthropic>=2.8",
     "fastapi>=0.162",
     "httpx>=0.28",
+    # The Anthropic adapter tells a refused connection from a broken one by httpx2's errors.
+    "httpx2>=2.16",
     "langgraph>=1.2",
     "langgraph-checkpoint-sqlite>=3.1",
     # MCP server and client (agent core slice B). 2.x renamed FastMCP; the next major is fenced off.
@@ -41,7 +44,6 @@ dev = [
     # Runs the suites in parallel (`make test`, `make test-fast`).
     "pytest-xdist>=3.8",
     "pyyaml>=6.0.3",
-    "respx>=0.23",
     "ruff>=0.17",
     "types-pyyaml>=6.0.12",
 ]
@@ -143,6 +145,7 @@ forbidden_modules = [
     "paper_trail.config",
     "paper_trail.observability",
     "alembic",
+    "anthropic",
     "fastapi",
     "pydantic",
     "pydantic_settings",
@@ -166,6 +169,7 @@ forbidden_modules = [
     "paper_trail.config",
     "paper_trail.observability",
     "alembic",
+    "anthropic",
     "fastapi",
     "pydantic",
     "pydantic_settings",
