@@ -73,6 +73,20 @@
         "title": "ArithmeticReportOut",
         "type": "object"
       },
+      "Body_uploadReceipt": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_uploadReceipt",
+        "type": "object"
+      },
       "Category": {
         "enum": [
           "produce",
@@ -798,6 +812,27 @@
         "title": "ReceiptSummaryOut",
         "type": "object"
       },
+      "ReceiptUploadOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingStage"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReceiptStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "stage"
+        ],
+        "title": "ReceiptUploadOut",
+        "type": "object"
+      },
       "Unit": {
         "enum": [
           "each",
@@ -1095,6 +1130,86 @@
           }
         },
         "summary": "List receipts",
+        "tags": [
+          "receipts"
+        ]
+      },
+      "post": {
+        "description": "Store a JPEG, PNG, WebP or HEIC photo and queue its receipt for the worker; poll\nGET /api/receipts/{id} for its status. A file above UPLOAD__MAX_BYTES is a 413 problem;\nanything but a photo, or a photo above the pixel limit, is a 415 problem.",
+        "operationId": "uploadReceipt",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_uploadReceipt"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptUploadOut"
+                }
+              }
+            },
+            "description": "The photo was uploaded before: its receipt, not processed again."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptUploadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Upload a receipt photo",
         "tags": [
           "receipts"
         ]

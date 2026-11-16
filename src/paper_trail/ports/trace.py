@@ -33,6 +33,10 @@ class Tracer(Protocol):
 
     def bind(self, receipt_id: int) -> AbstractContextManager[None]: ...
 
+    def forget(self, receipt_id: int) -> None:
+        """Drop the receipt's events (a long-running worker keeps none)."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:

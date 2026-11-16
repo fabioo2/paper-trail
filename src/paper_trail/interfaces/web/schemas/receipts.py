@@ -52,6 +52,16 @@ class ReceiptSummaryOut(BaseModel):
         )
 
 
+class ReceiptUploadOut(BaseModel):
+    id: int
+    status: ReceiptStatus
+    stage: ProcessingStage
+
+    @classmethod
+    def from_domain(cls, receipt: Receipt) -> "ReceiptUploadOut":
+        return cls(id=require_id(receipt.id), status=receipt.status, stage=receipt.stage)
+
+
 class ReceiptPageOut(BaseModel):
     items: list[ReceiptSummaryOut]
     next_cursor: str | None  # pass back as ?cursor= for the next page; null on the last page

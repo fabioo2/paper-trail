@@ -8,11 +8,13 @@ from fastapi.telemetry import TelemetryConfig
 from paper_trail import __version__
 from paper_trail.bootstrap import Container
 from paper_trail.interfaces.web.errors import install_error_handlers, problem_schemas
-from paper_trail.interfaces.web.middleware import RequestContextMiddleware
+from paper_trail.interfaces.web.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
 from paper_trail.interfaces.web.routers import health, meta, products, receipts
 from paper_trail.interfaces.web.spa import SpaStaticFiles
 
 API_PREFIX = "/api"
+# Room for the multipart framing around an upload of UPLOAD__MAX_BYTES.
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 # FastAPI ships native OpenTelemetry hooks (no-op without an SDK). Paper Trail has no
 # telemetry (ADR-0015), so they are switched off explicitly rather than left dormant.
@@ -48,6 +50,10 @@ def create_app(container: Container) -> FastAPI:
     )
     app.state.container = container
     install_error_handlers(app)
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=container.settings.upload.max_bytes + MULTIPART_OVERHEAD_BYTES,
+    )
     app.add_middleware(RequestContextMiddleware)
     for router in (health.router, receipts.router, products.router, meta.router):
         app.include_router(router, prefix=API_PREFIX)

@@ -97,7 +97,13 @@ export interface paths {
          */
         get: operations["listReceipts"];
         put?: never;
-        post?: never;
+        /**
+         * Upload a receipt photo
+         * @description Store a JPEG, PNG, WebP or HEIC photo and queue its receipt for the worker; poll
+         *     GET /api/receipts/{id} for its status. A file above UPLOAD__MAX_BYTES is a 413 problem;
+         *     anything but a photo, or a photo above the pixel limit, is a 415 problem.
+         */
+        post: operations["uploadReceipt"];
         delete?: never;
         options?: never;
         head?: never;
@@ -144,6 +150,11 @@ export interface components {
             issues: components["schemas"]["ArithmeticIssueOut"][];
             /** Ok */
             ok: boolean;
+        };
+        /** Body_uploadReceipt */
+        Body_uploadReceipt: {
+            /** File */
+            file: string;
         };
         /**
          * Category
@@ -371,6 +382,13 @@ export interface components {
             store_name: string;
             total: components["schemas"]["MoneyOut"] | null;
         };
+        /** ReceiptUploadOut */
+        ReceiptUploadOut: {
+            /** Id */
+            id: number;
+            stage: components["schemas"]["ProcessingStage"];
+            status: components["schemas"]["ReceiptStatus"];
+        };
         /**
          * Unit
          * @enum {string}
@@ -553,6 +571,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReceiptPageOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    uploadReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_uploadReceipt"];
+            };
+        };
+        responses: {
+            /** @description The photo was uploaded before: its receipt, not processed again. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptUploadOut"];
+                };
+            };
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptUploadOut"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
             /** @description Unprocessable Entity */

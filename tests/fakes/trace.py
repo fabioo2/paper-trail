@@ -74,6 +74,9 @@ class FakeTracer:
     def events(self, receipt_id: int) -> tuple[TraceEvent, ...]:
         return tuple(self._events.get(receipt_id, ()))
 
+    def forget(self, receipt_id: int) -> None:
+        self._events.pop(receipt_id, None)
+
     @contextmanager
     def bind(self, receipt_id: int) -> Iterator[None]:
         self._bound.append(receipt_id)

@@ -15,7 +15,7 @@ from paper_trail.config import GraphSettings, PromptSettings, Settings, UploadSe
 def test_agent_core_defaults_match_the_documented_table() -> None:
     settings = Settings()
 
-    assert settings.upload == UploadSettings(max_pixels=40_000_000)
+    assert settings.upload == UploadSettings(max_bytes=15_000_000, max_pixels=40_000_000)
     assert settings.graph == GraphSettings(max_attempts=2, feedback=True, enrichment=True)
     assert settings.prompts == PromptSettings(extraction_version="v3")
 

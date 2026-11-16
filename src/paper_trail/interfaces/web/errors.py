@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.json_schema import models_json_schema
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
+from paper_trail.domain.errors import (
+    ConflictError,
+    DomainValidationError,
+    NotFoundError,
+    UnsupportedMediaError,
+)
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 _SCHEMA_REF_TEMPLATE = "#/components/schemas/{model}"
@@ -21,6 +26,8 @@ _SCHEMA_REF_TEMPLATE = "#/components/schemas/{model}"
 _PROBLEM_TYPES: Mapping[int, str] = {
     404: "/problems/not-found",
     409: "/problems/conflict",
+    413: "/problems/too-large",
+    415: "/problems/unsupported-media",
     422: "/problems/validation",
     500: "/problems/internal",
     503: "/problems/not-ready",
@@ -77,6 +84,10 @@ def internal_error_response() -> JSONResponse:
     )
 
 
+def too_large_detail(max_bytes: int) -> str:
+    return f"The upload is larger than the limit of {max_bytes:,} bytes."
+
+
 def problem_responses(*statuses: HTTPStatus) -> dict[int | str, dict[str, Any]]:
     """OpenAPI ``responses=`` entries declaring problem+json bodies."""
     return {
@@ -102,7 +113,12 @@ def problem_schemas() -> dict[str, Any]:
 
 
 def install_error_handlers(app: FastAPI) -> None:
-    domain_errors = {NotFoundError: 404, ConflictError: 409, DomainValidationError: 422}
+    domain_errors = {
+        NotFoundError: 404,
+        ConflictError: 409,
+        UnsupportedMediaError: 415,
+        DomainValidationError: 422,
+    }
     for error_class, status in domain_errors.items():
         app.add_exception_handler(error_class, _domain_error_handler(status))
 

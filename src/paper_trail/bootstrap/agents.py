@@ -16,7 +16,6 @@ from sqlalchemy import Engine
 from paper_trail.adapters.anthropic.reader import AnthropicReader
 from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
-from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
 from paper_trail.adapters.lookups.http import (
     OPEN_BEAUTY_FACTS,
     OPEN_FOOD_FACTS,
@@ -40,11 +39,11 @@ from paper_trail.application.enrichment import EnrichCatalog, ProductEnricher
 from paper_trail.application.process_receipt import ProcessReceiptFile
 from paper_trail.application.receipts import GetReview, ListOpenReviews, ResolveReview
 from paper_trail.bootstrap import (
-    IMAGES_DIRNAME,
     RUNS_DIRNAME,
     Container,
     build_container,
     dispose,
+    image_store,
 )
 from paper_trail.config import McpSettings, Settings
 from paper_trail.ports.agents import ReceiptGraphRunner
@@ -89,12 +88,6 @@ def run_config(settings: Settings) -> RunConfig:
         enrichment=settings.graph.enrichment,
         catalog=settings.catalog.enabled,
         transport=settings.tools.transport,
-    )
-
-
-def _image_store(settings: Settings) -> FilesystemImageStore:
-    return FilesystemImageStore(
-        settings.data_dir / IMAGES_DIRNAME, max_pixels=settings.upload.max_pixels
     )
 
 
@@ -190,7 +183,7 @@ def _agent_deps(
         clock=container.clock,
         settings=settings,
         prompts=PromptLibrary(),
-        images=_image_store(settings),
+        images=image_store(settings),
         reader=reader,
         enricher=enricher,
     )
@@ -280,7 +273,7 @@ def agent_container(
             trace_writer=JsonTraceWriter(settings.data_dir / RUNS_DIRNAME / run, run, config),
             runner=runner,
             process_receipt=ProcessReceiptFile(
-                _image_store(settings),
+                image_store(settings),
                 uow_factory,
                 runner,
                 tracer,

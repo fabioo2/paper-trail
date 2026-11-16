@@ -12,11 +12,13 @@ log to stderr, at WARNING unless DEBUG is asked for (the trace files are the ful
 
 Start-up time: a command imports what only it needs (the web app and uvicorn, the agent
 commands and with them LangGraph, the MCP SDK and the model adapters) inside its own body, so
-``db upgrade``, ``worker`` or ``--help`` do not load them (``tests/e2e/test_cli_startup.py``).
+``db upgrade``, ``worker --check-heartbeat`` or ``--help`` do not load them
+(``tests/e2e/test_cli_startup.py``).
 """
 
 import json
 import os
+import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -49,6 +51,8 @@ from paper_trail.interfaces.worker.runner import WorkerRunner
 from paper_trail.observability import configure_logging
 
 STALE_AFTER_HEARTBEATS = 3
+# Renewed every heartbeat while the job runs; a dead worker's job is claimed again after it.
+JOB_LEASE = timedelta(minutes=5)
 
 app = typer.Typer(
     name="paper-trail",
@@ -181,7 +185,8 @@ def worker(
         ),
     ] = False,
 ) -> None:
-    """Run the background worker until SIGTERM or SIGINT."""
+    """Process the receipts uploaded through the API until SIGTERM or SIGINT (the main
+    database must be migrated)."""
     settings = load_settings()
     if check_heartbeat:
         max_age = timedelta(seconds=STALE_AFTER_HEARTBEATS * settings.worker.heartbeat_interval_s)
@@ -189,15 +194,27 @@ def worker(
             fresh = _heartbeat(container).is_fresh(max_age)
         raise typer.Exit(0 if fresh else 1)
 
+    from paper_trail.application.jobs import ProcessReceiptJobs
+    from paper_trail.interfaces.cli.runs import open_run
+
     configure_logging(settings)
-    with running_container(settings) as container:
+    with open_run(settings, None) as agents:
+        container = agents.container
+        jobs = ProcessReceiptJobs(
+            container.uow_factory,
+            agents.process_receipt,
+            agents.tracer,
+            worker_id=f"{socket.gethostname()}-{os.getpid()}",
+            lease=JOB_LEASE,
+        )
         runner = WorkerRunner(
-            handlers=(),
+            handlers=(jobs,),
             clock=container.clock,
             heartbeat=_heartbeat(container),
             poll_interval_s=settings.worker.poll_interval_s,
             heartbeat_interval_s=settings.worker.heartbeat_interval_s,
             shutdown_grace_s=settings.worker.shutdown_grace_s,
+            ticks=(jobs.renew_lease,),
         )
         exit_code = runner.run()
     raise typer.Exit(exit_code)

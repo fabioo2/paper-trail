@@ -323,6 +323,21 @@ summary to `/data/runs/<run>/summary.json`.
   receipt (`process --table`): store, items, the lines' sum against the subtotal, total, whether
   it adds up, the models, attempts and cost. It needs `ANTHROPIC_API_KEY` and costs money.
 
+### Upload from the phone
+
+A photo can also be sent to the running stack instead of the command line:
+`POST /api/receipts` with the photo as the multipart field `file` (JPEG, PNG, WebP or HEIC), for
+example `curl -F file=@receipt.jpg http://<server LAN address>:8420/api/receipts`. The photo is
+stored, its receipt is created `processing` and queued, and the answer is `202` with the
+receipt's `id`, `status` and `stage`; the `worker` then reads it with Claude, exactly as
+`process` does (same budget, retry and review). Poll `GET /api/receipts/{id}` until `status`
+is `completed`, `needs_review` or `failed`. The same photo again answers `200` with the receipt
+it already made and queues nothing; a file larger than `PAPER_TRAIL_UPLOAD__MAX_BYTES` (15 MB) is
+a `413` problem, and a file that is not an image, or has more pixels than
+`PAPER_TRAIL_UPLOAD__MAX_PIXELS`, is a `415` problem. When Claude cannot read it (no key, the API
+down, the budget reached) the receipt is `failed` with its checkpoint and is not retried on its
+own: `make pt ARGS="process --resume ID"` continues it. The worker runs one receipt at a time.
+
 ### Matching, corrections and resuming
 
 Every ITEM line is matched to a product within its store, and no model is asked (ADR-0018). A
