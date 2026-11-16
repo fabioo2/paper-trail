@@ -909,6 +909,8 @@ Pin these in `docs/tests/barcode-lookup.md`, as the other plans do.
 
 ## 10. Experiment E-BC (after `make catalog`)
 
+Historical: `catalog backfill` ran on the live database and was removed afterwards; these steps can no longer be run.
+
 1. Run `make catalog`. Record the download size, build time, rows kept and file size, which bear out the 130 k / 25-40 MB estimates.
 2. Run `make pt ARGS="catalog backfill"` (dry run, main database). Record the before/after table and the splits for the existing products, and the hit counts. Expected eligible codes on the first three receipts:
 

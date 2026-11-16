@@ -75,8 +75,7 @@ def normalize_alias(text: str) -> str:
 
 def legacy_alias(text: str) -> str:
     """The alias ``normalize_alias`` gave before ``mrj`` and ``hmrj`` became tax flags: stored
-    aliases and corrections keep that key until ``catalog backfill`` re-normalizes them, so
-    lookups also try it."""
+    aliases and corrections may keep that key, so lookups also try it."""
     return _alias(text, _TAX_FLAGS_BEFORE_0006)
 
 

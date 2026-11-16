@@ -335,9 +335,8 @@ text; a shared barcode or PLU is the same product at every store, while a store'
 belong to that store. Linking products across stores (comparison groups) is planned, not built.
 `PAPER_TRAIL_CATALOG__ENABLED=false` (or `process --no-catalog`) matches coded lines by their
 text instead, still without a model. Products created that way get no code, so with the catalog
-on again the same line is not found by its code and makes a second product (`catalog backfill`
-attaches the code to the first one and lists the pair as a merge candidate; see "Naming products
-by their codes"). Deposit, fee and discount lines, and generic texts such as
+on again the same line is not found by its code and makes a second product. Deposit, fee and
+discount lines, and generic texts such as
 `PRODUCE`, are never matched, and neither is a line a person named a product for when resolving
 a review. A NOTE per receipt counts the sources (`catalog 9 (store 5, gtin 3, plu 1) · alias 1 ·
 new 4 (printed text 3, plu 1)`), and each line's source is stored in
@@ -432,32 +431,6 @@ the app copies nothing from the page.
   nothing is importable. A running MCP server (`make mcp-up`) reads `plu.csv` once, so restart it
   after an import (`make mcp-down mcp-up`); `process` and the other commands read it fresh each run,
   and `web` and `worker` do not use it.
-- `catalog backfill [--apply] [--run NAME]` (a dry run by default): turns the products stored before
-  codes (migration 0006 marks their model-written fields `legacy_model`) into coded, printed-text
-  ones. It learns codes from your corrections and decides which product keeps each code (the one
-  with the most lines of it), then per product: moves lines whose code belongs to another product
-  (lines you linked yourself stay and are reported as conflicts), attaches the code most of its
-  lines carry, resets the model's name, brand, size, category and tags to the printed text, keeps a
-  name or category a person gave and fills what the PLU table knows. Last, it re-keys stored corrections and aliases after the tax-flag change. Two products
-  with the same code are reported as merge candidates, never merged. Each product is one
-  transaction: if one fails the command exits 1 naming it, the ones before it stay applied, and
-  running it again finishes the rest; a second `--apply` reports 0 changes. It is a deploy step, not
-  a routine command: a product with no receipt line left is not touched (its model-written fields
-  stay `legacy_model`), and a code you removed with `catalog remove` is attached again to the
-  product whose lines carry it. To point a code at another product, use `catalog add STORE CODE
-  --product ID` instead.
-
-**Deploying product codes:** migrate the live database only once the `catalog` commands are
-merged, and run the backfill before restarting the services. Import the PLU table first, so the
-backfill names PLU products in the same run:
-
-1. `make build`: the images with the migration and the `catalog` commands.
-2. `make down`, then back up the database (with its `-wal`/`-shm` files).
-3. `make migrate`.
-4. `catalog plu-import` with the export mounted, as above.
-5. `make pt ARGS="catalog backfill"`: read the dry run.
-6. `make pt ARGS="catalog backfill --apply"`, then once more: it reports 0 changes.
-7. `make up` (and `make mcp-up` if you use the MCP server).
 
 ### What gets saved: a product and its price history
 

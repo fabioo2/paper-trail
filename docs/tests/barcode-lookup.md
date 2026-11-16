@@ -65,6 +65,8 @@ No 1a test is removed or weakened by 1b; the edits above only add tests.
 
 **PC-TC-146 README (docs review).** The README has: `catalog todo` -> open the link in your own browser -> `catalog add`; the limits of design section 1.6 (a-c); one line per `catalog` command with `--run`; "the app never requests the link"; the deploy rule (migrate the live DB only after 1b, run `catalog backfill --apply` before restarting the services); for `plu-import`: where the file comes from (IFPS "Export all -> .csv"), that it is never committed (`/data/` is git-ignored), the name format with one example, the summary line with its reasons, and that running services read `plu.csv` once, so they are restarted after an import. The 1a sentence "`catalog backfill`, still to come, attaches the codes" is updated.
 
+`catalog backfill` was removed once it had run on the live database (chore/delete-catalog-backfill); PC-TC-147 and PC-TC-149 are history.
+
 **PC-TC-147 Backfill on a copy of the live DB.**
 1. Stop the services. Copy the DB (with `-wal`/`-shm`) to a dated backup, and work on a second copy through `--run`.
 2. `db upgrade`. Record the counts: 48 products, 53 aliases, 0 corrections, lines by `match_source`.

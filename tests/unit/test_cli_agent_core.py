@@ -60,12 +60,12 @@ def test_review_has_list_show_and_resolve() -> None:
         assert command in result.output
 
 
-def test_catalog_has_its_seven_commands() -> None:
+def test_catalog_has_its_six_commands() -> None:
     """Product codes PR 1b (barcode-lookup R15-R18, CLI contract table)."""
     result = runner.invoke(cli, ["catalog", "--help"], terminal_width=200)
 
     assert result.exit_code == 0, result.output
-    for command in ("todo", "add", "list", "remove", "lookup", "plu-import", "backfill"):
+    for command in ("todo", "add", "list", "remove", "lookup", "plu-import"):
         assert command in result.output
 
 
