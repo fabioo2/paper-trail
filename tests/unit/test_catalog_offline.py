@@ -33,8 +33,7 @@ from tests.factories import item_line, legacy_product
 from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.clock import FakeClock
 from tests.fakes.reader import ScriptedReader
-from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
-from tests.storage import in_unit, seed_purchase
+from tests.storage import in_unit, scratch_database, seed_purchase
 from tests.support import require_id
 
 
@@ -119,7 +118,7 @@ def test_a_whole_run_of_a_coded_receipt_works_offline(plu_path: Path) -> None:
 def _catalog_actions(tmp_path: Path, plu_path: Path) -> dict[str, Callable[[], object]]:
     """Each ``catalog`` use case over a product coded and bought twice as C1 at Costco."""
     clock = FakeClock()
-    factory = fake_uow_factory(FakeDatabase(), clock)
+    factory = scratch_database(clock).uow_factory
     coded = require_id(in_unit(factory, lambda uow: uow.products.add(legacy_product())).id)
     seed_purchase(
         factory,

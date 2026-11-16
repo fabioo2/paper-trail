@@ -15,7 +15,6 @@ The receipts here are stored the way migration 0004 leaves existing data: no lin
 observation at discount 0.
 """
 
-import copy
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
@@ -44,9 +43,7 @@ from tests.factories import (
     printed_lines,
 )
 from tests.fakes.clock import FakeClock
-from tests.fakes.state import FakeState
-from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
-from tests.storage import seed_pre_feature
+from tests.storage import ScratchDatabase, StoredState, scratch_database, seed_pre_feature
 from tests.support import require_id
 
 type Outcome = tuple[int, int, int | None, Refusal | None, bool, bool]
@@ -58,13 +55,13 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture
-def database() -> FakeDatabase:
-    return FakeDatabase()
+def database(clock: FakeClock) -> ScratchDatabase:
+    return scratch_database(clock)
 
 
 @pytest.fixture
-def uow_factory(database: FakeDatabase, clock: FakeClock) -> UnitOfWorkFactory:
-    return fake_uow_factory(database, clock)
+def uow_factory(database: ScratchDatabase) -> UnitOfWorkFactory:
+    return database.uow_factory
 
 
 @pytest.fixture
@@ -143,7 +140,7 @@ def _project(entries: Sequence[BackfilledDiscount]) -> list[Outcome]:
     return _outcomes(PriceBackfill(tuple(entries), applied=False))
 
 
-def _links(state: FakeState) -> dict[tuple[int, int], int]:
+def _links(state: StoredState) -> dict[tuple[int, int], int]:
     """Every stored link: (receipt id, discount position) -> item position."""
     return {
         (receipt_id, item.position): item.applies_to_position
@@ -153,7 +150,7 @@ def _links(state: FakeState) -> dict[tuple[int, int], int]:
     }
 
 
-def _by_line(state: FakeState) -> dict[tuple[int, int], PriceObservation]:
+def _by_line(state: StoredState) -> dict[tuple[int, int], PriceObservation]:
     """Every observation by (receipt id, line position)."""
     positions = {
         item.id: (receipt_id, item.position)
@@ -163,7 +160,7 @@ def _by_line(state: FakeState) -> dict[tuple[int, int], PriceObservation]:
     return {positions[row.line_item_id]: row for row in state.prices.values()}
 
 
-def _discounts(state: FakeState) -> dict[tuple[int, int], tuple[Money, Money, bool]]:
+def _discounts(state: StoredState) -> dict[tuple[int, int], tuple[Money, Money, bool]]:
     """Every observation: (receipt id, line position) -> (discount, paid, on_sale)."""
     return {key: (row.discount, row.paid, row.on_sale) for key, row in _by_line(state).items()}
 
@@ -181,12 +178,12 @@ def _unlinked(stored: Receipt, before: Receipt) -> Receipt:
 
 
 def test_tc_64_a_dry_run_lists_every_discount_newest_receipt_first_and_writes_nothing(
-    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """TC-64 (R9, Q11, Q20): PRINTED (id 1, 12:10, bought 11-01) before SIMPLE (id 2, 12:00,
     bought 11-05): by created_at, neither by id nor by purchase date."""
     printed, simple = _both(uow_factory)
-    before, commits = copy.deepcopy(database.state), database.commits
+    before, commits = database.state, database.commits
 
     found = backfill()
 
@@ -199,13 +196,13 @@ def test_tc_64_a_dry_run_lists_every_discount_newest_receipt_first_and_writes_no
 
 
 def test_tc_65_apply_sets_the_links_and_the_observations_discounts(
-    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """TC-65 (R9): eight links, eight observations; nothing else changes and the counts are the
     stored changes."""
     printed, simple = _both(uow_factory)
     a, b = require_id(printed.id), require_id(simple.id)
-    before = copy.deepcopy(database.state)
+    before = database.state
 
     found = backfill(apply=True)
 
@@ -231,12 +228,12 @@ def test_tc_65_apply_sets_the_links_and_the_observations_discounts(
 
 
 def test_tc_66_a_second_apply_changes_nothing_and_still_reports_the_effective_links(
-    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """TC-66 (R9, A4): 0 links set, 0 observations updated; still 8 linked, 1 receipt level."""
     printed, simple = _both(uow_factory)
     backfill(apply=True)
-    once = copy.deepcopy(database.state)
+    once = database.state
 
     again = backfill(apply=True)
 
@@ -254,7 +251,7 @@ def test_tc_66_a_second_apply_changes_nothing_and_still_reports_the_effective_li
 
 
 def test_tc_67_a_stored_link_is_kept_and_its_item_gets_the_discount(
-    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """TC-67 (R9, R4): 2 -> 0 is stored where the rule would pick 1; item 0's observation is
     still at discount 0. The link is kept (0 links set) and item 0's observation takes -4.00;
@@ -286,7 +283,7 @@ def test_tc_67_a_stored_link_is_kept_and_its_item_gets_the_discount(
 def test_tc_68_116_link_only_when_the_item_has_no_observation(
     backfill: BackfillPrices,
     uow_factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     purchased_on: date | None,
     unmatched: frozenset[int],
 ) -> None:
@@ -294,7 +291,7 @@ def test_tc_68_116_link_only_when_the_item_has_no_observation(
     unmatched: the link is set, reported "link only"; no observation is written or created."""
     stored = _simple(uow_factory, purchased_on=purchased_on, unmatched=unmatched)
     receipt_id = require_id(stored.id)
-    prices = copy.deepcopy(database.state.prices)
+    prices = database.state.prices
 
     found = backfill(apply=True)
 
@@ -315,13 +312,13 @@ def test_tc_68_116_link_only_when_the_item_has_no_observation(
 )
 def test_tc_119_only_completed_receipts_are_backfilled(
     uow_factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     status: ReceiptStatus,
     stage: ProcessingStage,
 ) -> None:
     """TC-119 (Q11): a receipt that is not COMPLETED is neither listed nor changed."""
     _simple(uow_factory, status=status, stage=stage)
-    before = copy.deepcopy(database.state)
+    before = database.state
 
     found = BackfillPrices(uow_factory)(apply=True)
 
@@ -351,12 +348,12 @@ def test_tc_123_every_completed_receipt_is_backfilled_past_the_first_page(
 
 
 def test_tc_70_one_receipt_only(
-    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: FakeDatabase
+    backfill: BackfillPrices, uow_factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """TC-70 (R9, Q11): ``receipt_id`` = SIMPLE: only SIMPLE is listed and changed."""
     printed, simple = _both(uow_factory)
     b = require_id(simple.id)
-    before = copy.deepcopy(database.state)
+    before = database.state
 
     found = backfill(receipt_id=b, apply=True)
 
@@ -373,12 +370,12 @@ def test_tc_70_one_receipt_only(
 def test_tc_70_an_unknown_receipt_is_not_found_and_nothing_is_written(
     backfill: BackfillPrices,
     uow_factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     receipt_id: int,
 ) -> None:
     """TC-70 (Q11): an unknown id, including 0, is NotFoundError "unknown receipt"."""
     _both(uow_factory)
-    before, commits = copy.deepcopy(database.state), database.commits
+    before, commits = database.state, database.commits
 
     with pytest.raises(NotFoundError, match="unknown receipt"):
         backfill(receipt_id=receipt_id, apply=True)

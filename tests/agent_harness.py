@@ -1,4 +1,4 @@
-"""The receipt graph wired from fakes, the way ``bootstrap`` wires it from adapters.
+"""The receipt graph wired from fakes and SQLite, the way ``bootstrap`` wires it from adapters.
 
 Every graph-level test (unit, integration, contract) builds its system under test here, so the
 production constructors are named in exactly one test module:
@@ -26,6 +26,7 @@ test_transport_equivalence.py`` runs representative scenarios over both and comp
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from functools import cache
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -61,7 +62,7 @@ from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.catalog import ProductCatalog
 from paper_trail.ports.reader import ReceiptReader
 from paper_trail.ports.tools import ToolGateway
-from paper_trail.ports.unit_of_work import UnitOfWorkFactory
+from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from paper_trail.tools.handlers import ToolServices
 from paper_trail.tools.inprocess import InProcessToolGateway
 from paper_trail.tools.registry import ToolRegistry, build_tool_registry
@@ -70,8 +71,8 @@ from tests.fakes.catalog import FakeCatalog
 from tests.fakes.clock import FakeClock
 from tests.fakes.images import FakeImageStore, fake_png
 from tests.fakes.trace import FakeTracer
-from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
 from tests.mcp_server import serve_mcp
+from tests.storage import scratch_database
 
 EXTRACT_MODEL = "claude-haiku-5-5"
 RETRY_MODEL = "claude-opus-5-5"
@@ -109,6 +110,17 @@ def tool_transport(name: str) -> Iterator[None]:
             yield
         finally:
             _TRANSPORT.gateway = previous
+
+
+def _scratch_uow_factory(clock: FakeClock) -> UnitOfWorkFactory:
+    """A ``scratch_database`` made on the first unit of work: a harness built at import time
+    only to list its tools never opens one."""
+    database = cache(lambda: scratch_database(clock))
+
+    def factory(*, read_only: bool = False) -> UnitOfWork:
+        return database().uow_factory(read_only=read_only)
+
+    return factory
 
 
 def agent_settings(
@@ -256,15 +268,16 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
     wrap_tools: Callable[[ToolGateway], ToolGateway] | None = None,
     catalog: ProductCatalog | None = None,
 ) -> Harness:
-    """The graph over fakes, Claude being ``reader`` (a ``ScriptedReader``, or one wrapped in
-    ``BudgetedReader``). Pass the same ``uow_factory``, ``checkpointer`` and ``images`` to a
-    second harness to stand for a second process on the same data (resume, review).
+    """The graph over fakes and a new SQLite database (``scratch_database``), Claude being
+    ``reader`` (a ``ScriptedReader``, or one wrapped in ``BudgetedReader``). Pass the same
+    ``uow_factory``, ``checkpointer`` and ``images`` to a second harness to stand for a second
+    process on the same data (resume, review).
     ``catalog`` is the reference catalog asked after the store catalog (``product_codes`` of
     ``uow_factory``), as ``bootstrap`` puts the PLU table there; an empty ``FakeCatalog`` by
     default."""
     clock = clock or FakeClock(NOW)
     settings = settings or agent_settings()
-    uow_factory = uow_factory or fake_uow_factory(FakeDatabase(), clock)
+    uow_factory = uow_factory or _scratch_uow_factory(clock)
     images = images or FakeImageStore()
     tracer = FakeTracer(clock)
     tolerances = Tolerances()

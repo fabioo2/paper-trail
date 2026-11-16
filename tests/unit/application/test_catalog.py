@@ -74,8 +74,7 @@ from tests.factories import (
 )
 from tests.fakes.clock import FakeClock
 from tests.fakes.reader import ScriptedReader
-from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
-from tests.storage import in_unit, seed_purchase
+from tests.storage import ScratchDatabase, in_unit, scratch_database, seed_purchase
 from tests.support import require_id
 
 EGGS = "1234567 KS ORG EGGS 24CT"
@@ -108,13 +107,13 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture
-def database() -> FakeDatabase:
-    return FakeDatabase()
+def database(clock: FakeClock) -> ScratchDatabase:
+    return scratch_database(clock)
 
 
 @pytest.fixture
-def factory(database: FakeDatabase, clock: FakeClock) -> UnitOfWorkFactory:
-    return fake_uow_factory(database, clock)
+def factory(database: ScratchDatabase) -> UnitOfWorkFactory:
+    return database.uow_factory
 
 
 @pytest.fixture
@@ -331,7 +330,7 @@ def test_pc_tc_114_anything_else_is_not_a_size(text: str) -> None:
 
 
 def test_pc_tc_103_lists_unconfirmed_coded_products_most_lines_first(
-    factory: UnitOfWorkFactory, database: FakeDatabase
+    factory: UnitOfWorkFactory, database: ScratchDatabase
 ) -> None:
     """Not listed: the person-named eggs, the PLU-named apple and the uncoded product. The
     barcode's identity, not its printed digits; no link without a store. Read-only."""
@@ -473,7 +472,7 @@ def test_pc_tc_109_identities_are_tried_in_order(
 
 
 def test_pc_tc_111_a_new_code_and_name_create_a_named_product(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode, clock: FakeClock
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode, clock: FakeClock
 ) -> None:
     named = add(
         CodeNaming(
@@ -532,14 +531,14 @@ def test_pc_tc_111_a_name_alone_is_the_only_person_field(
 )
 def test_pc_tc_112_a_code_that_names_a_product_fills_it_in_place(
     factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     add: AddCatalogCode,
     clock: FakeClock,
     before: Product,
 ) -> None:
     ids = _todo(factory)
-    database.state.products[ids.choc] = replace(before, id=ids.choc)
-    snapshot = copy.deepcopy(database.state)
+    in_unit(factory, lambda uow: uow.products.update(replace(before, id=ids.choc)))
+    snapshot = database.state
     clock.advance(LATER)
 
     named = add(CodeNaming("costco", "1362394", name="Choc Pistachio Bars"))
@@ -564,10 +563,10 @@ def test_pc_tc_112_a_code_that_names_a_product_fills_it_in_place(
 
 
 def test_pc_tc_113_a_persons_name_needs_replace(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode
 ) -> None:
     ids = _todo(factory)
-    snapshot, commits = copy.deepcopy(database.state), database.commits
+    snapshot, commits = database.state, database.commits
 
     with pytest.raises(ConflictError) as refused:
         add(CodeNaming("costco", "1234567", name="Other Name"))
@@ -579,10 +578,10 @@ def test_pc_tc_113_a_persons_name_needs_replace(
 
 
 def test_pc_tc_113_the_same_name_again_writes_nothing(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode
 ) -> None:
     ids = _todo(factory)
-    snapshot, commits = copy.deepcopy(database.state), database.commits
+    snapshot, commits = database.state, database.commits
 
     named = add(CodeNaming("costco", "1234567", name="Kirkland Organic Eggs"))
 
@@ -607,10 +606,10 @@ def test_pc_tc_113_replace_guards_the_name_only(
 
 
 def test_pc_tc_115_product_adopts_the_code_and_leaves_the_old_product(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode, clock: FakeClock
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode, clock: FakeClock
 ) -> None:
     ids = _todo(factory)
-    snapshot = copy.deepcopy(database.state)
+    snapshot = database.state
     clock.advance(LATER)
 
     named = add(CodeNaming("costco", "1362394", product_id=ids.eggs))
@@ -649,14 +648,14 @@ def test_pc_tc_115_an_unknown_code_is_created_for_the_product(
 )
 def test_pc_tc_115_the_code_already_names_that_product(
     factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     clock: FakeClock,
     source: CodeSource,
     changed: bool,
 ) -> None:
     pid = _add_product(factory, product())
     stored = _code(factory, KIWI, pid, source)
-    snapshot, commits = copy.deepcopy(database.state), database.commits
+    snapshot, commits = database.state, database.commits
     clock.advance(LATER)
 
     named = AddCatalogCode(factory, clock)(CodeNaming("costco", "1543210", product_id=pid))
@@ -671,10 +670,10 @@ def test_pc_tc_115_the_code_already_names_that_product(
 
 
 def test_pc_tc_115_an_unknown_product_is_not_found(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode
 ) -> None:
     _todo(factory)
-    snapshot = copy.deepcopy(database.state)
+    snapshot = database.state
 
     with pytest.raises(NotFoundError, match=r"^product 999 does not exist$"):
         add(CodeNaming("costco", "1362394", product_id=999))
@@ -683,10 +682,10 @@ def test_pc_tc_115_an_unknown_product_is_not_found(
 
 
 def test_pc_tc_151_a_store_code_never_touches_another_store(
-    factory: UnitOfWorkFactory, database: FakeDatabase, add: AddCatalogCode
+    factory: UnitOfWorkFactory, database: ScratchDatabase, add: AddCatalogCode
 ) -> None:
     ids = _todo(factory)
-    snapshot = copy.deepcopy(database.state)
+    snapshot = database.state
 
     named = add(CodeNaming("loblaws", "1362394", name="X"))
 
@@ -766,13 +765,13 @@ def test_pc_tc_154_add_masks_free_text(add: AddCatalogCode, name: str, brand: st
 )
 def test_pc_tc_120_remove_deletes_the_mapping_and_keeps_the_product(
     factory: UnitOfWorkFactory,
-    database: FakeDatabase,
+    database: ScratchDatabase,
     store: str,
     code: str,
     removed: CodeIdentity,
 ) -> None:
     _todo(factory)
-    snapshot = copy.deepcopy(database.state)
+    snapshot = database.state
     (row_id,) = [
         k
         for k, row in snapshot.product_codes.items()
@@ -804,11 +803,11 @@ def test_pc_tc_120_remove_finds_whichever_identity_is_stored(
     ids=["unknown mapping", "unparsable"],
 )
 def test_pc_tc_120_remove_refuses_and_changes_nothing(
-    factory: UnitOfWorkFactory, database: FakeDatabase, code: str, error: type[Exception]
+    factory: UnitOfWorkFactory, database: ScratchDatabase, code: str, error: type[Exception]
 ) -> None:
     pid = _add_product(factory, _printed("CHOC PISTACH"))
     _code(factory, CHOC, pid)
-    snapshot = copy.deepcopy(database.state)
+    snapshot = database.state
 
     with pytest.raises(error):
         RemoveCatalogCode(factory)("costco", code)
