@@ -2,8 +2,9 @@
 
 Suites (see docs/PLAN.md section 1.7 and docs/tests/stage0.md):
 
-- ``tests/unit``        no I/O, fakes only (unmarked)
-- ``tests/contract``    port contract suites run against fake and real adapters (unmarked)
+- ``tests/unit``        fakes for Claude, tools and images; storage on a temporary SQLite file
+                        (``scratch_database``) (unmarked)
+- ``tests/contract``    port contract suites run against the real adapters (unmarked)
 - ``tests/integration`` real adapters on a temporary SQLite file (``integration`` marker)
 - ``tests/e2e``         fully wired app / CLI processes on a temporary data dir (``e2e`` marker)
 - ``tests/repo``        static checks of Makefile, compose, CI and docs (``repo`` marker)
@@ -33,6 +34,8 @@ from paper_trail.adapters.sqlite.migrations import upgrade_to_head
 from paper_trail.bootstrap import Container, build_container, dispose
 from paper_trail.config import DATABASE_FILENAME, Settings
 from paper_trail.interfaces.web.app import create_app
+from paper_trail.ports.clock import Clock
+from tests.storage import ScratchDatabase, scratch_databases
 from tests.support import (
     HASHED_ASSET,
     INDEX_HTML,
@@ -203,6 +206,28 @@ def copy_migrated(migrated_template: Path) -> CopyMigrated:
         return path
 
     return copy
+
+
+@pytest.fixture(autouse=True)
+def _scratch_databases(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[None]:
+    """``tests.storage.scratch_database(clock)`` copies the migrated template on first use (so
+    a test that needs no database never builds it) and disposes every engine at teardown."""
+    engines: list[Engine] = []
+
+    def new(clock: Clock) -> ScratchDatabase:
+        template: Path = request.getfixturevalue("migrated_template")
+        path = tmp_path / "scratch" / f"{len(engines)}-{DATABASE_FILENAME}"
+        path.parent.mkdir(exist_ok=True)
+        shutil.copyfile(template, path)
+        engines.append(create_engine(path))
+        return ScratchDatabase(engines[-1], clock)
+
+    try:
+        with scratch_databases(new):
+            yield
+    finally:
+        for engine in engines:
+            engine.dispose()
 
 
 @pytest.fixture

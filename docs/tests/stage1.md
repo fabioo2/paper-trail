@@ -13,12 +13,12 @@ Written by the test author on 2026-11-06, before any Stage 1 implementation exis
 | Repository checks | `tests/repo/test_migrations_frozen.py` | `make test` |
 | Frontend | `frontend/src/features/receipts/*.test.ts(x)`, `frontend/tests/tooling/{generated-api,money-formatting}.test.ts` | `make fe-test` |
 
-Every contract test takes the `uow_factory` fixture from `tests/contract/conftest.py`. It is parametrized `fake` / `sqlite`, so each test runs once against `tests.fakes.unit_of_work.FakeUnitOfWork` and once against `SqliteUnitOfWork` on a freshly migrated file. Ports are always reached through a unit of work, as the application reaches them. Both run on the same `FakeClock`.
+Every contract test takes the `uow_factory` fixture from `tests/contract/conftest.py`, which opens a `SqliteUnitOfWork` on a freshly migrated file with a `FakeClock`. (Until 2026-11-16 each test also ran against an in-memory fake; the fakes were removed and unit tests now use a real scratch SQLite file too.) Ports are always reached through a unit of work, as the application reaches them.
 
 ### Test support written by the test author (not by the implementer)
 
 - `tests/factories.py`: builders for every domain object. The defaults form one consistent receipt (eggs 8.99 + milk 2 x 3.29 = 15.57, tax 0.78, total 16.35). It also defines `TEST_PAN` (the Visa test number `4111 1111 1111 1111`, never a real card).
-- `tests/fakes/state.py` (`FakeState`, `newest_first_page`), `tests/fakes/repositories.py`, `tests/fakes/queues.py`, `tests/fakes/search.py`, `tests/fakes/unit_of_work.py` (`FakeDatabase`, `FakeUnitOfWork`, `fake_uow_factory`): an in-memory port for every Stage 1 port. A unit works on a deep copy of the committed state and publishes it on `commit()`, which gives the fake the same all-or-nothing behaviour as a transaction. The fake vector index is brute-force cosine distance. The fake text index uses the same tokenising rule as the adapter must.
+- `tests/storage.py` `scratch_database(clock)` (added 2026-11-16, replacing the removed in-memory fakes `FakeState`/`FakeUnitOfWork`): a copy of the migrated template per test, with `.state` (every committed row) and `.commits` (an engine commit counter).
 - `tests/storage.py`: `in_unit`, `sqlite_uow_factory(engine, clock)`, `seed_product_and_receipt` and `table_values` (every cell of every table in a database file, FTS shadow tables included).
 - `tests/pans.py`: an independent Luhn oracle (`luhn_ok`, `with_check_digit`, `card_numbers`). A test oracle must not share the code it checks.
 - `tests/data/receipts/costco_simple.json`: the sample import (5 lines with a weighed item and a discount; 32.40 + 0.52 = 32.92).

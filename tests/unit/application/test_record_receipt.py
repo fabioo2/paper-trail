@@ -1,4 +1,4 @@
-"""RecordReceipt with in-memory fakes (S1-AC-19, S1-AC-20, S1-AC-21).
+"""RecordReceipt on a scratch SQLite database (S1-AC-19, S1-AC-20, S1-AC-21).
 
 Pinned (docs/tests/stage1.md):
 - a line with an import product name ``name`` is linked through the global alias
@@ -17,7 +17,8 @@ from decimal import Decimal
 import pytest
 from structlog.testing import capture_logs
 
-from paper_trail.application.receipts import RecordReceipt, RecordReceiptResult
+from paper_trail.adapters.sqlite.price_repository import SqlitePriceRepository
+from paper_trail.application.receipts import GetReceipt, RecordReceipt, RecordReceiptResult
 from paper_trail.domain.enums import (
     AliasSource,
     Category,
@@ -48,9 +49,7 @@ from tests.factories import (
     simple_draft,
 )
 from tests.fakes.clock import FakeClock
-from tests.fakes.repositories import FakePriceRepository
-from tests.fakes.state import FakeState
-from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
+from tests.storage import ScratchDatabase, StoredState, scratch_database
 from tests.support import require_id
 
 EGGS = "Kirkland Signature Organic Eggs 24 ct"
@@ -63,13 +62,13 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture
-def database() -> FakeDatabase:
-    return FakeDatabase()
+def database(clock: FakeClock) -> ScratchDatabase:
+    return scratch_database(clock)
 
 
 @pytest.fixture
-def uow_factory(database: FakeDatabase, clock: FakeClock) -> UnitOfWorkFactory:
-    return fake_uow_factory(database, clock)
+def uow_factory(database: ScratchDatabase) -> UnitOfWorkFactory:
+    return database.uow_factory
 
 
 @pytest.fixture
@@ -81,7 +80,7 @@ def _named(draft: ReceiptDraft, names: dict[int, str]) -> ReceiptDraft:
     return replace(draft, product_names=names)
 
 
-def _state(database: FakeDatabase) -> FakeState:
+def _state(database: ScratchDatabase) -> StoredState:
     return database.state
 
 
@@ -95,7 +94,7 @@ def _inconsistent_draft() -> ReceiptDraft:
 
 
 def test_s1_ac_19_consistent_draft_is_completed(
-    record: RecordReceipt, database: FakeDatabase, clock: FakeClock
+    record: RecordReceipt, database: ScratchDatabase, clock: FakeClock
 ) -> None:
     """S1-AC-19: a consistent draft is stored as COMPLETED/DONE with its arithmetic report."""
     result = record(receipt_draft())
@@ -132,7 +131,7 @@ def test_s1_ac_19_copies_the_draft_fields(record: RecordReceipt) -> None:
 
 
 def test_s1_ac_19_links_named_lines_creating_products_and_import_aliases(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-19: first sight of a product name creates the product and its IMPORT aliases."""
     result = record(_named(receipt_draft(), {0: EGGS, 1: MILK}))
@@ -157,7 +156,7 @@ def test_s1_ac_19_links_named_lines_creating_products_and_import_aliases(
 
 
 def test_s1_ac_19_unnamed_lines_stay_unlinked(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-19: only lines with a product name are linked."""
     result = record(_named(receipt_draft(), {1: MILK}))
@@ -167,7 +166,7 @@ def test_s1_ac_19_unnamed_lines_stay_unlinked(
 
 
 def test_s1_ac_19_second_sight_reuses_the_product_across_stores(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-19: the same product name from another store's raw text links to the same product."""
     first = record(_named(receipt_draft(), {0: EGGS}))
@@ -194,7 +193,7 @@ def test_s1_ac_19_second_sight_reuses_the_product_across_stores(
 
 
 def test_s1_ac_19_one_price_observation_per_linked_item_line(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-19: each linked ITEM line gets one observation; unlinked and non-ITEM lines none."""
     eggs, milk = receipt_draft().items
@@ -225,7 +224,7 @@ def test_s1_ac_19_one_price_observation_per_linked_item_line(
 
 
 def test_s1_ac_19_unit_price_is_derived_when_the_line_has_none(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """Pinned: no printed unit price -> line_total / quantity, rounded half up (999/2 -> 500)."""
     line = line_item(quantity=Decimal("2"), unit_price=None, line_total=cad(999))
@@ -239,7 +238,7 @@ def test_s1_ac_19_unit_price_is_derived_when_the_line_has_none(
 
 
 def test_s1_ac_19_no_observations_without_a_purchase_date(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-19 / PLAN 3.6: prices need a date; lines are still linked."""
     result = record(_named(receipt_draft(purchased_on=None), {0: EGGS}))
@@ -252,7 +251,7 @@ def test_s1_ac_19_no_observations_without_a_purchase_date(
 
 
 def test_s1_ac_20_inconsistent_draft_needs_review(
-    record: RecordReceipt, database: FakeDatabase, clock: FakeClock
+    record: RecordReceipt, database: ScratchDatabase, clock: FakeClock
 ) -> None:
     """S1-AC-20: NEEDS_REVIEW/NEEDS_REVIEW and exactly one OPEN VALIDATION_FAILED review item."""
     result = record(_named(_inconsistent_draft(), {0: EGGS, 1: MILK}))
@@ -305,6 +304,20 @@ def test_s1_ac_20_tolerances_are_injected(uow_factory: UnitOfWorkFactory, clock:
     assert lenient(draft).receipt.status is ReceiptStatus.COMPLETED
 
 
+def test_s1_ac_22_get_receipt_uses_the_injected_tolerances(
+    uow_factory: UnitOfWorkFactory, clock: FakeClock
+) -> None:
+    """Pinned: the report on read uses the tolerances of the container, not hard-coded ones."""
+    lenient = Tolerances(per_line_cents=1, total_cents=1)
+    saved = RecordReceipt(uow_factory, clock, lenient)(receipt_draft(total=cad(1636))).receipt
+
+    _, strict_report = GetReceipt(uow_factory, Tolerances())(require_id(saved.id))
+    _, lenient_report = GetReceipt(uow_factory, lenient)(require_id(saved.id))
+
+    assert not strict_report.ok
+    assert lenient_report.ok
+
+
 # --- masking (S1-AC-21) ---------------------------------------------------------------------
 
 
@@ -320,7 +333,9 @@ def _with_pans(draft: ReceiptDraft) -> ReceiptDraft:
     )
 
 
-def test_s1_ac_21_masks_pans_before_storing(record: RecordReceipt, database: FakeDatabase) -> None:
+def test_s1_ac_21_masks_pans_before_storing(
+    record: RecordReceipt, database: ScratchDatabase
+) -> None:
     """S1-AC-21: ocr_text, raw_text and description are masked; masked_pans counts them."""
     result = record(_with_pans(receipt_draft()))
 
@@ -333,7 +348,7 @@ def test_s1_ac_21_masks_pans_before_storing(record: RecordReceipt, database: Fak
 
 
 def test_s1_ac_21_aliases_are_made_from_masked_text(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-21: the store alias derived from raw_text never sees the card number."""
     record(_named(_with_pans(receipt_draft()), {0: EGGS}))
@@ -344,7 +359,7 @@ def test_s1_ac_21_aliases_are_made_from_masked_text(
 
 
 def test_s1_ac_21_masks_store_and_product_names(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """S1-AC-21: the store name and the import's product names are free text too.
 
@@ -386,7 +401,7 @@ def test_s1_ac_21_logs_the_outcome_but_never_the_text(record: RecordReceipt) -> 
 
 
 def test_s1_ac_19_everything_is_written_in_one_unit_of_work(
-    record: RecordReceipt, database: FakeDatabase, monkeypatch: pytest.MonkeyPatch
+    record: RecordReceipt, database: ScratchDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """S1-AC-19 / PLAN 3.6: a failure part-way through leaves nothing behind."""
 
@@ -394,12 +409,12 @@ def test_s1_ac_19_everything_is_written_in_one_unit_of_work(
         msg = "disk full"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(FakePriceRepository, "add_many", explode)
+    monkeypatch.setattr(SqlitePriceRepository, "add_many", explode)
 
     with pytest.raises(RuntimeError, match="disk full"):
         record(_named(receipt_draft(), {0: EGGS}))
 
-    assert _state(database) == FakeState()
+    assert _state(database) == StoredState()
     assert database.commits == 0
 
 
@@ -416,7 +431,7 @@ def test_s1_ac_19_receipts_are_listed_after_recording(
 
 
 def test_s1_ac_19_a_blank_product_name_links_nothing(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """A product name that normalizes to nothing names no product: the line stays unlinked."""
     result = record(_named(receipt_draft(), {0: "  ", 1: MILK}))
@@ -426,7 +441,7 @@ def test_s1_ac_19_a_blank_product_name_links_nothing(
 
 
 def test_s1_ac_19_second_sight_adds_no_second_global_alias(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """The global alias is created with the product; seeing the product again only adds the
     store's spelling."""
@@ -464,7 +479,7 @@ SIMPLE_ATTRIBUTION = DiscountAttribution(
 )
 
 
-def _priced(database: FakeDatabase, saved: Receipt) -> dict[int, PriceObservation]:
+def _priced(database: ScratchDatabase, saved: Receipt) -> dict[int, PriceObservation]:
     """The stored observations by the position of their line."""
     positions = {item.id: item.position for item in saved.items}
     return {positions[row.line_item_id]: row for row in _state(database).prices.values()}
@@ -482,7 +497,7 @@ def _paid(observation: PriceObservation) -> tuple[object, ...]:
 
 
 def test_tc_55a_assess_links_the_discount_and_writes_nothing(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """TC-55 (R7, A4): ``assess`` returns the draft with its new links and the attribution."""
     assessment = record.assess(simple_draft())
@@ -491,11 +506,11 @@ def test_tc_55a_assess_links_the_discount_and_writes_nothing(
     assert assessment.draft.items[4].applies_to_position == 0
     assert assessment.discounts == SIMPLE_ATTRIBUTION
     assert assessment.arithmetic.ok
-    assert (database.commits, _state(database)) == (0, FakeState())
+    assert (database.commits, _state(database)) == (0, StoredState())
 
 
 def test_tc_57_recording_stores_the_link_and_the_paid_prices(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """TC-57 (R5, R7): the import path links line 4 to the eggs, whose observation keeps its
     regular prices and adds discount -5.00, paid 3.99; the other lines are not on sale."""
@@ -529,7 +544,7 @@ def test_tc_57_recording_stores_the_link_and_the_paid_prices(
 
 
 def test_tc_118_an_inferred_unit_price_need_not_multiply_back_but_paid_is_exact(
-    record: RecordReceipt, database: FakeDatabase
+    record: RecordReceipt, database: ScratchDatabase
 ) -> None:
     """TC-118 (A8, Q19): 15 for 10.00 with no printed unit price: unit price 0.67 (66.67 half
     up; 0.67 x 15 = 10.05), unit discount -0.07, paid exactly 9.00. Nothing rejects it."""

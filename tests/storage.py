@@ -1,17 +1,40 @@
-"""Helpers shared by the Stage 1 storage suites (contract, integration, e2e)."""
+"""Helpers shared by the storage suites (unit, contract, integration, e2e)."""
 
 import sqlite3
+from collections import defaultdict
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import closing
-from dataclasses import replace
+from contextlib import closing, contextmanager
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine, RowMapping, Table, event, select
 
+from paper_trail.adapters.sqlite import schema
+from paper_trail.adapters.sqlite.mappers import (
+    alias_from_row,
+    correction_from_row,
+    job_from_row,
+    price_from_row,
+    product_code_from_row,
+    product_from_row,
+    receipt_from_row,
+    review_from_row,
+)
+from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
 from paper_trail.application.products import price_observation as observed
 from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
-from paper_trail.domain.models import LineItem, Receipt
+from paper_trail.domain.models import (
+    Correction,
+    Job,
+    LineItem,
+    PriceObservation,
+    Product,
+    ProductAlias,
+    ProductCode,
+    Receipt,
+    ReviewItem,
+)
 from paper_trail.domain.rules.normalization import normalize_store_name
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
@@ -40,13 +63,89 @@ def in_unit[T](factory: UnitOfWorkFactory, action: Callable[[UnitOfWork], T]) ->
 
 
 def sqlite_uow_factory(engine: Engine, clock: Clock) -> UnitOfWorkFactory:
-    # Imported here so that unit tests can use the other helpers without the SQLite adapters.
-    from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork  # noqa: PLC0415
-
     def factory(*, read_only: bool = False) -> SqliteUnitOfWork:
         return SqliteUnitOfWork(engine, clock, read_only=read_only)
 
     return factory
+
+
+@dataclass
+class StoredState:
+    """Every committed row of a database, as domain objects by id in id order."""
+
+    receipts: dict[int, Receipt] = field(default_factory=dict)
+    products: dict[int, Product] = field(default_factory=dict)
+    aliases: dict[int, ProductAlias] = field(default_factory=dict)
+    product_codes: dict[int, ProductCode] = field(default_factory=dict)
+    prices: dict[int, PriceObservation] = field(default_factory=dict)
+    corrections: dict[int, Correction] = field(default_factory=dict)
+    jobs: dict[int, Job] = field(default_factory=dict)
+    reviews: dict[int, ReviewItem] = field(default_factory=dict)
+
+
+def stored_state(engine: Engine) -> StoredState:
+    with engine.connect() as connection:
+
+        def rows(table: Table) -> Sequence[RowMapping]:
+            return connection.execute(select(table).order_by(table.c.id)).mappings().all()
+
+        items: defaultdict[int, list[RowMapping]] = defaultdict(list)
+        for row in sorted(rows(schema.line_items), key=lambda row: row["position"]):
+            items[row["receipt_id"]].append(row)
+        return StoredState(
+            receipts={
+                row["id"]: receipt_from_row(row, items[row["id"]]) for row in rows(schema.receipts)
+            },
+            products={row["id"]: product_from_row(row) for row in rows(schema.products)},
+            aliases={row["id"]: alias_from_row(row) for row in rows(schema.product_aliases)},
+            product_codes={
+                row["id"]: product_code_from_row(row) for row in rows(schema.product_codes)
+            },
+            prices={row["id"]: price_from_row(row) for row in rows(schema.price_observations)},
+            corrections={row["id"]: correction_from_row(row) for row in rows(schema.corrections)},
+            jobs={row["id"]: job_from_row(row) for row in rows(schema.jobs)},
+            reviews={row["id"]: review_from_row(row) for row in rows(schema.review_items)},
+        )
+
+
+class ScratchDatabase:
+    """A migrated SQLite file of one test: its unit-of-work factory, its committed rows
+    (``state``) and the number of transactions committed on it (``commits``)."""
+
+    def __init__(self, engine: Engine, clock: Clock) -> None:
+        self.engine = engine
+        self.uow_factory = sqlite_uow_factory(engine, clock)
+        self.commits = 0
+        event.listen(engine, "commit", self._count_commit)
+
+    def _count_commit(self, _connection: Connection) -> None:
+        self.commits += 1
+
+    @property
+    def state(self) -> StoredState:
+        return stored_state(self.engine)
+
+
+type NewScratchDatabase = Callable[[Clock], ScratchDatabase]
+
+_NEW_SCRATCH_DATABASE: list[NewScratchDatabase] = []
+
+
+@contextmanager
+def scratch_databases(new: NewScratchDatabase) -> Iterator[None]:
+    """Within the block ``scratch_database`` makes its databases with ``new``."""
+    _NEW_SCRATCH_DATABASE.append(new)
+    try:
+        yield
+    finally:
+        _NEW_SCRATCH_DATABASE.pop()
+
+
+def scratch_database(clock: Clock) -> ScratchDatabase:
+    """A new database at the Alembic head for the running test, disposed at its teardown
+    (``tests/conftest.py`` registers the factory for every test)."""
+    assert _NEW_SCRATCH_DATABASE, "scratch_database() is only available inside a test"
+    return _NEW_SCRATCH_DATABASE[-1](clock)
 
 
 def table_values(database: Path) -> Iterator[tuple[str, str, str]]:
