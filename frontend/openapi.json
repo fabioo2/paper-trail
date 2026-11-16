@@ -272,6 +272,36 @@
         "title": "IssueCode",
         "type": "string"
       },
+      "LastPurchaseOut": {
+        "properties": {
+          "paid": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "purchased_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchased On"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purchased_on",
+          "store_name",
+          "paid"
+        ],
+        "title": "LastPurchaseOut",
+        "type": "object"
+      },
       "LineItemOut": {
         "properties": {
           "applies_to_position": {
@@ -578,6 +608,171 @@
           "confirmed"
         ],
         "title": "ProductOut",
+        "type": "object"
+      },
+      "ProductSummaryOut": {
+        "description": "A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the\nnewest of them.",
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "canonical_name": {
+            "title": "Canonical Name",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "field_sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldSource"
+            },
+            "title": "Field Sources",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_purchase": {
+            "$ref": "#/components/schemas/LastPurchaseOut"
+          },
+          "size_unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Unit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Value"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "times_bought": {
+            "title": "Times Bought",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "canonical_name",
+          "brand",
+          "size_value",
+          "size_unit",
+          "category",
+          "tags",
+          "field_sources",
+          "confirmed",
+          "times_bought",
+          "last_purchase"
+        ],
+        "title": "ProductSummaryOut",
+        "type": "object"
+      },
+      "ProductUpdateIn": {
+        "additionalProperties": false,
+        "description": "The fields a person changed; a missing or null field is left as it is. ``size`` is text\nlike ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.",
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "canonical_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Name"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 30,
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          }
+        },
+        "title": "ProductUpdateIn",
         "type": "object"
       },
       "ReadinessOut": {
@@ -964,6 +1159,52 @@
         ]
       }
     },
+    "/api/products": {
+      "get": {
+        "description": "Every product with at least one receipt line, by name, each with how often it was\nbought and its newest purchase.",
+        "operationId": "listProducts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProductSummaryOut"
+                  },
+                  "title": "Response Listproducts",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "List products",
+        "tags": [
+          "products"
+        ]
+      }
+    },
     "/api/products/{product_id}": {
       "get": {
         "description": "One product with its field sources; an unknown id is a 404 problem.",
@@ -1022,6 +1263,140 @@
           }
         },
         "summary": "Get a product",
+        "tags": [
+          "products"
+        ]
+      },
+      "patch": {
+        "description": "Write the fields sent and stamp each ``person``; the others are kept. A blank name or\nan unreadable size is a 422 problem, an unknown id a 404 problem.",
+        "operationId": "updateProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductUpdateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Edit a product",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/api/products/{product_id}/confirm": {
+      "post": {
+        "description": "Accept the product's current values as the person's (every filled field stamped\n``person``); an unknown id is a 404 problem.",
+        "operationId": "confirmProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Confirm a product",
         "tags": [
           "products"
         ]

@@ -532,7 +532,8 @@ def _take_guess(found: _Fields, answer: GuessAnswer, keys: set[FieldSourceKey]) 
     size_value, size_unit = _size(answer.size)
     take("size", size_value=size_value, size_unit=size_unit)
     take("category", category=answer.category)
-    tags = [tag.strip().lower()[:MAX_TAG_CHARS] for tag in answer.tags if tag.strip()]
+    parts = (part.strip().lower()[:MAX_TAG_CHARS] for tag in answer.tags for part in tag.split(","))
+    tags = list(dict.fromkeys(part for part in parts if part))[:MAX_GUESS_TAGS]
     take("tags", tags=tags or None)
 
 

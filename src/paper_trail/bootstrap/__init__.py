@@ -22,6 +22,8 @@ from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
 from paper_trail.application.catalog import (
     AddCatalogCode,
     CatalogTodo,
+    ConfirmProduct,
+    EditProduct,
     ListCatalogCodes,
     LookupCatalogCode,
     RemoveCatalogCode,
@@ -30,7 +32,7 @@ from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
 from paper_trail.application.prices import BackfillPrices
 from paper_trail.application.process_receipt import UploadReceipt
-from paper_trail.application.products import GetProduct
+from paper_trail.application.products import GetProduct, ListProducts
 from paper_trail.application.receipts import (
     GetReceipt,
     ListReceipts,
@@ -58,6 +60,9 @@ class Container:
     upload_receipt: UploadReceipt
     correct_line_item: CorrectLineItem
     get_product: GetProduct
+    list_products: ListProducts
+    edit_product: EditProduct
+    confirm_product: ConfirmProduct
     backfill_prices: BackfillPrices
     catalog_todo: CatalogTodo
     add_catalog_code: AddCatalogCode
@@ -93,6 +98,9 @@ def build_container(settings: Settings) -> Container:
         upload_receipt=UploadReceipt(image_store(settings), uow_factory, clock),
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
+        list_products=ListProducts(uow_factory),
+        edit_product=EditProduct(uow_factory),
+        confirm_product=ConfirmProduct(uow_factory),
         backfill_prices=BackfillPrices(uow_factory),
         catalog_todo=CatalogTodo(uow_factory),
         add_catalog_code=AddCatalogCode(uow_factory, clock),

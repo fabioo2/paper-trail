@@ -64,6 +64,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List products
+         * @description Every product with at least one receipt line, by name, each with how often it was
+         *     bought and its newest purchase.
+         */
+        get: operations["listProducts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/products/{product_id}": {
         parameters: {
             query?: never;
@@ -78,6 +99,32 @@ export interface paths {
         get: operations["getProduct"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit a product
+         * @description Write the fields sent and stamp each ``person``; the others are kept. A blank name or
+         *     an unreadable size is a 422 problem, an unknown id a 404 problem.
+         */
+        patch: operations["updateProduct"];
+        trace?: never;
+    };
+    "/api/products/{product_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a product
+         * @description Accept the product's current values as the person's (every filled field stamped
+         *     ``person``); an unknown id is a 404 problem.
+         */
+        post: operations["confirmProduct"];
         delete?: never;
         options?: never;
         head?: never;
@@ -216,6 +263,14 @@ export interface components {
          * @enum {string}
          */
         IssueCode: "line_math" | "item_price_math" | "items_vs_subtotal" | "subtotal_plus_tax_vs_total" | "items_plus_tax_vs_total" | "negative_item" | "currency_mismatch" | "empty_receipt" | "missing_store" | "missing_date";
+        /** LastPurchaseOut */
+        LastPurchaseOut: {
+            paid: components["schemas"]["MoneyOut"];
+            /** Purchased On */
+            purchased_on: string | null;
+            /** Store Name */
+            store_name: string;
+        };
         /** LineItemOut */
         LineItemOut: {
             /** Applies To Position */
@@ -313,6 +368,50 @@ export interface components {
             size_value: string | null;
             /** Tags */
             tags: string[];
+        };
+        /**
+         * ProductSummaryOut
+         * @description A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the
+         *     newest of them.
+         */
+        ProductSummaryOut: {
+            /** Brand */
+            brand: string | null;
+            /** Canonical Name */
+            canonical_name: string;
+            category: components["schemas"]["Category"] | null;
+            /** Confirmed */
+            confirmed: boolean;
+            /** Field Sources */
+            field_sources: {
+                [key: string]: components["schemas"]["FieldSource"];
+            };
+            /** Id */
+            id: number;
+            last_purchase: components["schemas"]["LastPurchaseOut"];
+            size_unit: components["schemas"]["Unit"] | null;
+            /** Size Value */
+            size_value: string | null;
+            /** Tags */
+            tags: string[];
+            /** Times Bought */
+            times_bought: number;
+        };
+        /**
+         * ProductUpdateIn
+         * @description The fields a person changed; a missing or null field is left as it is. ``size`` is text
+         *     like ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.
+         */
+        ProductUpdateIn: {
+            /** Brand */
+            brand?: string | null;
+            /** Canonical Name */
+            canonical_name?: string | null;
+            category?: components["schemas"]["Category"] | null;
+            /** Size */
+            size?: string | null;
+            /** Tags */
+            tags?: string[] | null;
         };
         /** ReadinessOut */
         ReadinessOut: {
@@ -499,7 +598,147 @@ export interface operations {
             };
         };
     };
+    listProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductSummaryOut"][];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     getProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    updateProduct: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    confirmProduct: {
         parameters: {
             query?: never;
             header?: never;

@@ -8,11 +8,12 @@ reads the product again inside its unit of work, so a person's write between the
 and this one is kept.
 
 The commands: ``CatalogTodo`` lists the products nobody has confirmed yet (printed or guessed
-names, coded or not), ``ConfirmProduct`` makes a product's values a person's,
-``AddCatalogCode`` lets a person name one (or point its code at an existing product),
-``ListCatalogCodes``, ``RemoveCatalogCode`` and ``LookupCatalogCode`` show and fix
-``product_codes``, and ``import_plu`` writes ``plu.csv`` from an IFPS export. None of them calls
-a model or opens a network connection (``catalog enrich`` is ``application.enrichment``).
+names, coded or not), ``ConfirmProduct`` makes a product's values a person's, ``EditProduct``
+writes the values a person typed, ``AddCatalogCode`` lets a person name one (or point its code
+at an existing product), ``ListCatalogCodes``, ``RemoveCatalogCode`` and ``LookupCatalogCode``
+show and fix ``product_codes``, and ``import_plu`` writes ``plu.csv`` from an IFPS export. None
+of them calls a model or opens a network connection (``catalog enrich`` is
+``application.enrichment``).
 """
 
 import csv
@@ -299,6 +300,82 @@ class ConfirmProduct:
             uow.commit()
         log.info("catalog.confirmed", product_id=product_id)
         return stored
+
+
+@dataclass(frozen=True, slots=True)
+class ProductEdit:
+    """What a person typed over a product's fields; None leaves a field as it is. ``size`` is
+    text for ``parse_size``; an empty ``brand`` or ``size`` and no ``tags`` clear the field."""
+
+    name: str | None = None
+    brand: str | None = None
+    size: str | None = None
+    category: Category | None = None
+    tags: tuple[str, ...] | None = None
+
+
+class EditProduct:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self, product_id: int, edit: ProductEdit) -> Product:
+        """Write every given field and stamp it ``person`` (a cleared field is unstamped, like
+        an empty field ``ConfirmProduct`` leaves), in one unit of work, and return the product
+        as stored. Free text is masked and trimmed; tags are lowercased, blanks and repeats
+        dropped. Nothing is written when nothing changes. DomainValidationError (nothing
+        written) for a blank name, a tag with a comma or an unreadable size; NotFoundError for
+        an unknown product."""
+        if edit.name is not None and not edit.name.strip():
+            msg = "a product's name is not blank"
+            raise DomainValidationError(msg)
+        if any("," in tag for tag in edit.tags or ()):
+            msg = "a tag has no comma; give each tag on its own"
+            raise DomainValidationError(msg)
+        size = None if edit.size is None or not edit.size.strip() else parse_size(edit.size)
+        with self._uow_factory() as uow:
+            product = uow.products.get(product_id)
+            if product is None:
+                msg = f"product {product_id} does not exist"
+                raise NotFoundError(msg)
+            edited = _edited(product, edit, size)
+            if edited == product:
+                return product
+            stored = uow.products.update(edited)
+            uow.commit()
+        log.info("catalog.edited", product_id=product_id)
+        return stored
+
+
+def _edited(product: Product, edit: ProductEdit, size: tuple[Decimal, Unit] | None) -> Product:
+    """``product`` with the person's fields written and stamped (unstamped when cleared)."""
+    sources = dict(product.field_sources)
+
+    def stamp(key: str, *, filled: bool) -> None:
+        if filled:
+            sources[key] = FieldSource.PERSON
+        else:
+            sources.pop(key, None)
+
+    if edit.name is not None:
+        product = replace(product, canonical_name=mask_pans(edit.name.strip()).text)
+        stamp("canonical_name", filled=True)
+    if edit.brand is not None:
+        brand = mask_pans(edit.brand.strip()).text or None
+        product = replace(product, brand=brand)
+        stamp("brand", filled=brand is not None)
+    if edit.size is not None:
+        value, unit = (None, None) if size is None else size
+        product = replace(product, size_value=value, size_unit=unit)
+        stamp("size", filled=size is not None)
+    if edit.category is not None:
+        product = replace(product, category=edit.category)
+        stamp("category", filled=True)
+    if edit.tags is not None:
+        tags = tuple(dict.fromkeys(mask_pans(tag.strip().lower()).text for tag in edit.tags))
+        tags = tuple(tag for tag in tags if tag)
+        product = replace(product, tags=tags)
+        stamp("tags", filled=bool(tags))
+    return replace(product, field_sources=sources)
 
 
 @dataclass(frozen=True, slots=True)

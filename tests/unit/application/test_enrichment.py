@@ -207,6 +207,18 @@ def test_every_database_is_asked_in_order_then_claude_guesses(
     )
 
 
+def test_a_guessed_tag_with_commas_is_split_into_tags(
+    factory: UnitOfWorkFactory, clock: FakeClock
+) -> None:
+    tags = ["Sweet, Salty", "salty", " , ", "a, b", "c, d", "e, f", "g", "h"]
+    guesser = ScriptedReader({**GUESS, "tags": tags})
+    product_id = _printed(factory)
+
+    _enricher(factory, clock, *_open_facts(), guesser=guesser).enrich_all([_target(product_id)])
+
+    assert _product(factory, product_id).tags == ("sweet", "salty", "a", "b", "c", "d", "e", "f")
+
+
 def test_a_hit_fills_name_brand_size_and_the_guess_rewords_the_name_and_adds_category_and_tags(
     factory: UnitOfWorkFactory, clock: FakeClock
 ) -> None:

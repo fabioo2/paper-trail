@@ -6,6 +6,7 @@ import { renderApp } from "@/test/render";
 const TABS = [
   { name: "Scan", href: "/scan" },
   { name: "Receipts", href: "/receipts" },
+  { name: "Products", href: "/products" },
   { name: "Search", href: "/search" },
   { name: "Review", href: "/review" },
 ] as const;
@@ -15,12 +16,12 @@ async function primaryNav(): Promise<HTMLElement> {
 }
 
 describe("BottomTabBar", () => {
-  it("S0-AC-28: renders a nav labelled Primary with exactly four links in order", async () => {
+  it("S0-AC-28: renders a nav labelled Primary with exactly five links in order", async () => {
     renderApp("/scan");
 
     const links = within(await primaryNav()).getAllByRole("link");
 
-    expect(links).toHaveLength(4);
+    expect(links).toHaveLength(5);
     TABS.forEach((tab, index) => {
       expect(links[index]).toHaveAccessibleName(tab.name);
     });

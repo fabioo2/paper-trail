@@ -1,6 +1,7 @@
 import { http, HttpResponse } from "msw";
 
 import type { components } from "@/api/schema";
+import { categories } from "@/test/fixtures/products";
 import { receiptPage } from "@/test/fixtures/receipts";
 
 export type HealthOut = components["schemas"]["HealthOut"];
@@ -13,10 +14,12 @@ export const healthyResponse: HealthOut = {
 };
 
 /**
- * Default handlers: a healthy, same-origin backend with no receipts yet.
+ * Default handlers: a healthy, same-origin backend with no receipts or products yet.
  * Tests override them with `server.use(...)`.
  */
 export const handlers = [
   http.get("/api/health", () => HttpResponse.json(healthyResponse)),
   http.get("/api/receipts", () => HttpResponse.json(receiptPage([]))),
+  http.get("/api/products", () => HttpResponse.json([])),
+  http.get("/api/categories", () => HttpResponse.json(categories)),
 ];

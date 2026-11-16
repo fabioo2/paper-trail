@@ -2,13 +2,14 @@ import { Link } from "@tanstack/react-router";
 import {
   ClipboardCheck,
   type LucideIcon,
+  Package,
   ReceiptText,
   ScanLine,
   Search,
 } from "lucide-react";
 
 interface Tab {
-  to: "/scan" | "/receipts" | "/search" | "/review";
+  to: "/scan" | "/receipts" | "/products" | "/search" | "/review";
   label: string;
   icon: LucideIcon;
 }
@@ -16,6 +17,7 @@ interface Tab {
 const TABS: readonly Tab[] = [
   { to: "/scan", label: "Scan", icon: ScanLine },
   { to: "/receipts", label: "Receipts", icon: ReceiptText },
+  { to: "/products", label: "Products", icon: Package },
   { to: "/search", label: "Search", icon: Search },
   { to: "/review", label: "Review", icon: ClipboardCheck },
 ];
@@ -27,7 +29,7 @@ export function BottomTabBar() {
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-10 border-t bg-background/95 pb-safe-bottom backdrop-blur"
     >
-      <ul className="mx-auto grid h-tab-bar max-w-2xl grid-cols-4">
+      <ul className="mx-auto grid h-tab-bar max-w-2xl grid-cols-5">
         {TABS.map(({ to, label, icon: Icon }) => (
           <li key={to} className="flex">
             <Link
