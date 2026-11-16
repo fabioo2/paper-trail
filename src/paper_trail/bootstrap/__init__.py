@@ -20,7 +20,6 @@ from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
 from paper_trail.adapters.sqlite.unit_of_work import SqliteUnitOfWork
 from paper_trail.application.catalog import (
     AddCatalogCode,
-    BackfillCatalog,
     CatalogTodo,
     ListCatalogCodes,
     LookupCatalogCode,
@@ -62,7 +61,6 @@ class Container:
     list_catalog_codes: ListCatalogCodes
     remove_catalog_code: RemoveCatalogCode
     lookup_catalog_code: LookupCatalogCode
-    backfill_catalog: BackfillCatalog
     tolerances: Tolerances
 
 
@@ -97,7 +95,6 @@ def build_container(settings: Settings) -> Container:
         list_catalog_codes=ListCatalogCodes(uow_factory),
         remove_catalog_code=RemoveCatalogCode(uow_factory),
         lookup_catalog_code=LookupCatalogCode(CompositeCatalog(StoreCatalog(uow_factory), plu)),
-        backfill_catalog=BackfillCatalog(uow_factory, clock, plu),
         tolerances=tolerances,
     )
 

@@ -250,29 +250,6 @@ class FakeProductRepository:
             if alias.product_id == product_id
         )
 
-    def ids(self) -> tuple[int, ...]:
-        return tuple(sorted(self._state.products))
-
-    def all_aliases(self) -> tuple[ProductAlias, ...]:
-        return tuple(alias for _, alias in sorted(self._state.aliases.items()))
-
-    def update_alias(self, alias: ProductAlias) -> ProductAlias:
-        alias_id = require_id(alias.id)
-        holder = self._alias(alias.alias, alias.store_key)
-        if holder is not None and holder.id != alias_id:
-            msg = f"another alias already holds {alias.alias!r} at {alias.store_key!r}"
-            raise ConflictError(msg)
-        if alias_id not in self._state.aliases:
-            msg = f"alias {alias_id} does not exist"
-            raise NotFoundError(msg)
-        self._state.aliases[alias_id] = alias
-        return alias
-
-    def remove_alias(self, alias_id: int) -> None:
-        if self._state.aliases.pop(alias_id, None) is None:
-            msg = f"alias {alias_id} does not exist"
-            raise NotFoundError(msg)
-
     def _alias(self, alias: str, store_key: str | None) -> ProductAlias | None:
         return next(
             (
@@ -423,18 +400,3 @@ class FakeCorrectionRepository:
             if row.kind is kind and row.subject == subject and row.store_key == store_key
         ]
         return max(rows, key=lambda row: (row.created_at, require_id(row.id)), default=None)
-
-    def list(self, kind: CorrectionKind | None = None) -> tuple[Correction, ...]:
-        return tuple(
-            row
-            for _, row in sorted(self._state.corrections.items())
-            if kind is None or row.kind is kind
-        )
-
-    def update(self, correction: Correction) -> Correction:
-        correction_id = require_id(correction.id)
-        if correction_id not in self._state.corrections:
-            msg = f"correction {correction_id} does not exist"
-            raise NotFoundError(msg)
-        self._state.corrections[correction_id] = correction
-        return correction

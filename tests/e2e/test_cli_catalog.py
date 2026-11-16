@@ -1,4 +1,4 @@
-"""``paper-trail catalog todo|add|list|remove|lookup|plu-import|backfill`` end to end
+"""``paper-trail catalog todo|add|list|remove|lookup|plu-import`` end to end
 (barcode-lookup plan R15-R18, A11-A16, Q3; PC-TC-104..169, CLI rows).
 
 The CLI runs in-process through Typer's runner on real SQLite files under ``tmp_path``
@@ -12,14 +12,12 @@ Pinned:
   rename it``), a missing option, an unknown ``--scheme``/``--category``/``--limit``, a missing
   ``plu-import`` column (named); 1 the main database is not migrated (``db upgrade``), an
   unknown ``--product`` or mapping, a declined prompt (``nothing saved``), an unreadable or
-  empty export (``nothing to import``), a failed backfill step.
+  empty export (``nothing to import``).
 - ``todo --json`` keys: code, scheme, store_key, product_id, printed_name, times_bought,
   last_paid_cents, last_date, lookup_url. ``list --json`` keys: scheme, store_key, code,
   product_id, product_name, source.
 - ``plu-import``'s last stdout line: ``N imported, M skipped (<n> <reason>, ...)`` in the order
   retailer assigned, duplicate, invalid plu, no commodity; ``N imported, 0 skipped`` alone.
-- A failed backfill: ``backfill stopped at <step>: <Type>: <error>; the steps before it are
-  applied, run it again to finish`` (``--apply``) or ``...; nothing was written`` (dry run).
 - ``lookup`` prints the code's kind, its identity as ``<scheme> [<store>] <code>``, the source
   that hits (``store_catalog``/``plu``) and its name, else ``no source``; ``no code`` for a line
   without one. Table layouts are the implementer's: rows are checked for the facts they carry.
@@ -28,7 +26,6 @@ Pinned:
 import csv
 import io
 import json
-import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
@@ -39,7 +36,6 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner, Result
 
-from paper_trail.adapters.sqlite.product_repository import SqliteProductRepository
 from paper_trail.bootstrap import RUNS_DIRNAME, build_container, dispose
 from paper_trail.config import DATABASE_FILENAME
 from paper_trail.domain.enums import Category, CodeScheme, CodeSource, FieldSource, MatchSource
@@ -55,7 +51,7 @@ from tests.e2e.agent_cli import (
     rows,
 )
 from tests.extractions import C1, C2, L1, L3, L4, LOBLAWS, PLU_CSV, STORE_NAME, U1, coded_answer
-from tests.factories import CREATED_AT, discount_line, item_line, legacy_product, product
+from tests.factories import CREATED_AT, discount_line, item_line, product
 from tests.images import receipt_jpeg
 from tests.storage import in_unit, seed_purchase
 from tests.support import CopyMigrated, MakeSettings, require_id
@@ -393,7 +389,6 @@ RUN_COMMANDS = {
     "list": ("list",),
     "remove": ("remove", "--store", "costco", "--code", "1362394"),
     "lookup": ("lookup", C1, "--store", "costco"),
-    "backfill": ("backfill", "--apply"),
 }
 
 
@@ -440,7 +435,7 @@ def test_pc_tc_107_run_touches_only_that_runs_database(
         assert rows(run_db, "SELECT count(*) FROM product_codes WHERE code = '1362394'") == [(0,)]
     elif command == "lookup":
         assert ("store_catalog" in result.stdout, "CHOC PISTACH" in result.stdout) == (True, True)
-    elif command != "backfill":
+    else:
         assert ("1362394" in result.stdout, "7777777" in result.stdout) == (True, False)
 
 
@@ -908,208 +903,3 @@ def test_pc_tc_169_after_an_import_lookups_and_receipts_use_the_names(
         "plu",
     )
     assert fake.calls == 1
-
-
-# --- backfill (PC-TC-138, 144, 145) ----------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Legacy:
-    p: int
-    r: int
-    m: int
-    k: int
-
-
-def _store_legacy(factory: UnitOfWorkFactory) -> Legacy:
-    """PC-TC-128's product P (X, X, X, a discounted Y, U1), plus R (two
-    ``1234567`` lines and a Y line a person linked: a conflict), M (one X line: a merge
-    candidate with P) and K (a printed-text product whose only change is its code row)."""
-
-    def store(uow: UnitOfWork) -> Legacy:
-        def add(name: str, **fields: Any) -> int:
-            return require_id(uow.products.add(legacy_product(canonical_name=name, **fields)).id)
-
-        return Legacy(
-            p=add("Chocolate Pistachio Bars", brand="Acme"),
-            r=add("Organic Eggs Mix"),
-            m=add("Pistachio Snack"),
-            k=require_id(
-                uow.products.add(
-                    _named("PAPER TOWEL", {"canonical_name": FieldSource.RECEIPT_TEXT})
-                ).id
-            ),
-        )
-
-    legacy = in_unit(factory, store)
-
-    def line(
-        position: int, text: str, product_id: int, source: MatchSource = MatchSource.NEW
-    ) -> LineItem:
-        return item_line(position, text, 1599, product_id=product_id, match_source=source)
-
-    seed_purchase(
-        factory,
-        [
-            line(0, C1, legacy.p),
-            line(1, C1, legacy.p),
-            line(2, C1, legacy.p),
-            line(3, C2, legacy.p),
-            discount_line(4, "TPD/1543210", -400, 3),
-            line(5, U1, legacy.p),
-        ],
-        purchased_on=date(2026, 11, 1),
-    )
-    seed_purchase(
-        factory,
-        [
-            line(0, EGGS, legacy.r),
-            line(1, EGGS, legacy.r),
-            line(2, C2, legacy.r, MatchSource.MEMORY),
-            line(3, C1, legacy.m),
-            line(4, "1876543 PAPER TOWEL", legacy.k),
-        ],
-        purchased_on=date(2026, 11, 2),
-    )
-    return legacy
-
-
-def _section(output: str, heading: str, *facts: str) -> None:
-    lowered = output.lower()
-    start = lowered.index(heading)
-    assert any(all(fact in line for fact in facts) for line in output[start:].splitlines()), (
-        heading,
-        facts,
-        output,
-    )
-
-
-def test_pc_tc_138_144_the_dry_run_report_then_apply(
-    main_db: Path, make_settings: MakeSettings
-) -> None:
-    legacy = _seeded(make_settings, main_db, _store_legacy)
-    before = _snapshot(main_db)
-
-    dry = _catalog("backfill")
-    after_dry = _snapshot(main_db)
-    applied = _catalog("backfill", "--apply")
-
-    assert (dry.exit_code, applied.exit_code) == (0, 0), dry.output
-    assert after_dry == before
-    assert "dry run" in dry.stdout.lower()
-    row = _line_with(dry.stdout, "Chocolate Pistachio Bars -> CHOC PISTACH (receipt_text)")
-    for fact in ("1362394", "| 4 ", "Acme ->", "dairy_eggs ->", "code attached"):
-        assert fact in row, row
-    assert "vector" not in dry.stdout.lower()  # CE-TC-054: the backfill knows no vectors
-    only_code = _line_with(dry.stdout, f"product {legacy.k}:")
-    assert ("1876543" in only_code, "code attached" in only_code) == (True, True), only_code
-    assert re.findall(r"(\S+) -> \1(?:\s|$)", dry.stdout) == [], dry.stdout
-    lowered = dry.stdout.lower()
-    places = [lowered.index(name) for name in ("splits", "conflicts", "merge candidates")]
-    assert places == sorted(places), dry.stdout
-    _section(dry.stdout, "splits", str(legacy.p), "1543210", 'new "GOLD KIWI"')
-    _section(dry.stdout, "conflicts", str(legacy.r), "1543210")
-    _section(dry.stdout, "merge candidates", str(legacy.p), str(legacy.m), "1362394")
-    assert "changes" in dry.stdout.splitlines()[-1]
-    assert rows(main_db, "SELECT canonical_name FROM products WHERE id = ?", legacy.p) == [
-        ("CHOC PISTACH",)
-    ]
-
-
-@pytest.mark.parametrize(
-    ("apply", "ending"),
-    [
-        (True, "the steps before it are applied, run it again to finish"),
-        (False, "nothing was written"),
-    ],
-    ids=["apply", "dry-run"],
-)
-def test_pc_tc_144_a_failing_group_is_exit_1_naming_the_product(
-    main_db: Path,
-    make_settings: MakeSettings,
-    monkeypatch: pytest.MonkeyPatch,
-    apply: bool,
-    ending: str,
-) -> None:
-    def store(factory: UnitOfWorkFactory) -> tuple[int, int]:
-        def add(uow: UnitOfWork) -> tuple[int, int]:
-            first = require_id(uow.products.add(legacy_product(canonical_name="Choc Bars")).id)
-            second = require_id(uow.products.add(legacy_product(canonical_name="Wipes")).id)
-            return first, second
-
-        first, second = in_unit(factory, add)
-        seed_purchase(
-            factory, [item_line(0, C1, 1699, product_id=first, match_source=MatchSource.NEW)]
-        )
-        seed_purchase(
-            factory,
-            [item_line(0, L1, 899, product_id=second, match_source=MatchSource.NEW)],
-            store_name=LOBLAWS,
-        )
-        return first, second
-
-    first, second = _seeded(make_settings, main_db, store)
-    before = _snapshot(main_db)
-    update = SqliteProductRepository.update
-
-    def failing_second(self: SqliteProductRepository, item: Product) -> Product:
-        if item.id == second:
-            msg = "disk I/O error"
-            raise RuntimeError(msg)
-        return update(self, item)
-
-    monkeypatch.setattr(SqliteProductRepository, "update", failing_second)
-    result = _catalog("backfill", *(("--apply",) if apply else ()))
-
-    assert result.exit_code == 1, result.output
-    assert (
-        f"backfill stopped at product {second}: RuntimeError: disk I/O error; {ending}"
-    ) in result.output
-    assert "Traceback" not in result.output
-    names = rows(main_db, "SELECT canonical_name FROM products ORDER BY id")
-    if apply:
-        assert names == [("CHOC PISTACH",), ("Wipes",)]
-    else:
-        assert _snapshot(main_db) == before
-    assert first < second
-
-
-def test_pc_tc_144_an_unknown_option_is_exit_2(main_db: Path) -> None:
-    result = _catalog("backfill", "--bogus")
-
-    assert result.exit_code == 2, result.output
-
-
-def test_pc_tc_145_after_the_backfill_receipts_link_by_code(
-    run_db: Path, make_settings: MakeSettings, claude: StartClaude, tmp_path: Path
-) -> None:
-
-    def store(factory: UnitOfWorkFactory) -> tuple[int, int]:
-        def add(uow: UnitOfWork) -> tuple[int, int]:
-            choc = require_id(uow.products.add(legacy_product(canonical_name="Choc Bars")).id)
-            wipes = require_id(uow.products.add(legacy_product(canonical_name="Pampers")).id)
-            return choc, wipes
-
-        choc, wipes = in_unit(factory, add)
-        seed_purchase(
-            factory, [item_line(0, C1, 1699, product_id=choc, match_source=MatchSource.NEW)]
-        )
-        seed_purchase(
-            factory,
-            [item_line(0, L1, 899, product_id=wipes, match_source=MatchSource.NEW)],
-            store_name=LOBLAWS,
-        )
-        return choc, wipes
-
-    choc, wipes = _seeded(make_settings, run_db, store)
-    backfilled = _catalog("backfill", "--apply", "--run", RUN)
-    assert backfilled.exit_code == 0, backfilled.output
-
-    costco = _process(claude, tmp_path, [C1], store=STORE_NAME)
-    loblaws = _process(claude, tmp_path, [L1], store=LOBLAWS)
-
-    assert rows(
-        run_db, "SELECT product_id, match_source FROM line_items WHERE receipt_id > 2 ORDER BY id"
-    ) == [(choc, "catalog"), (wipes, "catalog")]
-    assert rows(run_db, "SELECT count(*) FROM products") == [(2,)]
-    assert (costco.calls, loblaws.calls) == (1, 1)

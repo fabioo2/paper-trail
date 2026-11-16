@@ -4,10 +4,6 @@ Pinned (docs/tests/stage1.md): aliases are matched exactly as stored (callers pa
 ``normalize_alias`` output); ``store_key=None`` matches only global aliases; on an existing
 ``(alias, store_key)`` a USER_CORRECTION is never replaced by another source, every other
 incoming source replaces the row in place (same id); ``aliases()`` is ordered by id.
-Barcode-lookup PR 1b (the backfill): ``ids()`` ascending, ``all_aliases()`` in id order,
-``update_alias`` writes every field as given (ConflictError, nothing changed, onto another
-row's (alias, store_key)), ``update_alias``/``remove_alias`` of an unknown id raise
-NotFoundError.
 """
 
 from dataclasses import replace
@@ -16,7 +12,6 @@ from decimal import Decimal
 import pytest
 
 from paper_trail.domain.enums import AliasSource, FieldSource, Unit
-from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import Product, ProductAlias
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.factories import at, product, product_alias
@@ -225,74 +220,3 @@ def test_s1_ac_10_aliases_lists_only_that_product_in_id_order(
     second = _add_alias(uow_factory, _alias_for(eggs, alias="organic eggs"))
 
     assert _aliases(uow_factory, eggs) == (first, second)
-
-
-def test_ids_are_every_product_ascending(uow_factory: UnitOfWorkFactory) -> None:
-    saved = [_add_product(uow_factory) for _ in range(3)]
-
-    with uow_factory() as uow:
-        assert uow.products.ids() == tuple(require_id(p.id) for p in saved)
-
-
-def test_all_aliases_are_every_products_aliases_in_id_order(
-    uow_factory: UnitOfWorkFactory,
-) -> None:
-    first, second = _add_product(uow_factory), _add_product(uow_factory)
-    aliases = [
-        _add_alias(uow_factory, _alias_for(second, alias="b")),
-        _add_alias(uow_factory, _alias_for(first, alias="a", store_key=None)),
-        _add_alias(uow_factory, _alias_for(second, alias="c", source=AliasSource.MATCHED)),
-    ]
-
-    with uow_factory() as uow:
-        assert uow.products.all_aliases() == tuple(aliases)
-
-
-def test_update_alias_replaces_the_row_and_remove_alias_deletes_it(
-    uow_factory: UnitOfWorkFactory,
-) -> None:
-    """The backfill's A8 key migration and TQ19 re-pointing: product, text, store, source and
-    ``created_at`` are written as given."""
-    first, second = _add_product(uow_factory), _add_product(uow_factory)
-    old = _add_alias(uow_factory, _alias_for(first, alias="pc uns babywipes hmrj"))
-    gone = _add_alias(uow_factory, _alias_for(first, alias="gone"))
-    moved = replace(
-        old,
-        product_id=require_id(second.id),
-        alias="pc uns babywipes",
-        store_key="loblaws",
-        source=AliasSource.MATCHED,
-        created_at=at(7),
-    )
-
-    with uow_factory() as uow:
-        assert uow.products.update_alias(moved) == moved
-        uow.products.remove_alias(require_id(gone.id))
-        uow.commit()
-
-    with uow_factory() as uow:
-        assert uow.products.all_aliases() == (moved,)
-        assert uow.products.alias_at("pc uns babywipes hmrj", "costco") is None
-
-
-def test_update_alias_onto_another_rows_key_is_a_conflict(uow_factory: UnitOfWorkFactory) -> None:
-    saved = _add_product(uow_factory)
-    holder = _add_alias(uow_factory, _alias_for(saved, alias="pc uns babywipes"))
-    old = _add_alias(uow_factory, _alias_for(saved, alias="pc uns babywipes hmrj"))
-
-    with uow_factory() as uow:
-        with pytest.raises(ConflictError):
-            uow.products.update_alias(replace(old, alias="pc uns babywipes"))
-        assert uow.products.all_aliases() == (holder, old)
-
-
-@pytest.mark.parametrize("action", ["update", "remove"])
-def test_update_or_remove_of_an_unknown_alias_is_not_found(
-    uow_factory: UnitOfWorkFactory, action: str
-) -> None:
-    saved = _add_product(uow_factory)
-    with uow_factory() as uow, pytest.raises(NotFoundError):
-        if action == "update":
-            uow.products.update_alias(replace(_alias_for(saved, alias="x"), id=99))
-        else:
-            uow.products.remove_alias(99)

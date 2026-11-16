@@ -640,21 +640,6 @@ def catalog_plu_import(
     import_plu_file(settings, file)
 
 
-@catalog_app.command("backfill")
-def catalog_backfill(
-    run: RunOption = None,
-    apply: Annotated[
-        bool, typer.Option("--apply", help="Write the changes (default: dry run).")
-    ] = False,
-) -> None:
-    """Give the products stored before codes their code and printed name; a dry run by default."""
-    from paper_trail.interfaces.cli.catalog import backfill_catalog
-
-    settings = load_settings()
-    configure_agent_logging(settings)
-    backfill_catalog(settings, run, apply=apply)
-
-
 @app.command("mcp")
 def mcp_server() -> None:
     """Serve the agents' tools over MCP, one endpoint per role at /mcp/<role>/."""

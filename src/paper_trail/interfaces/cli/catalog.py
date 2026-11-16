@@ -3,13 +3,11 @@
 
 ``todo`` lists the coded products nobody has named, with the store's search link to open by
 hand (never requested here); ``add`` names one; ``list``, ``remove`` and ``lookup`` show and fix
-``product_codes``; ``plu-import`` writes ``plu.csv`` from an IFPS export (no database);
-``backfill`` gives the products stored before codes their code and printed text, a dry run by
-default. Every command but ``plu-import`` takes ``--run NAME``.
+``product_codes``; ``plu-import`` writes ``plu.csv`` from an IFPS export (no database).
+Every command but ``plu-import`` takes ``--run NAME``.
 
-Exit codes: 0 done; 1 the main database is not migrated, an unknown product, code or file, a
-declined prompt, or a backfill step that failed (named; with ``--apply`` the steps before it
-stay applied); 2 invalid input (an unparsable code or size, conflicting options, a person's
+Exit codes: 0 done; 1 the main database is not migrated, an unknown product, code or file, or a
+declined prompt; 2 invalid input (an unparsable code or size, conflicting options, a person's
 name without ``--replace``, a missing column). No model is called.
 """
 
@@ -20,8 +18,6 @@ from pathlib import Path
 import typer
 
 from paper_trail.application.catalog import (
-    CatalogBackfill,
-    CatalogBackfillStoppedError,
     CodeNamed,
     CodeNaming,
     TodoRow,
@@ -202,20 +198,6 @@ def import_plu_file(settings: Settings, file: Path) -> None:
     )
 
 
-def backfill_catalog(settings: Settings, run: str | None, *, apply: bool) -> None:
-    with open_run_database(settings, run) as container:
-        try:
-            backfill = container.backfill_catalog(apply=apply)
-        except CatalogBackfillStoppedError as error:
-            after = (
-                "the steps before it are applied, run it again to finish"
-                if apply
-                else "nothing was written"
-            )
-            fail(EXIT_UNAVAILABLE, f"backfill stopped at {error.step}: {error}; {after}")
-    echo_backfill(backfill)
-
-
 def echo_todo(rows: tuple[TodoRow, ...], *, as_json: bool) -> None:
     if as_json:
         typer.echo(
@@ -268,68 +250,6 @@ def echo_named(named: CodeNamed) -> None:
             f"left as it is: product {named.left.id} {named.left.canonical_name}"
             f" with its {named.left_lines} lines (not moved)"
         )
-
-
-def echo_backfill(backfill: CatalogBackfill) -> None:
-    """Per product ``code | lines`` and what changes: ``name before -> after (source)``,
-    brand, size, category and tags ``before -> after``, ``code attached``; then the splits
-    (line, from product, to product, code), the conflicts, the merge candidates and a totals
-    line (dry run or applied, changes)."""
-    for row in backfill.products:
-        parts = [f"product {row.product_id}: {row.code or '-'}", str(row.lines)]
-        before, after = row.before, row.after
-        if (before.canonical_name, before.field_sources.get("canonical_name")) != (
-            after.canonical_name,
-            after.field_sources.get("canonical_name"),
-        ):
-            source = after.field_sources.get("canonical_name") or "-"
-            parts.append(f"name {before.canonical_name} -> {after.canonical_name} ({source})")
-        for label, old, new in (
-            ("brand", before.brand, after.brand),
-            ("size", _size(before), _size(after)),
-            ("category", before.category, after.category),
-            ("tags", ", ".join(before.tags), ", ".join(after.tags)),
-        ):
-            if old != new:
-                parts.append(f"{label} {old or '-'} -> {new or '-'}")
-        if row.code_attached:
-            parts.append("code attached")
-        typer.echo(" | ".join(parts))
-    if backfill.splits:
-        typer.echo("splits:")
-    for split in backfill.splits:
-        target = (
-            f'new "{split.to_name}"'
-            if split.to_product_id is None
-            else f"product {split.to_product_id} {split.to_name}"
-        )
-        typer.echo(
-            f"  receipt {split.receipt_id} pos {split.position}: product"
-            f" {split.from_product_id} -> {target} ({split.code})"
-        )
-    if backfill.conflicts:
-        typer.echo("conflicts (a person's link, not moved):")
-    for conflict in backfill.conflicts:
-        typer.echo(
-            f"  receipt {conflict.receipt_id} pos {conflict.position}: stays on product"
-            f" {conflict.product_id}, code {conflict.code} ({conflict.reason})"
-        )
-    if backfill.merge_candidates:
-        typer.echo("merge candidates (not merged):")
-    for merge in backfill.merge_candidates:
-        typer.echo(
-            f"  {merge.code}: product {merge.product_id} has the code,"
-            f" product {merge.other_product_id} has lines with it"
-        )
-    state = "applied" if backfill.applied else "dry run (nothing written)"
-    typer.echo(
-        f"{state}: {len(backfill.products)} products · {len(backfill.splits)} splits"
-        f" · {len(backfill.conflicts)} conflicts · {len(backfill.merge_candidates)} merge"
-        f" candidates · {backfill.codes_learned} codes learned"
-        f" · {backfill.aliases_renormalized} aliases and"
-        f" {backfill.corrections_renormalized} corrections re-normalized"
-        f" · {backfill.changes} changes"
-    )
 
 
 def _size(product: Product) -> str | None:

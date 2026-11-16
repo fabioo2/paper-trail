@@ -3,7 +3,7 @@
 Under a guard that makes ``socket.socket.connect`` and ``socket.getaddrinfo`` raise, the search
 link, both catalogs, the ``catalog_lookup`` tool and a whole in-process run of a coded receipt
 succeed. PR 1b adds the ``catalog`` use cases: ``todo`` (with its Costco links), ``add``,
-``lookup``, ``plu-import`` and ``backfill --apply`` (PC-TC-108, 160).
+``lookup`` and ``plu-import`` (PC-TC-108, 160).
 The static half is ``tests/repo/test_catalog_no_network.py``.
 """
 
@@ -18,16 +18,17 @@ from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.application.catalog import (
     AddCatalogCode,
-    BackfillCatalog,
     CatalogTodo,
     CodeNaming,
     LookupCatalogCode,
     import_plu,
 )
-from paper_trail.domain.enums import MatchSource, ReceiptStatus
+from paper_trail.application.matching import attach_code
+from paper_trail.domain.enums import CodeSource, MatchSource, ReceiptStatus
+from paper_trail.domain.models import CodeIdentity
 from paper_trail.domain.rules.item_codes import ItemCode, lookup_url, parse_item_code
 from tests.agent_harness import build_harness
-from tests.extractions import C1, L3, LOBLAWS, LOBLAWS_KEY, PLU_CSV, coded_answer
+from tests.extractions import C1, L3, LOBLAWS, LOBLAWS_KEY, PLU_CSV, STORE_KEY, coded_answer
 from tests.factories import item_line, legacy_product
 from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.clock import FakeClock
@@ -63,6 +64,13 @@ def _l3() -> ItemCode:
     code = parse_item_code(L3, LOBLAWS_KEY)
     assert code is not None
     return code
+
+
+def _c1() -> CodeIdentity:
+    code = parse_item_code(C1, STORE_KEY)
+    identity = None if code is None else code.identity_at(STORE_KEY)
+    assert identity is not None
+    return identity
 
 
 @pytest.mark.usefixtures("no_network")
@@ -109,18 +117,18 @@ def test_a_whole_run_of_a_coded_receipt_works_offline(plu_path: Path) -> None:
 
 
 def _catalog_actions(tmp_path: Path, plu_path: Path) -> dict[str, Callable[[], object]]:
-    """Each ``catalog`` use case over a legacy product bought twice as C1 at Costco."""
+    """Each ``catalog`` use case over a product coded and bought twice as C1 at Costco."""
     clock = FakeClock()
     factory = fake_uow_factory(FakeDatabase(), clock)
-    legacy = require_id(in_unit(factory, lambda uow: uow.products.add(legacy_product())).id)
+    coded = require_id(in_unit(factory, lambda uow: uow.products.add(legacy_product())).id)
     seed_purchase(
         factory,
-        [item_line(p, C1, 1699, product_id=legacy, match_source=MatchSource.LLM) for p in (0, 1)],
+        [item_line(p, C1, 1699, product_id=coded, match_source=MatchSource.LLM) for p in (0, 1)],
     )
+    in_unit(factory, lambda uow: attach_code(uow, _c1(), coded, CodeSource.RECEIPT, clock.now()))
     export = tmp_path / "ifps.csv"
     export.write_text("Plu,Commodity,Variety,Size\n3101,TEST APPLE,Red,Small\n", encoding="utf-8")
     return {
-        "backfill": lambda: BackfillCatalog(factory, clock, PluCatalog(plu_path))(apply=True),
         "todo": CatalogTodo(factory),
         "add": lambda: AddCatalogCode(factory, clock)(CodeNaming("costco", "1543210", name="X")),
         "lookup": lambda: LookupCatalogCode(PluCatalog(plu_path))(L3, LOBLAWS),
@@ -130,7 +138,7 @@ def _catalog_actions(tmp_path: Path, plu_path: Path) -> dict[str, Callable[[], o
 
 @pytest.mark.usefixtures("no_network")
 def test_pc_tc_108_the_catalog_commands_work_offline(tmp_path: Path, plu_path: Path) -> None:
-    """In this order, so ``todo`` prints the Costco link of the code the backfill attached."""
+    """``todo`` prints the Costco link of the product's code."""
     results = {name: action() for name, action in _catalog_actions(tmp_path, plu_path).items()}
 
     todo = results["todo"]
