@@ -1,5 +1,6 @@
-"""``paper-trail catalog todo|add|list|remove|lookup|plu-import`` end to end
-(barcode-lookup plan R15-R18, A11-A16, Q3; PC-TC-104..169, CLI rows).
+"""``paper-trail catalog todo|confirm|enrich|add|list|remove|lookup|plu-import`` end to end
+(barcode-lookup plan R15-R18, A11-A16, Q3; PC-TC-104..169, CLI rows; claude-extraction
+CE-TC-253..255).
 
 The CLI runs in-process through Typer's runner on real SQLite files under ``tmp_path``
 (``PAPER_TRAIL_DATA_DIR``); state is stored through the real repositories. Receipts are
@@ -13,9 +14,9 @@ Pinned:
   ``plu-import`` column (named); 1 the main database is not migrated (``db upgrade``), an
   unknown ``--product`` or mapping, a declined prompt (``nothing saved``), an unreadable or
   empty export (``nothing to import``).
-- ``todo --json`` keys: code, scheme, store_key, product_id, printed_name, times_bought,
-  last_paid_cents, last_date, lookup_url. ``list --json`` keys: scheme, store_key, code,
-  product_id, product_name, source.
+- ``todo --json`` keys: product_id, name, name_source, code, scheme, store_key, times_bought,
+  last_paid_cents, last_date, lookup_url (CE-TC-253: uncoded products too). ``list --json``
+  keys: scheme, store_key, code, product_id, product_name, source.
 - ``plu-import``'s last stdout line: ``N imported, M skipped (<n> <reason>, ...)`` in the order
   retailer assigned, duplicate, invalid plu, no commodity; ``N imported, 0 skipped`` alone.
 - ``lookup`` prints the code's kind, its identity as ``<scheme> [<store>] <code>``, the source
@@ -52,6 +53,7 @@ from tests.e2e.agent_cli import (
 )
 from tests.extractions import C1, C2, L1, L3, L4, LOBLAWS, PLU_CSV, STORE_NAME, U1, coded_answer
 from tests.factories import CREATED_AT, discount_line, item_line, product
+from tests.fakes.anthropic_server import Canned
 from tests.images import receipt_jpeg
 from tests.storage import in_unit, seed_purchase
 from tests.support import CopyMigrated, MakeSettings, require_id
@@ -69,7 +71,7 @@ TABLES = (
     "corrections",
 )
 TODO_KEYS = (
-    "code", "scheme", "store_key", "product_id", "printed_name", "times_bought",
+    "product_id", "name", "name_source", "code", "scheme", "store_key", "times_bought",
     "last_paid_cents", "last_date", "lookup_url",
 )  # fmt: skip
 LIST_KEYS = ("scheme", "store_key", "code", "product_id", "product_name", "source")
@@ -242,21 +244,26 @@ def _store_todo(factory: UnitOfWorkFactory) -> Todo:
 def _todo_json(todo: Todo) -> list[dict[str, Any]]:
     return [
         {
-            "code": "1362394", "scheme": "store", "store_key": "costco",
-            "product_id": todo.choc, "printed_name": "CHOC PISTACH", "times_bought": 3,
+            "product_id": todo.choc, "name": "CHOC PISTACH", "name_source": "receipt_text",
+            "code": "1362394", "scheme": "store", "store_key": "costco", "times_bought": 3,
             "last_paid_cents": 1299, "last_date": "2026-11-03",
             "lookup_url": COSTCO_LINK.format("1362394"),
         },
         {
-            "code": "0060383064877", "scheme": "gtin", "store_key": "", "product_id": todo.wipes,
-            "printed_name": "PC UNS BABYWIPES", "times_bought": 2, "last_paid_cents": 899,
-            "last_date": "2026-11-02", "lookup_url": None,
+            "product_id": todo.wipes, "name": "PC UNS BABYWIPES", "name_source": "receipt_text",
+            "code": "0060383064877", "scheme": "gtin", "store_key": "", "times_bought": 2,
+            "last_paid_cents": 899, "last_date": "2026-11-02", "lookup_url": None,
         },
         {
-            "code": "1543210", "scheme": "store", "store_key": "costco",
-            "product_id": todo.kiwi, "printed_name": "GOLD KIWI", "times_bought": 1,
+            "product_id": todo.kiwi, "name": "GOLD KIWI", "name_source": "receipt_text",
+            "code": "1543210", "scheme": "store", "store_key": "costco", "times_bought": 1,
             "last_paid_cents": 1599, "last_date": "2026-11-01",
             "lookup_url": COSTCO_LINK.format("1543210"),
+        },
+        {
+            "product_id": todo.u1, "name": U1, "name_source": "receipt_text", "code": None,
+            "scheme": None, "store_key": None, "times_bought": 1, "last_paid_cents": 899,
+            "last_date": "2026-11-01", "lookup_url": None,
         },
     ]  # fmt: skip
 
@@ -329,7 +336,7 @@ def _process(claude: StartClaude, tmp_path: Path, *receipts: list[str], store: s
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
-        ((), [0, 1, 2]),
+        ((), [0, 1, 2, 3]),
         (("--store", STORE_NAME, "--limit", "1"), [0]),
     ],
     ids=["all", "store-name-and-limit"],
@@ -352,7 +359,7 @@ def test_pc_tc_104_a_limit_below_1_or_not_a_number_is_exit_2(main_db: Path, limi
     assert result.exit_code == 2, result.output
 
 
-def test_pc_tc_105_the_table_shows_the_six_columns_in_order(
+def test_pc_tc_105_the_table_shows_its_columns_in_order(
     main_db: Path, make_settings: MakeSettings
 ) -> None:
     _seeded(make_settings, main_db, _store_todo)
@@ -361,9 +368,10 @@ def test_pc_tc_105_the_table_shows_the_six_columns_in_order(
 
     assert result.exit_code == 0, result.output
     for facts in (
-        ("1362394", "CHOC PISTACH", "3", "12.99", "2026-11-03", COSTCO_LINK.format("1362394")),
-        ("0060383064877", "PC UNS BABYWIPES", "2", "8.99", "2026-11-02"),
-        ("1543210", "GOLD KIWI", "1", "15.99", "2026-11-01", COSTCO_LINK.format("1543210")),
+        ("CHOC PISTACH", "1362394", "3", "12.99", "2026-11-03", COSTCO_LINK.format("1362394")),
+        ("PC UNS BABYWIPES", "0060383064877", "2", "8.99", "2026-11-02"),
+        ("GOLD KIWI", "1543210", "1", "15.99", "2026-11-01", COSTCO_LINK.format("1543210")),
+        (U1, "| - |", "1", "8.99", "2026-11-01"),
     ):
         line = _line_with(result.stdout, facts[0])
         rest = line
@@ -379,6 +387,71 @@ def test_pc_tc_105_an_empty_todo_is_one_line_or_an_empty_list(main_db: Path) -> 
     assert table.exit_code == 0, table.output
     assert len([line for line in table.stdout.splitlines() if line.strip()]) == 1
     assert _json(_catalog("todo", "--json")) == []
+
+
+# --- confirm and enrich (CE-TC-253..255) ------------------------------------------------------
+
+GUESS: dict[str, Any] = {
+    "name": "Guessed",
+    "brand": None,
+    "size": None,
+    "category": "pantry",
+    "tags": [],
+}
+
+
+def test_confirm_makes_a_product_a_persons_and_drops_it_from_todo(
+    main_db: Path, make_settings: MakeSettings
+) -> None:
+    todo = _seeded(make_settings, main_db, _store_todo)
+
+    confirmed = _catalog("confirm", str(todo.choc))
+
+    assert confirmed.exit_code == 0, confirmed.output
+    assert "confirmed: canonical_name person" in confirmed.stdout
+    assert todo.choc not in [row["product_id"] for row in _json(_catalog("todo", "--json"))]
+    unknown, invalid = _catalog("confirm", "999"), _catalog("confirm", "x")
+    assert (unknown.exit_code, invalid.exit_code) == (1, 2)
+    assert "product 999 does not exist" in unknown.output
+
+
+def test_enrich_is_a_dry_run_then_guesses_once(
+    main_db: Path, make_settings: MakeSettings, claude: StartClaude
+) -> None:
+    """The four printed products and the person-named eggs (no category yet) are guessed; the
+    PLU apple has nothing a guess may fill. Product databases are off in these tests."""
+    todo = _seeded(make_settings, main_db, _store_todo)
+    fake = claude(*[GUESS] * 5)
+    before = _snapshot(main_db)
+
+    dry = _catalog("enrich")
+
+    assert dry.exit_code == 0, dry.output
+    assert dry.stdout.splitlines()[-1] == "nothing written; rerun with --apply"
+    assert len(dry.stdout.splitlines()) == 6
+    assert (fake.calls, _snapshot(main_db)) == (0, before)
+
+    applied, again = _catalog("enrich", "--apply"), _catalog("enrich", "--apply")
+
+    assert applied.exit_code == again.exit_code == 0, applied.output
+    assert applied.stdout.splitlines()[-1] == "looked up 0, guessed 5, unchanged 0, failed 0"
+    assert again.stdout.splitlines()[-1] == "looked up 0, guessed 0, unchanged 0, failed 0"
+    assert fake.calls == 5
+    names = rows(main_db, f"SELECT canonical_name FROM products WHERE id = {todo.choc}")  # noqa: S608
+    assert names == [("Guessed",)]
+
+
+def test_enrich_reports_a_failed_product_and_writes_the_others(
+    main_db: Path, make_settings: MakeSettings, claude: StartClaude
+) -> None:
+    todo = _seeded(make_settings, main_db, _store_todo)
+    claude(Canned(status=400), *[GUESS] * 4)
+
+    result = _catalog("enrich", "--apply")
+
+    assert result.exit_code == 1, result.output
+    assert f"enrichment failed for product {todo.choc}" in result.output
+    assert "guessed 4" in result.stdout
 
 
 # --- --run and the migrated database (PC-TC-107) ---------------------------------------------
@@ -444,6 +517,15 @@ def test_pc_tc_107_without_run_the_main_database_must_be_migrated(
     data_dir: Path, command: str
 ) -> None:
     result = _catalog(*RUN_COMMANDS[command])
+
+    assert result.exit_code == 1, result.output
+    assert "db upgrade" in result.output
+    assert not (data_dir / RUNS_DIRNAME / RUN).exists()
+
+
+def test_enrich_in_a_run_needs_the_main_database_migrated(data_dir: Path) -> None:
+    """Review C1: Claude's spend is kept in the main database whatever the run."""
+    result = _catalog("enrich", "--run", RUN)
 
     assert result.exit_code == 1, result.output
     assert "db upgrade" in result.output

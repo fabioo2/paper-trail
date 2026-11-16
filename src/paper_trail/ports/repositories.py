@@ -80,6 +80,10 @@ class ProductRepository(Protocol):
 
     def get(self, product_id: int) -> Product | None: ...
 
+    def list(self) -> tuple[Product, ...]:
+        """Every product, by id."""
+        ...
+
     def update(self, product: Product) -> Product:
         """Replace the stored product's name, brand, size, category, tags and field sources;
         its id, ``created_at``, aliases, codes and prices are kept. Returns it as

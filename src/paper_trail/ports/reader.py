@@ -61,7 +61,9 @@ class ReadRequest:
     tag: str  # the prompt id, e.g. "extraction/claude-v1"; recorded in the trace
     system: str
     text: str  # the user turn after the image; a retry's carries the validation feedback
-    image: bytes  # the stored photo as stored, sent as it is unless it exceeds the API's limits
+    # The stored photo as stored, sent as it is unless it exceeds the API's limits; None for a
+    # text-only request (an enrichment guess).
+    image: bytes | None
     max_tokens: int
     attempt: int = 1  # 1-based, across resumed runs: recorded in the trace
 

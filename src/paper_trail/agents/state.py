@@ -44,6 +44,9 @@ class ReceiptState(TypedDict, total=False):
     # What the enrichment agent describes, one per product: {product_id, fields, sources,
     # alias, store_key}, the ``describe_from_catalog`` tool's input.
     enrichments: list[dict[str, Any]]
+    # Every product the receipt created, to look up or guess (``EnrichTarget`` as JSON):
+    # {product_id, printed_text, store_name, store_key, department, code, gtin}.
+    targets: list[dict[str, Any]]
 
 
 def thread_id(receipt_id: int) -> str:

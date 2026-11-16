@@ -42,7 +42,13 @@ from paper_trail.domain.enums import (
     Unit,
 )
 from paper_trail.domain.errors import NotFoundError
-from paper_trail.domain.models import JsonValue, Product, ProductAlias, ProductCode
+from paper_trail.domain.models import (
+    OPEN_SOURCES,
+    JsonValue,
+    Product,
+    ProductAlias,
+    ProductCode,
+)
 from paper_trail.ports.tools import ToolGateway, ToolInputError
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from paper_trail.tools.inprocess import InProcessToolGateway
@@ -503,35 +509,39 @@ def _with_sources(kept: str, kept_source: FieldSource) -> Product:
     return replace(OLD, field_sources=sources)
 
 
-def _expected(product_id: int, kept: str | None) -> Product:
+def _expected(product_id: int, kept: str | None, kept_source: FieldSource = PERSON) -> Product:
     sources = dict.fromkeys(FIELDS, PLU)
     expected = replace(NEW, id=product_id)
     if kept is not None:
-        sources[kept] = PERSON
+        sources[kept] = kept_source
         expected = replace(expected, **_field_values(OLD, kept))
     return replace(expected, field_sources=sources)
 
 
-# A person's value is kept per field (each field once); any other source is replaced, which one
+# Only a printed or guessed field is written (claude-extraction plan V3, V6): a person's value
+# is kept per field (each field once), and so is a data source's or a legacy model's, which one
 # field per source shows (the rule does not depend on the field).
 KEPT_OR_WRITTEN = [
     *((field, PERSON) for field in FIELDS),
     ("brand", FieldSource.RECEIPT_TEXT),
+    ("brand", FieldSource.LLM),
     ("category", FieldSource.LEGACY_MODEL),
     ("tags", PLU),
+    ("size", FieldSource.OFF),
+    ("canonical_name", FieldSource.UPC),
 ]
 
 
 @pytest.mark.parametrize(("field", "existing"), KEPT_OR_WRITTEN, ids=str)
-def test_a_person_field_is_kept_and_every_other_is_written(
+def test_only_a_printed_or_guessed_field_is_written(
     harness: Harness, gateway: ToolGateway, field: str, existing: FieldSource
 ) -> None:
     product_id = _add(harness, _with_sources(field, existing))
 
     _describe(gateway, product_id, DESCRIBED, dict.fromkeys(FIELDS, "plu"))
 
-    kept = field if existing is PERSON else None
-    assert harness.product(product_id) == _expected(product_id, kept)
+    kept = None if existing in OPEN_SOURCES else field
+    assert harness.product(product_id) == _expected(product_id, kept, existing)
 
 
 class _PersonWritesFirst:

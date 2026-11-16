@@ -239,14 +239,14 @@ def test_ce_tc_045_upgrade_drops_the_vectors_and_keeps_everything_else(
 ) -> None:
     seeded = _seed_0006(database, engine)
 
-    command.upgrade(alembic_config(database), "head")
+    command.upgrade(alembic_config(database), "0007")
 
     with engine.connect() as connection:
         schema, rows = _schema(connection), _all_rows(connection)
     sql_0006 = {(kind, name): sql for kind, name, sql in schema_0006}
     sql_head = {(kind, name): sql for kind, name, sql in schema}
     vectors = _vector_objects(schema_0006)
-    assert current_revision(engine) == SCHEMA_HEAD == "0007"
+    assert current_revision(engine) == "0007"
     assert {("table", "product_vectors"), VECTOR_TRIGGER} <= vectors
     assert _names(schema) == (_names(schema_0006) - vectors) | SPEND_OBJECTS
     assert [

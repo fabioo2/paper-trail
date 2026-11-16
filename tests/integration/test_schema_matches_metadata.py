@@ -171,7 +171,8 @@ def test_s1_ac_09_migrated_schema_matches_the_metadata(migrated_engine: Engine) 
 
 def test_s1_ac_09_metadata_declares_exactly_the_regular_tables() -> None:
     """S1-AC-09: schema.py holds the regular tables and no virtual table; CE-TC-049: no vector
-    table, and 0007's ``claude_calls`` (ruling I1)."""
+    table, and 0007's ``claude_calls`` (ruling I1); 0008's ``product_lookups`` and
+    ``lookup_requests``."""
     assert set(metadata.tables) == {
         "receipts",
         "line_items",
@@ -183,6 +184,8 @@ def test_s1_ac_09_metadata_declares_exactly_the_regular_tables() -> None:
         "corrections",
         "product_codes",
         "claude_calls",
+        "product_lookups",
+        "lookup_requests",
     }
 
 

@@ -156,10 +156,12 @@ class TracingToolGateway:
         )
 
 
-def _sent_sha256(request: ReadRequest, reported: str | None) -> str:
+def _sent_sha256(request: ReadRequest, reported: str | None) -> str | None:
     """The SHA-256 of the image the reader sent: as it reports it (it may have re-encoded the
-    image to fit the API), else of the request's image, sent as it is."""
-    return reported or hashlib.sha256(request.image).hexdigest()
+    image to fit the API), else of the request's image, sent as it is (None: no image)."""
+    if reported or request.image is None:
+        return reported
+    return hashlib.sha256(request.image).hexdigest()
 
 
 def _read_summary(output: JsonValue) -> str:

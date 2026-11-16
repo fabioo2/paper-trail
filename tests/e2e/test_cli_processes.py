@@ -58,6 +58,8 @@ def cli_env(data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "PAPER_TRAIL_WORKER__POLL_INTERVAL_S": "0.1",
         "PAPER_TRAIL_WORKER__HEARTBEAT_INTERVAL_S": str(HEARTBEAT_INTERVAL_S),
         "PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S": str(SHUTDOWN_GRACE_S),
+        # A child process is outside the loopback guard: no product database is ever asked.
+        "PAPER_TRAIL_LOOKUP__OPEN_FACTS": "false",
     }
     for key, value in settings.items():
         monkeypatch.setenv(key, value)
@@ -268,13 +270,21 @@ def test_ac_a_10_process_runs_a_receipt_through_the_agents_in_a_real_process(
 ) -> None:
     """AC-A-10: `paper-trail process` as the `cli` container runs it: the real composition root,
     SQLite, Anthropic adapter and trace writer, against a scripted fake Messages API on
-    127.0.0.1 (``ANTHROPIC_BASE_URL``). With the production defaults: after the read no model is
-    asked for (PC-TC-89), and the same receipt again is matched by alias."""
+    127.0.0.1 (``ANTHROPIC_BASE_URL``). With the production defaults: after the read Claude
+    guesses each of the three new products (CE-TC-217), and the same receipt again is matched by
+    alias, with nothing new to guess."""
     migrate_main(data_dir)  # a --run needs the main database (R3, C1)
     receipts = [photo(tmp_path, "costco.png", 0), photo(tmp_path, "costco-again.png", 1)]
 
     outputs: list[str] = []
-    with serve_fake_claude(FakeClaude(answer(), answer())) as fake:
+    guess: dict[str, Any] = {
+        "name": "Guessed",
+        "brand": None,
+        "size": None,
+        "category": "pantry",
+        "tags": [],
+    }
+    with serve_fake_claude(FakeClaude(answer(), guess, guess, guess, answer())) as fake:
         env = {**cli_env, "ANTHROPIC_BASE_URL": fake.url, "ANTHROPIC_API_KEY": TEST_API_KEY}
         for receipt in receipts:
             result = run_cli(
@@ -284,7 +294,7 @@ def test_ac_a_10_process_runs_a_receipt_through_the_agents_in_a_real_process(
             outputs.append(result.stdout)
 
     assert "COMPLETED" in outputs[0]
-    assert fake.calls == 2  # the two reads only
+    assert fake.calls == 5  # two reads, three guesses
     assert "alias 3" in outputs[1]
     assert receipt_status(run_database(data_dir, "e2e"), 1) == "completed"
     assert len(trace_files(data_dir, "e2e")) == 2

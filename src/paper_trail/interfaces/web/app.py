@@ -9,7 +9,7 @@ from paper_trail import __version__
 from paper_trail.bootstrap import Container
 from paper_trail.interfaces.web.errors import install_error_handlers, problem_schemas
 from paper_trail.interfaces.web.middleware import RequestContextMiddleware
-from paper_trail.interfaces.web.routers import health, meta, receipts
+from paper_trail.interfaces.web.routers import health, meta, products, receipts
 from paper_trail.interfaces.web.spa import SpaStaticFiles
 
 API_PREFIX = "/api"
@@ -49,7 +49,7 @@ def create_app(container: Container) -> FastAPI:
     app.state.container = container
     install_error_handlers(app)
     app.add_middleware(RequestContextMiddleware)
-    for router in (health.router, receipts.router, meta.router):
+    for router in (health.router, receipts.router, products.router, meta.router):
         app.include_router(router, prefix=API_PREFIX)
     if container.settings.static_dir.is_dir():
         app.mount("/", SpaStaticFiles(directory=container.settings.static_dir), name="spa")

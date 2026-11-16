@@ -59,7 +59,8 @@ def test_pc_tc_11_code_and_field_source_enums() -> None:
         "person",
         "plu",
         "off",
-        "off_llm",
+        "upc",
+        "llm",
         "legacy_model",
     ]
     assert {source.value for source in CodeSource} == {

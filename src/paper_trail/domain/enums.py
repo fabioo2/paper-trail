@@ -175,6 +175,7 @@ class FieldSource(StrEnum):
     RECEIPT_TEXT = auto()
     PERSON = auto()
     PLU = auto()
-    OFF = auto()
-    OFF_LLM = auto()
+    OFF = auto()  # Open Food Facts, Open Beauty Facts or Open Products Facts
+    UPC = auto()  # UPCitemdb
+    LLM = auto()  # Claude's guess; never confirmed
     LEGACY_MODEL = auto()  # written by a model before 0006; never confirmed

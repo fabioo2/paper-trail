@@ -48,13 +48,19 @@ def open_run(settings: Settings, run: str | None) -> Iterator[AgentContainer]:
     ``TOOLS__TRANSPORT=mcp`` the run's tools are served over MCP on a loopback port in this
     process and called through it."""
     ledger_path = settings.database_path
-    if run is not None:
-        _prepared(settings, None)
+    require_main_migrated(settings, run)
     run_settings = _prepared(settings, run)
     with agent_container(
         run_settings, run or MAIN_RUN, tool_server=serve_on_loopback, ledger_path=ledger_path
     ) as agents:
         yield agents
+
+
+def require_main_migrated(settings: Settings, run: str | None) -> None:
+    """For a named run, exit 1 unless the main database is migrated: the Claude spend is kept
+    there whatever the run (review C1). Without a run ``_prepared`` checks it anyway."""
+    if run is not None:
+        _prepared(settings, None)
 
 
 @contextmanager

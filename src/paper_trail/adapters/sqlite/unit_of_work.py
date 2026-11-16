@@ -10,6 +10,7 @@ from sqlalchemy import Connection, Engine, RootTransaction
 from paper_trail.adapters.sqlite.correction_repository import SqliteCorrectionRepository
 from paper_trail.adapters.sqlite.engine import begin_immediate, begin_read_only
 from paper_trail.adapters.sqlite.job_queue import SqliteJobQueue
+from paper_trail.adapters.sqlite.lookup_cache import SqliteLookupCache
 from paper_trail.adapters.sqlite.price_repository import SqlitePriceRepository
 from paper_trail.adapters.sqlite.product_code_repository import SqliteProductCodeRepository
 from paper_trail.adapters.sqlite.product_repository import SqliteProductRepository
@@ -17,6 +18,7 @@ from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptReposito
 from paper_trail.adapters.sqlite.review_queue import SqliteReviewQueue
 from paper_trail.adapters.sqlite.text_search import SqliteTextSearchIndex
 from paper_trail.ports.clock import Clock
+from paper_trail.ports.lookups import LookupCache
 from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
     CorrectionRepository,
@@ -46,6 +48,7 @@ class SqliteUnitOfWork:
     jobs: JobQueue
     reviews: ReviewQueue
     text_search: TextSearchIndex
+    lookups: LookupCache
 
     def __init__(self, engine: Engine, clock: Clock, *, read_only: bool = False) -> None:
         self._engine = engine
@@ -71,6 +74,7 @@ class SqliteUnitOfWork:
         self.jobs = SqliteJobQueue(connection, self._clock)
         self.reviews = SqliteReviewQueue(connection, self._clock)
         self.text_search = SqliteTextSearchIndex(connection)
+        self.lookups = SqliteLookupCache(connection)
         return self
 
     def __exit__(self, *exc: object) -> None:

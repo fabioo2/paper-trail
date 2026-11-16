@@ -14,7 +14,8 @@ to be read (see [Data and privacy](#data-and-privacy)).
 > failures listed, then review by a person), and browsed in the Receipts tab. Every agent calls
 > its tools through a per-role allowlist, in-process or over MCP. Each line is matched to a
 > product by its printed code, a person's correction or an exact alias, new products are
-> described from the catalog that knows their code, and a run can be paused and resumed from
+> described from the PLU table, the open product databases for a barcode, or Claude's guess
+> (marked unconfirmed until a person confirms it), and a run can be paused and resumed from
 > its checkpoint. The upload flow and the web pages for it arrive in the following stages (see
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/plans/agent-core.md`](docs/plans/agent-core.md)).
 
@@ -88,6 +89,12 @@ These variables are no longer read and can be removed from `.env` (they are igno
 `PAPER_TRAIL_PROMPTS__EXAMPLES`. Remove `PAPER_TRAIL_PROMPTS__EXTRACTION_VERSION` too if it is
 set (for example to `v2`): only `v3`, the default, exists now, and any other value stops
 `process` with exit 2. The separate model host and its compose stack are no longer needed.
+
+Migration 0008 (product lookups) adds the `product_lookups` table and turns the old `off_llm`
+field source into `llm`: a product named that way is no longer confirmed and shows in
+`catalog todo`. Back up first; its downgrade turns `llm` back into `off_llm` and `upc` into
+`off`. Then `catalog enrich` (a dry run) shows what lookups and guesses would fill for the
+products already stored, and `catalog enrich --apply` does it.
 
 ## Architecture
 
@@ -278,10 +285,11 @@ subtotal, and the subtotal plus the taxes the total; and that the store and date
 Each item is stored as an item line, followed by a discount line linked to it when it had a
 discount, so the price history shows its regular price, its discount and what was paid. Then
 `match` finds each line's product and `commit_matches` (the supervisor) links them, with a
-price observation per line, and completes the receipt. Finally `enrich` takes each product this
-receipt created from a catalog entry (the PLU table) and `commit_enrichment` writes what that
-entry says (name, category, tags) with its source; no model is asked, and a product named by its
-printed text is left as it is (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal
+price observation per line, and completes the receipt. Finally `enrich` lists the products this
+receipt created and `commit_enrichment` describes them: from the catalog entry that named them
+(the PLU table), then the product databases for a barcode, else Claude's guess (see
+[Product lookups and guesses](#product-lookups-and-guesses)); nothing there can fail the
+receipt, which is already complete (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal
 shows one block per receipt: every tool call, Claude read and routing decision, with times; the
 same trace, with each read's model, tokens, stop reason and the photo's SHA-256 (never the
 photo), is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`, and a batch
@@ -381,17 +389,67 @@ make pt ARGS="process --run e2 --resume 3"          # continues after validate
 - `--reprocess` has Claude read an already stored photo again, on a new thread (a pending
   review is dismissed). Without it the same photo is reported as a duplicate.
 
+### Product lookups and guesses
+
+Each product a receipt creates is described, field by field, from the first source that knows
+it (claude-extraction plan D3, D4):
+
+1. the PLU table (stamped `plu`), or another product a person or a database named under the
+   same code; never the product itself or one only printed or guessed;
+2. for a barcode (GTIN), the open product databases: [Open Food Facts](https://world.openfoodfacts.org),
+   then [Open Beauty Facts](https://world.openbeautyfacts.org) and
+   [Open Products Facts](https://world.openproductsfacts.org) (stamped `off`), and UPCitemdb last
+   when it is on (stamped `upc`). They give the name, brand and size; the next one is asked only
+   while one of those is missing;
+3. Claude's guess (the extract model, `PAPER_TRAIL_CLAUDE__EXTRACT_MODEL`, counted in the monthly
+   budget), when the name or the category is still open: name, brand, size, category and tags,
+   stamped `llm`. Claude is told the printed text, the store, the department heading, the code
+   and an Open*Facts answer, never a price, a date or a UPCitemdb answer.
+
+A database's answer counts as confirmed; a guess does not, so it shows in `catalog todo` (as
+`suggested`) until you `catalog confirm` it, fix it with `catalog add` or `items correct`, or a
+database answers on a later run. Only a field that is empty, printed (`receipt_text`) or guessed
+(`llm`) is ever written: a person's, a database's or a legacy model's value is kept, and a
+category read from a printed department heading is never replaced by a guess. A product is
+guessed once.
+
+**Only the barcode is sent** to the databases: no store, receipt, price or date. The requests
+carry a generic User-Agent (`PaperTrail/1.0 (personal receipt app; +https://github.com/fabioo2/paper-trail)`),
+go out one at a time, at most one every 4 s per Open*Facts database and one every 10 s and 100 a
+UTC day to UPCitemdb. Answers are kept in the `product_lookups` table: a hit for good, a "not
+found" for 30 days; an error or a rate limit is never kept, so the next run asks again.
+costco.ca is never contacted. Every request happens outside a database write, and each product
+is written in its own transaction, so a crash leaves the products already done described and
+the next run (or `process --resume`) finishes the rest without asking again.
+
+- `PAPER_TRAIL_LOOKUP__OPEN_FACTS` (default `true`): ask the three Open*Facts databases.
+- `PAPER_TRAIL_LOOKUP__UPCITEMDB` (default **`false`**): ask UPCitemdb's free trial endpoint
+  (no key, 100 requests a day). It is off because its terms do not clearly allow keeping its
+  answers; read them before turning it on. Its answers are never sent to Claude.
+- `PAPER_TRAIL_LOOKUP__TIMEOUT_S` (default `10`, at most `60`): per request.
+
+Open Food Facts, Open Beauty Facts and Open Products Facts data is © their contributors and
+available under the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/1-0/);
+the fields Paper Trail keeps from them are stamped `off`.
+
+Products stored before lookups existed are described by `catalog enrich` (a dry run that lists
+each product, its open fields and the steps that may fill them; `--apply` does it and prints
+`looked up N, guessed M, unchanged K, failed F`). Back up the database before the first
+`--apply`.
+
 ### Naming products by their codes
 
-Nothing names a Costco item number or an unknown barcode for you: a new coded product keeps its
-printed text until a person names it. The `catalog` commands do that, and they never call a
-model or the network. Every command except `plu-import` takes `--run NAME` (that run's database;
-without it the main one, which must be migrated).
+Nothing names a Costco item number for you: the databases do not know store item numbers, so a
+new coded product keeps its printed text or Claude's guess until a person names it. The
+`catalog` commands do that; only `catalog enrich --apply` calls Claude or the network. Every
+command except `plu-import` takes `--run NAME` (that run's database; without it the main one,
+which must be migrated).
 
 The Costco workflow:
 
-1. `catalog todo --store costco` lists the coded products nobody has named yet, most bought
-   first: code | printed name | times bought | last paid | last date | a costco.ca search link.
+1. `catalog todo --store costco` lists the products nobody has confirmed yet, most bought first:
+   product | name | name source | code | times bought | last paid | last date | a costco.ca
+   search link.
 2. Open the link in your own browser. The app only prints it; it never requests the link.
 3. `catalog add costco 1362394 "Choc Pistachio Bars" --brand Kirkland --size "1.36 kg"
    --category snacks_candy` names the product (shown before and after, then `y` to save;
@@ -404,7 +462,14 @@ a search may find nothing or a different pack size, so check the page against th
 from the shelf tag, the receipt or a fan site, by hand; (c) the link is a convenience only:
 the app copies nothing from the page.
 
-- `catalog todo [--store S] [--limit N] [--json] [--run NAME]`: the list above.
+- `catalog todo [--store S] [--limit N] [--json] [--run NAME]`: the list above, coded products
+  and uncoded ones (`-` for no code), a guessed name shown as `suggested`.
+- `catalog confirm PRODUCT_ID [--run NAME]`: accepts the product's current name, brand, size,
+  category and tags as yours (stamped `person`; an empty field stays empty, so a later lookup
+  may still fill it). Exit 1 for an unknown product.
+- `catalog enrich [--apply] [--run NAME]`: looks up or guesses the stored products (above). Exit
+  1 when a product failed (the others are written); when the monthly Claude budget is reached
+  the rest are reported as skipped.
 - `catalog add STORE CODE ("NAME" | --product ID) [--brand B] [--size "1.36 kg"] [--category C]
   [--replace] [--yes] [--run NAME]`: the code is read with the store's profile (a barcode or a
   PLU names the product at every store, a store's own code only at that store); what you give
@@ -625,14 +690,19 @@ most important ones:
 - `PAPER_TRAIL_TOOLS__TRANSPORT` (default `inprocess`): how the agents call their tools,
   `inprocess` or `mcp`; `PAPER_TRAIL_MCP__URL` is the MCP server `tools --transport mcp` uses.
   `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above `PAPER_TRAIL_CLAUDE__TIMEOUT_S`.
+- `PAPER_TRAIL_LOOKUP__OPEN_FACTS` (default `true`), `PAPER_TRAIL_LOOKUP__UPCITEMDB` (default
+  `false`) and `PAPER_TRAIL_LOOKUP__TIMEOUT_S` (default `10`): the product databases asked for a
+  barcode (see [Product lookups and guesses](#product-lookups-and-guesses)).
 
 ## Data and privacy
 
 Only source code is published. Receipt images, the database, `.env` and evaluation receipts stay
 on your machines and are git-ignored. The app has no telemetry and loads nothing from CDNs.
 
-**The whole photo of every receipt you process is sent to Anthropic** to be read by Claude: its
-only outbound traffic at runtime. Whatever the photo shows leaves your server: the card number
+**The whole photo of every receipt you process is sent to Anthropic** to be read by Claude, and
+a new product's printed text, store, department and code to have it guessed. The only other
+outbound traffic is a product's barcode, alone, to Open Food Facts and its sister databases
+(and to UPCitemdb when you turn it on). Whatever the photo shows leaves your server: the card number
 as the terminal printed it (usually masked to the last four digits), the store, a loyalty
 number, sometimes your name. Nothing is redacted from the pixels. Card numbers in Claude's
 answer are masked before the answer reaches the graph's checkpoints, the traces or the

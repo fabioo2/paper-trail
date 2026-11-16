@@ -196,6 +196,16 @@ def reading_codes(reading: ReceiptReading) -> Mapping[int, str]:
     }
 
 
+def reading_departments(reading: ReceiptReading) -> Mapping[int, str]:
+    """The printed department heading of each item that has one, by the position of its ITEM
+    line in ``reading_draft``: what enrichment tells the guess."""
+    return {
+        position: item.department.strip()
+        for position, item in _item_positions(reading)
+        if item.department is not None and item.department.strip()
+    }
+
+
 _ADJUSTMENT_KINDS = {
     AdjustmentKind.DEPOSIT: LineKind.DEPOSIT,
     AdjustmentKind.FEE: LineKind.FEE,

@@ -1,16 +1,18 @@
-"""Describing products from catalogs, never from a model (barcode-lookup plan 4.2, ADR-0018),
-and the ``catalog`` commands (plan section 5).
+"""Describing products from catalogs, databases and guesses (barcode-lookup plan 4.2,
+ADR-0018; claude-extraction plan V3), and the ``catalog`` commands (plan section 5).
 
-``describe_product`` is what the supervisor's ``describe_from_catalog`` tool writes: only the
-fields that come with a source, never over a person's, and a person's category for the line at
-that store over any source's. It reads the product again inside its unit of work, so a person's
-write between the caller's read and this one is kept.
+``describe_product`` is what the supervisor's ``describe_from_catalog`` tool and enrichment
+write: only the fields that come with a source, only over an empty, printed or guessed field
+(``field_is_open``), and a person's category for the line at that store over any source's. It
+reads the product again inside its unit of work, so a person's write between the caller's read
+and this one is kept.
 
-The commands: ``CatalogTodo`` lists the coded products nobody has named yet, ``AddCatalogCode``
-lets a person name one (or point its code at an existing product), ``ListCatalogCodes``,
-``RemoveCatalogCode`` and ``LookupCatalogCode`` show and fix ``product_codes``, and ``import_plu``
-writes ``plu.csv`` from an IFPS export. None of them calls a model or opens a network
-connection.
+The commands: ``CatalogTodo`` lists the products nobody has confirmed yet (printed or guessed
+names, coded or not), ``ConfirmProduct`` makes a product's values a person's,
+``AddCatalogCode`` lets a person name one (or point its code at an existing product),
+``ListCatalogCodes``, ``RemoveCatalogCode`` and ``LookupCatalogCode`` show and fix
+``product_codes``, and ``import_plu`` writes ``plu.csv`` from an IFPS export. None of them calls
+a model or opens a network connection (``catalog enrich`` is ``application.enrichment``).
 """
 
 import csv
@@ -46,6 +48,7 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import (
+    OPEN_SOURCES,
     CodeIdentity,
     Product,
     ProductCode,
@@ -93,7 +96,9 @@ def describe_product(  # noqa: PLR0913 - the product, its fields and sources, an
     store_key: str,
 ) -> Product:
     """Write ``fields`` with their ``sources`` onto the product, in one unit of work, and return
-    it as stored. A field whose stored source is ``person`` is kept (per field). The newest
+    it as stored. Only an empty field or one sourced ``receipt_text`` or ``llm`` is written
+    (``OPEN_SOURCES``, per field); a category from a printed department heading
+    (``receipt_text``) is never replaced by a guess (``llm``). The newest
     CATEGORY correction for ``alias`` (a line's raw text, both normalizations tried) at
     ``store_key`` sets the category with source ``person``, given a category or not. Free text
     is masked. Nothing is written when nothing changes. NotFoundError (nothing written) for an
@@ -123,12 +128,12 @@ def _described(
     sources: Mapping[FieldSourceKey, FieldSource],
     remembered: Category | None,
 ) -> Product:
-    """``product`` with every sourced field written, except where a person's value stands."""
+    """``product`` with every sourced field written where the stored one is still open."""
     written = dict(product.field_sources)
     described = product
 
     def open_for(key: FieldSourceKey) -> bool:
-        if key not in sources or written.get(key) is FieldSource.PERSON:
+        if key not in sources or not field_is_open(written, key, sources[key]):
             return False
         written[key] = sources[key]
         return True
@@ -150,6 +155,22 @@ def _described(
     if fields.tags is not None and open_for("tags"):
         described = replace(described, tags=tuple(mask_pans(tag).text for tag in fields.tags))
     return replace(described, field_sources=written)
+
+
+def field_is_open(
+    stored: Mapping[str, FieldSource], key: FieldSourceKey, incoming: FieldSource
+) -> bool:
+    """Whether enrichment may write ``key`` from ``incoming`` over what is stored: the field is
+    empty or sourced ``receipt_text``/``llm``, and a guess never replaces a category read from
+    a printed department heading."""
+    current = stored.get(key)
+    if current is None:
+        return True
+    if current not in OPEN_SOURCES:
+        return False
+    return not (
+        key == "category" and current is FieldSource.RECEIPT_TEXT and incoming is FieldSource.LLM
+    )
 
 
 def product_code_at(store_key: str, code: str) -> ItemCode:
@@ -177,14 +198,17 @@ def parse_size(text: str) -> tuple[Decimal, Unit]:
 
 @dataclass(frozen=True, slots=True)
 class TodoRow:
-    """One code of a product nobody has named yet, and how it was bought (at the asked store
-    only, when one was asked). ``last_paid``/``last_date`` are the newest price observation's
-    paid price and date (None when its lines have none). ``lookup_url`` is the store's search
-    link for the code, never requested here."""
+    """A product nobody has confirmed yet (its name printed or guessed), coded or not, and how
+    it was bought (at the asked store only, when one was asked). ``name_source`` is where its
+    name came from (``llm``: a guess). ``code`` is its first code (None: uncoded).
+    ``last_paid``/``last_date`` are the newest price observation's paid price and date (None
+    when its lines have none). ``lookup_url`` is the store's search link for the code, never
+    requested here."""
 
-    code: CodeIdentity
     product_id: int
-    printed_name: str
+    name: str
+    name_source: FieldSource | None
+    code: CodeIdentity | None
     times_bought: int
     last_paid: Money | None
     last_date: date | None
@@ -198,39 +222,42 @@ class CatalogTodo:
     def __call__(
         self, *, store: str | None = None, limit: int | None = None
     ) -> tuple[TodoRow, ...]:
-        """Every code of an unconfirmed product (``is_confirmed`` false) that has ITEM lines,
-        one row per code: most lines first, then the newest ``last_date``, then the code.
-        ``store`` (normalized with ``normalize_store_name``) keeps the codes bought there and
-        counts only those lines; ``limit`` keeps the first rows. Read-only."""
+        """Every unconfirmed product (``is_confirmed`` false) that has ITEM lines, one row
+        each: most lines first, then the newest ``last_date``, then the product id. ``store``
+        (normalized with ``normalize_store_name``) keeps the products bought there and counts
+        only those lines; ``limit`` keeps the first rows. Read-only."""
         store_key = None if store is None else normalize_store_name(store)
         rows: list[TodoRow] = []
         with self._uow_factory(read_only=True) as uow:
-            for code in uow.product_codes.list():
-                product = uow.products.get(code.product_id)
-                if product is None or is_confirmed(product):
+            for product in uow.products.list():
+                product_id = require_id(product.id)
+                if is_confirmed(product):
                     continue
                 lines = [
                     line
-                    for line in uow.receipts.item_lines(code.product_id)
+                    for line in uow.receipts.item_lines(product_id)
                     if store_key is None or line.store_key == store_key
                 ]
                 if not lines:
                     continue
                 history = [
                     observation
-                    for observation in uow.prices.history(code.product_id)
+                    for observation in uow.prices.history(product_id)
                     if store_key is None or observation.store_key == store_key
                 ]
                 newest = history[-1] if history else None
+                codes = uow.product_codes.for_product(product_id)
+                code = codes[0] if codes else None
                 rows.append(
                     TodoRow(
-                        code=code.identity,
-                        product_id=code.product_id,
-                        printed_name=product.canonical_name,
+                        product_id=product_id,
+                        name=product.canonical_name,
+                        name_source=product.field_sources.get("canonical_name"),
+                        code=None if code is None else code.identity,
                         times_bought=len(lines),
                         last_paid=None if newest is None else newest.paid,
                         last_date=None if newest is None else newest.observed_on,
-                        lookup_url=lookup_url(code.store_key, code.code),
+                        lookup_url=None if code is None else lookup_url(code.store_key, code.code),
                     )
                 )
         rows.sort(
@@ -238,10 +265,40 @@ class CatalogTodo:
                 -row.times_bought,
                 row.last_date is None,
                 -(row.last_date or date.min).toordinal(),
-                row.code.code,
+                row.product_id,
             )
         )
         return tuple(rows if limit is None else rows[:limit])
+
+
+class ConfirmProduct:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self, product_id: int) -> Product:
+        """Stamp every filled field of the product ``person``, values unchanged (an empty field
+        stays empty and unstamped, so enrichment may still fill it), in one unit of work, and
+        return it as stored. Confirming twice writes nothing. NotFoundError (nothing written)
+        for an unknown product."""
+        with self._uow_factory() as uow:
+            product = uow.products.get(product_id)
+            if product is None:
+                msg = f"product {product_id} does not exist"
+                raise NotFoundError(msg)
+            filled = {
+                "canonical_name": True,
+                "brand": product.brand is not None,
+                "size": product.size_value is not None,
+                "category": product.category is not None,
+                "tags": bool(product.tags),
+            }
+            sources = {key: FieldSource.PERSON for key, value in filled.items() if value}
+            if sources == product.field_sources:
+                return product
+            stored = uow.products.update(replace(product, field_sources=sources))
+            uow.commit()
+        log.info("catalog.confirmed", product_id=product_id)
+        return stored
 
 
 @dataclass(frozen=True, slots=True)
