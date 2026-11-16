@@ -7,13 +7,15 @@ import {
   installIntersectionObserver,
   resetIntersectionObserver,
 } from "./intersection-observer";
+import { installNodeFormData } from "./form-data";
 import { installMatchMedia, resetMatchMedia } from "./match-media";
 import { server } from "./msw/server";
 import { installPointerCapture } from "./pointer-capture";
 
 installPointerCapture();
 
-beforeAll(() => {
+beforeAll(async () => {
+  await installNodeFormData();
   // Any request without a handler is a test bug (and would be real egress in production).
   server.listen({ onUnhandledRequest: "error" });
 });
