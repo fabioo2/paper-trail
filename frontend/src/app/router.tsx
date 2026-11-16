@@ -8,6 +8,8 @@ import {
 } from "@tanstack/react-router";
 
 import { NotFoundPage } from "@/routes/not-found-page";
+import { ProductDetailPage } from "@/routes/product-detail-page";
+import { ProductsPage } from "@/routes/products-page";
 import { ReceiptDetailPage } from "@/routes/receipt-detail-page";
 import { ReceiptsPage } from "@/routes/receipts-page";
 import { ReviewPage } from "@/routes/review-page";
@@ -48,6 +50,16 @@ const pageRoutes = [
     getParentRoute: () => rootRoute,
     path: "/receipts/$receiptId",
     component: ReceiptDetailPage,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/products",
+    component: ProductsPage,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/products/$productId",
+    component: ProductDetailPage,
   }),
   createRoute({
     getParentRoute: () => rootRoute,

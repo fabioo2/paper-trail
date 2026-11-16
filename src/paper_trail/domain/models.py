@@ -257,6 +257,25 @@ def is_confirmed(product: Product) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class LastPurchase:
+    """A product's newest ITEM line: its receipt's date and store, and what was paid (the line's
+    price observation, or its line total when the receipt has no date and so no observation)."""
+
+    purchased_on: date | None
+    store_name: str
+    paid: Money
+
+
+@dataclass(frozen=True, slots=True)
+class ProductSummary:
+    """A product as listed: how many ITEM lines name it and the newest of them."""
+
+    product: Product
+    times_bought: int
+    last_purchase: LastPurchase
+
+
+@dataclass(frozen=True, slots=True)
 class CodeIdentity:
     """What a code is stored under: ``store_key`` is ``""`` unless the scheme is STORE."""
 

@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from sqlalchemy import Connection, RowMapping, insert, select, update
+from sqlalchemy import Connection, RowMapping, func, insert, select, update
 
 from paper_trail.adapters.sqlite.mappers import (
     alias_from_row,
@@ -10,10 +10,23 @@ from paper_trail.adapters.sqlite.mappers import (
     product_from_row,
     product_values,
 )
-from paper_trail.adapters.sqlite.schema import product_aliases, products
-from paper_trail.domain.enums import AliasSource
+from paper_trail.adapters.sqlite.schema import (
+    line_items,
+    price_observations,
+    product_aliases,
+    products,
+    receipts,
+)
+from paper_trail.domain.enums import AliasSource, LineKind
 from paper_trail.domain.errors import NotFoundError
-from paper_trail.domain.models import Product, ProductAlias, require_id
+from paper_trail.domain.models import (
+    LastPurchase,
+    Product,
+    ProductAlias,
+    ProductSummary,
+    require_id,
+)
+from paper_trail.domain.money import Money
 
 
 class SqliteProductRepository:
@@ -39,6 +52,58 @@ class SqliteProductRepository:
     def list(self) -> tuple[Product, ...]:
         rows = self._connection.execute(select(products).order_by(products.c.id)).mappings()
         return tuple(product_from_row(row) for row in rows)
+
+    def summaries(self) -> tuple[ProductSummary, ...]:
+        newest_first = (
+            receipts.c.purchased_on.is_(None),
+            receipts.c.purchased_on.desc(),
+            receipts.c.id.desc(),
+            line_items.c.position.desc(),
+        )
+        lines = (
+            select(
+                line_items.c.product_id,
+                receipts.c.purchased_on,
+                receipts.c.store_name,
+                receipts.c.currency,
+                func.coalesce(price_observations.c.paid_cents, line_items.c.line_total_cents).label(
+                    "paid_cents"
+                ),
+                func.count().over(partition_by=line_items.c.product_id).label("times_bought"),
+                func.row_number()
+                .over(partition_by=line_items.c.product_id, order_by=newest_first)
+                .label("newest"),
+            )
+            .join(receipts, receipts.c.id == line_items.c.receipt_id)
+            .outerjoin(price_observations, price_observations.c.line_item_id == line_items.c.id)
+            .where(line_items.c.kind == LineKind.ITEM, line_items.c.product_id.is_not(None))
+            .subquery()
+        )
+        rows = self._connection.execute(
+            select(
+                products,
+                lines.c.purchased_on,
+                lines.c.store_name,
+                lines.c.currency,
+                lines.c.paid_cents,
+                lines.c.times_bought,
+            )
+            .join(lines, lines.c.product_id == products.c.id)
+            .where(lines.c.newest == 1)
+            .order_by(func.lower(products.c.canonical_name), products.c.id)
+        ).mappings()
+        return tuple(
+            ProductSummary(
+                product=product_from_row(row),
+                times_bought=row["times_bought"],
+                last_purchase=LastPurchase(
+                    purchased_on=row["purchased_on"],
+                    store_name=row["store_name"],
+                    paid=Money(row["paid_cents"], row["currency"]),
+                ),
+            )
+            for row in rows
+        )
 
     def update(self, product: Product) -> Product:
         """The ``products_fts`` triggers follow the new name, brand and tags."""

@@ -11,6 +11,7 @@ from paper_trail.domain.models import (
     PriceObservation,
     Product,
     ProductAlias,
+    ProductSummary,
     Receipt,
     require_id,
 )
@@ -112,3 +113,13 @@ class GetProduct:
             msg = f"product {product_id} does not exist"
             raise NotFoundError(msg)
         return product
+
+
+class ListProducts:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self) -> tuple[ProductSummary, ...]:
+        """Every product bought at least once, by name, with its newest purchase. Read-only."""
+        with self._uow_factory(read_only=True) as uow:
+            return uow.products.summaries()
