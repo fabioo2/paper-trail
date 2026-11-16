@@ -2,7 +2,7 @@
 PC-TC-36..42, 92, 93), over the fake and the SQLite unit of work.
 
 Replaces ``test_enrichment_tools.py``: ``save_enrichment`` is removed from the registry (its
-rows are owned here, by PC-TC-52 for embedding and by the registry test for its removal).
+rows are owned here and by the registry test for its removal).
 Calls go through the in-process gateway; one test per tool also runs over MCP (the transports
 are otherwise compared in ``test_transport_equivalence.py`` and ``test_cli_tools.py``). The
 tools' catalog is the production one: the store catalog of the unit of work, then ``PluCatalog``
@@ -18,7 +18,7 @@ Pinned (signatures.md, test-cases.md):
   ``{product}``. Each given field has exactly one source (``size`` covers ``size_value`` and
   ``size_unit``); a stored ``person`` field is kept, re-read inside the write unit (A1); a
   person's CATEGORY correction for the line's alias (either normalization, A8) at that store
-  wins with source ``person``; name, brand and tags are masked; nothing is embedded.
+  wins with source ``person``; name, brand and tags are masked.
 """
 
 from collections.abc import Callable, Iterator
@@ -43,7 +43,6 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import JsonValue, Product, ProductAlias, ProductCode
-from paper_trail.ports.llm import LlmUnavailableError
 from paper_trail.ports.tools import ToolGateway, ToolInputError
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from paper_trail.tools.inprocess import InProcessToolGateway
@@ -51,8 +50,7 @@ from tests.agent_harness import TOOL_TRANSPORTS, Harness, build_harness, mcp_gat
 from tests.extractions import C1, L1, L3, L4, LOBLAWS_KEY, PLU_CSV, U1, WALMART_KEY
 from tests.factories import CREATED_AT, MASKED_TEST_PAN, TEST_PAN, at, correction, product
 from tests.fakes.catalog import FakeCatalog
-from tests.fakes.embeddings import FakeEmbeddings, basis
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import serve_mcp
 from tests.storage import in_unit
 from tests.support import require_id
@@ -103,11 +101,10 @@ def _harness(uow_factory: UnitOfWorkFactory, tmp_path: Path, **overrides: Any) -
     plu.write_text(PLU_CSV, encoding="utf-8")
     values: dict[str, Any] = {
         "uow_factory": uow_factory,
-        "embeddings": FakeEmbeddings(),
         "catalog": PluCatalog(plu),
     }
     values.update(overrides)
-    return build_harness(ScriptedLlm(), **values)
+    return build_harness(ScriptedReader(), **values)
 
 
 @pytest.fixture
@@ -120,14 +117,8 @@ def gateway(harness: Harness) -> ToolGateway:
     return InProcessToolGateway(harness.registry)
 
 
-def _add(harness: Harness, stored: Product, *, vector: bool = False) -> int:
-    def add(uow: UnitOfWork) -> int:
-        product_id = require_id(uow.products.add(stored).id)
-        if vector:
-            uow.vectors.upsert(product_id, basis(0))
-        return product_id
-
-    return in_unit(harness.uow_factory, add)
+def _add(harness: Harness, stored: Product) -> int:
+    return require_id(in_unit(harness.uow_factory, lambda uow: uow.products.add(stored)).id)
 
 
 def _attach(
@@ -160,13 +151,12 @@ def _remember(  # noqa: PLR0913 - a test builder: keyword-only overrides with de
 
 
 def _snapshot(harness: Harness) -> tuple[object, ...]:
-    """Every product, code and alias, and the vector index's answer around basis(0)."""
+    """Every product, code and alias."""
     with harness.uow_factory(read_only=True) as uow:
         products = [uow.products.get(product_id) for product_id in harness.product_ids()]
         aliases = [uow.products.aliases(product_id) for product_id in harness.product_ids()]
         codes = uow.product_codes.list()
-        vectors = uow.vectors.nearest(basis(0), k=10)
-    return products, aliases, codes, vectors
+    return products, aliases, codes
 
 
 def _lookup(gateway: ToolGateway, raw_text: str, store_key: str) -> dict[str, Any]:
@@ -660,7 +650,7 @@ def test_a_category_correction_does_not_replace_a_persons_category(
     assert (stored.category, stored.field_sources["category"]) == (Category.SNACKS_CANDY, PERSON)
 
 
-# --- masking (PC-TC-42) and no embedding (PC-TC-93) -----------------------------------------------
+# --- masking (PC-TC-42) ---------------------------------------------------------------------------
 
 
 def test_free_text_is_masked(harness: Harness, gateway: ToolGateway) -> None:
@@ -682,50 +672,6 @@ def test_free_text_is_masked(harness: Harness, gateway: ToolGateway) -> None:
     digits = TEST_PAN.replace(" ", "")
     assert digits not in repr(stored).replace(" ", "")
     assert digits not in repr(result).replace(" ", "")
-
-
-@pytest.mark.parametrize(
-    ("stored", "fields", "sources", "vector", "described"),
-    [
-        (
-            _printed("TST APPLE"),
-            {"name": "Test Apple"},
-            {"canonical_name": "plu"},
-            False,
-            {"canonical_name": PLU},
-        ),
-        (
-            replace(_printed("Test Apple"), field_sources={"canonical_name": PERSON}),
-            {"category": "produce"},
-            {"category": "plu"},
-            True,
-            {"canonical_name": PERSON, "category": PLU},
-        ),
-    ],
-    ids=["unconfirmed-becomes-confirmed", "already-confirmed"],
-)
-def test_describe_never_embeds(  # noqa: PLR0913, PLR0917 - the fixtures and one table row
-    uow_factory: UnitOfWorkFactory,
-    tmp_path: Path,
-    stored: Product,
-    fields: dict[str, JsonValue],
-    sources: dict[str, JsonValue],
-    vector: bool,
-    described: dict[str, FieldSource],
-) -> None:
-    embeddings = FakeEmbeddings(error=LlmUnavailableError("cannot reach llm-host.test:11434"))
-    harness = _harness(uow_factory, tmp_path, embeddings=embeddings)
-    product_id = _add(harness, stored, vector=vector)
-    with harness.uow_factory(read_only=True) as uow:
-        vectors = uow.vectors.nearest(basis(0), k=10)
-
-    _describe(InProcessToolGateway(harness.registry), product_id, fields, sources)
-
-    assert harness.product(product_id).field_sources == described
-    assert embeddings.calls == 0
-    with harness.uow_factory(read_only=True) as uow:
-        assert uow.vectors.nearest(basis(0), k=10) == vectors
-    assert harness.has_vector(product_id) is vector
 
 
 # --- old and new normalization keys (PC-TC-92, A8) ------------------------------------------------

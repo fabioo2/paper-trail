@@ -1,7 +1,7 @@
 """A person corrects the product of a receipt line, and it is remembered (PLAN 6, S4-AC-06).
 
 The correction is matching's memory: the next line with the same alias at the same store is
-linked to the corrected product before any alias or vector search (``find_product``). No model
+linked to the corrected product before any alias search (``find_product``). No model
 is called.
 """
 

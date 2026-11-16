@@ -12,7 +12,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from PIL import ImageDraw
 
 from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
 from paper_trail.domain.errors import UnsupportedMediaError
@@ -20,13 +19,11 @@ from tests.images import (
     GPS_IFD,
     animated_bytes,
     decode,
-    encode_png,
     heic_bytes,
     iphone_mpo_with_exif,
     landscape_jpeg_with_exif,
     png_bytes,
     rgba_png_bytes,
-    solid,
     webp_bytes,
 )
 
@@ -155,41 +152,3 @@ def test_an_animated_webp_is_still_stored_as_its_first_frame(
 def test_an_animated_gif_is_still_refused(store: FilesystemImageStore) -> None:
     with pytest.raises(UnsupportedMediaError, match="GIF"):
         store.save(animated_bytes("GIF"))
-
-
-# --- the photo as the OCR read it (real run 2026-11-08: vision looped on a sideways photo) --------
-
-
-def _marked_landscape() -> bytes:
-    """64x32, white with a black 8x8 marker in the top-left corner."""
-    image = solid(64, 32, (255, 255, 255))
-    ImageDraw.Draw(image).rectangle((0, 0, 7, 7), fill=(0, 0, 0))
-    return encode_png(image)
-
-
-def _dark(pixel: object) -> bool:
-    assert isinstance(pixel, tuple)
-    return bool(max(pixel) < 60)
-
-
-def test_open_upright_turns_the_photo_like_the_ocr(store: FilesystemImageStore) -> None:
-    """``rotation_degrees`` 90 is a quarter turn counter-clockwise (the OCR adapter's
-    convention): the top-left marker ends up bottom-left of a portrait image."""
-    stored = store.save(_marked_landscape())
-
-    image = decode(store.open_upright(stored.relative_path, 90))
-
-    assert image.format == "JPEG"
-    assert image.size == (32, 64)
-    assert _dark(image.getpixel((3, 60)))
-    assert not _dark(image.getpixel((28, 3)))
-    assert "exif" not in image.info
-
-
-@pytest.mark.parametrize(("degrees", "size"), [(180, (64, 32)), (270, (32, 64))])
-def test_open_upright_handles_every_quarter_turn(
-    store: FilesystemImageStore, degrees: int, size: tuple[int, int]
-) -> None:
-    stored = store.save(_marked_landscape())
-
-    assert decode(store.open_upright(stored.relative_path, degrees)).size == size

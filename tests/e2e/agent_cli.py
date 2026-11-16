@@ -1,25 +1,33 @@
 """Shared helpers for the agent-core CLI suites (``process``, ``review``, ``graph``).
 
 The CLI runs in-process through Typer's runner with ``PAPER_TRAIL_*`` set by the test, and with
-``PAPER_TRAIL_OLLAMA__BASE_URL`` pointing at a scripted fake Ollama on 127.0.0.1; the real
-composition root and Ollama adapter run, only the model is a script.
+``ANTHROPIC_BASE_URL`` pointing at a scripted fake Messages API on 127.0.0.1 (and a dummy
+``ANTHROPIC_API_KEY``); the real composition root and Anthropic adapter run, only the model is
+a script (claude-extraction CQ17).
 """
 
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, closing, contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner, Result
 
+from paper_trail.adapters.sqlite.engine import create_engine
+from paper_trail.adapters.sqlite.migrations import upgrade_to_head
 from paper_trail.adapters.trace.json_file import TraceDocument
+from paper_trail.config import DATABASE_FILENAME
 from paper_trail.interfaces.cli.main import app
-from tests.fakes.ollama_server import FakeOllama, serve_fake_ollama
+from tests.fakes.anthropic_server import FakeClaude, serve_fake_claude
+from tests.images import PRINTED_RECEIPTS
 
-type StartOllama = Callable[..., FakeOllama]
+type StartClaude = Callable[..., FakeClaude]
+
+TEST_API_KEY = "test-key-not-a-secret"
 
 _runner = CliRunner()
 
@@ -28,42 +36,70 @@ def invoke(*args: str) -> Result:
     return _runner.invoke(app, list(args))
 
 
-def configure_cli(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, slice_d: bool = False
-) -> Path:
-    """Point the CLI at a temporary data dir; return the data dir.
+def migrate_main(data_dir: Path) -> None:
+    """Migrate ``data_dir``'s main database to head: a ``--run`` needs it (its spend ledger,
+    review rulings R3 and C1) and never migrates it itself."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(data_dir / DATABASE_FILENAME)
+    try:
+        upgrade_to_head(engine)
+    finally:
+        engine.dispose()
 
-    The slice D stages (the vision attempt and enrichment) are off and the text extraction
-    prompt is ``extraction/v1`` (integer cents) unless ``slice_d``: the slice A-C suites script
-    exactly the model calls of the stages they are about, as ``extraction()``. With ``slice_d``
-    the production defaults apply (extraction/v2 printed-value answers, two vision attempts,
-    enrichment on; docs/plans/extraction-accuracy.md)."""
+
+def configure_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    enrichment: bool = False,
+    main_migrated: bool = False,
+) -> Path:
+    """Point the CLI at a temporary data dir; return the data dir. Enrichment is off unless
+    ``enrichment``, so the suites pin exactly the steps they are about; the main database
+    exists, at head, only with ``main_migrated`` (what a ``--run`` needs)."""
     data_dir = tmp_path / "data"
     monkeypatch.setenv("PAPER_TRAIL_ENV", "test")
     monkeypatch.setenv("PAPER_TRAIL_DATA_DIR", str(data_dir))
     monkeypatch.setenv("PAPER_TRAIL_STATIC_DIR", str(tmp_path / "no-static"))
     monkeypatch.setenv("PAPER_TRAIL_LOG_FORMAT", "json")
-    if not slice_d:
-        monkeypatch.setenv("PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS", "0")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if not enrichment:
         monkeypatch.setenv("PAPER_TRAIL_GRAPH__ENRICHMENT", "false")
-        monkeypatch.setenv("PAPER_TRAIL_PROMPTS__EXTRACTION_VERSION", "v1")
+    if main_migrated:
+        migrate_main(data_dir)
     return data_dir
 
 
 @contextmanager
-def fake_ollama_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartOllama]:
-    """``start(*replies, then=..., embeddings=...)`` serves a new fake Ollama and points the CLI
-    at it; ``embeddings`` is the fake's vector table (``tests.fakes.embeddings``)."""
+def fake_claude_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartClaude]:
+    """``start(*replies, then=...)`` serves a new fake Messages API and points the CLI at it
+    (``ANTHROPIC_BASE_URL``, with a dummy ``ANTHROPIC_API_KEY``): a second ``start`` stands for
+    the API as a second process sees it."""
     with ExitStack() as stack:
 
-        def start(*replies: Any, then: Any = None, embeddings: Any = None) -> FakeOllama:
-            fake = stack.enter_context(
-                serve_fake_ollama(FakeOllama(*replies, then=then, embeddings=embeddings))
-            )
-            monkeypatch.setenv("PAPER_TRAIL_OLLAMA__BASE_URL", fake.url)
+        def start(*replies: Any, then: Any = None) -> FakeClaude:
+            fake = stack.enter_context(serve_fake_claude(FakeClaude(*replies, then=then)))
+            monkeypatch.setenv("ANTHROPIC_BASE_URL", fake.url)
+            monkeypatch.setenv("ANTHROPIC_API_KEY", TEST_API_KEY)
             return fake
 
         yield start
+
+
+def closed_loopback_url() -> str:
+    """A loopback URL on which nothing listens (connection refused)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_address[1]
+    server.server_close()
+    return f"http://127.0.0.1:{port}"
+
+
+def photo(folder: Path, name: str = "costco.png", index: int = 0) -> Path:
+    """A rendered receipt photo at ``folder/name`` (distinct bytes per ``index``)."""
+    path = folder / name
+    path.write_bytes(PRINTED_RECEIPTS[index].render())
+    return path
 
 
 def run_database(data_dir: Path, run: str | None) -> Path:
@@ -89,10 +125,6 @@ def trace_files(data_dir: Path, run: str = "main") -> list[Path]:
 
 def trace_document(path: Path) -> TraceDocument:
     return TraceDocument.model_validate_json(path.read_text(encoding="utf-8"))
-
-
-def chat_contents(fake: FakeOllama, call: int) -> list[str]:
-    return [str(message["content"]) for message in fake.chat_requests[call]["messages"]]
 
 
 def write_json(path: Path, value: object) -> Path:

@@ -16,7 +16,6 @@ from paper_trail.adapters.sqlite.product_repository import SqliteProductReposito
 from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.adapters.sqlite.review_queue import SqliteReviewQueue
 from paper_trail.adapters.sqlite.text_search import SqliteTextSearchIndex
-from paper_trail.adapters.sqlite.vector_index import SqliteVectorIndex
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.queues import JobQueue, ReviewQueue
 from paper_trail.ports.repositories import (
@@ -26,7 +25,7 @@ from paper_trail.ports.repositories import (
     ProductRepository,
     ReceiptRepository,
 )
-from paper_trail.ports.search import TextSearchIndex, VectorIndex
+from paper_trail.ports.search import TextSearchIndex
 
 
 class SqliteUnitOfWork:
@@ -47,7 +46,6 @@ class SqliteUnitOfWork:
     jobs: JobQueue
     reviews: ReviewQueue
     text_search: TextSearchIndex
-    vectors: VectorIndex
 
     def __init__(self, engine: Engine, clock: Clock, *, read_only: bool = False) -> None:
         self._engine = engine
@@ -73,7 +71,6 @@ class SqliteUnitOfWork:
         self.jobs = SqliteJobQueue(connection, self._clock)
         self.reviews = SqliteReviewQueue(connection, self._clock)
         self.text_search = SqliteTextSearchIndex(connection)
-        self.vectors = SqliteVectorIndex(connection)
         return self
 
     def __exit__(self, *exc: object) -> None:

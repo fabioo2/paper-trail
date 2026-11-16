@@ -1,4 +1,6 @@
-# Runtime stack for the app host (ADR-0003, ADR-0016): one image, three services.
+# Runtime stack (ADR-0003): one image, three services. Receipts are read by the Claude API:
+# ANTHROPIC_API_KEY in .env reaches the services through env_file only (a key exported in the
+# shell is never passed on), and `migrate` blanks it. No other host is needed.
 # `make up` starts it; dev tooling lives in compose.dev.yaml under the `dev` profile.
 name: paper-trail
 
@@ -38,6 +40,11 @@ services:
         GIT_SHA: ${GIT_SHA:-}
         APP_VERSION: ${APP_VERSION:-unknown}
     command: ["db", "upgrade"]
+    # Migrations never call Claude: the key read from .env is blanked here.
+    environment:
+      TZ: America/Toronto
+      PAPER_TRAIL_DATA_DIR: /data
+      ANTHROPIC_API_KEY: ""
     restart: "no"
     healthcheck:
       disable: true

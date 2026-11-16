@@ -4,7 +4,7 @@ Date: 2026-11-06
 
 ## Status
 
-Accepted
+Accepted; amended by [ADR-0019](0019-claude-reads-receipts.md): the `ocr_read` and `product_similarity_search` tools are removed, the rest of the registry and the MCP adapter are unchanged
 
 ## Context
 

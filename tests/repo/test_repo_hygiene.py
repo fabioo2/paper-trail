@@ -1,6 +1,8 @@
 """Repository hygiene: ignores, env docs, pyproject, injection, egress, docs.
 
-Covers S0-AC-04, S0-AC-05, S0-AC-14, S0-AC-36, S0-AC-38.
+Covers S0-AC-04, S0-AC-05, S0-AC-14, S0-AC-36, S0-AC-38. Which modules may reach the network
+(only the Anthropic adapter, S0-AC-38 since the claude-extraction plan) is CE-TC-064 in
+``test_claude_extraction_repo.py``.
 """
 
 import ast
@@ -62,21 +64,12 @@ DEV_DEPENDENCIES = {
     "pyyaml",
     "types-pyyaml",
 }
-HTTP_CLIENT_MODULES = {"httpx", "requests", "aiohttp", "urllib3", "urllib.request", "http.client"}
-OLLAMA_ADAPTER = SRC / "adapters" / "ollama"
+# Filled in by ``Settings`` from ANTHROPIC_API_KEY, never read from its own name (CE-TC-040).
+NOT_VARIABLES = {"PAPER_TRAIL_CLAUDE__API_KEY"}
 
 
 def _python_files(root: Path) -> Iterator[Path]:
     yield from sorted(root.rglob("*.py"))
-
-
-def _imported_modules(tree: ast.AST) -> Iterator[str]:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            yield from (alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            yield node.module
-            yield from (f"{node.module}.{alias.name}" for alias in node.names)
 
 
 @pytest.fixture(scope="module")
@@ -154,13 +147,15 @@ def _settings_env_names() -> list[str]:
     names: list[str] = []
     for name, field in Settings.model_fields.items():
         annotation = field.annotation
-        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if isinstance(field.validation_alias, str):
+            names.append(field.validation_alias)  # an SDK's own variable, e.g. ANTHROPIC_API_KEY
+        elif isinstance(annotation, type) and issubclass(annotation, BaseModel):
             names.extend(
                 f"PAPER_TRAIL_{name}__{nested}".upper() for nested in annotation.model_fields
             )
         else:
             names.append(f"PAPER_TRAIL_{name}".upper())
-    return names
+    return [name for name in names if name not in NOT_VARIABLES]
 
 
 def test_s0_ac_04_env_example_documents_every_setting_with_a_comment() -> None:
@@ -186,10 +181,11 @@ def test_s0_ac_04_env_example_mentions_no_unknown_settings() -> None:
 
 
 def test_s0_ac_04_env_example_holds_no_secrets() -> None:
-    """S0-AC-04: no secrets exist in this design; .env.example contains only safe defaults."""
+    """S0-AC-04: .env.example holds only safe defaults; the one secret, ANTHROPIC_API_KEY, is
+    listed with an empty value (CE-TC-069)."""
     text = read_text(".env.example")
 
-    assert not re.search(r"(?i)(password|secret|token|api_key)\s*=\s*\S", text)
+    assert not re.search(r"(?im)(password|secret|token|api_key)[ \t]*=[ \t]*\S", text)
 
 
 # --- S0-AC-05 ---------------------------------------------------------------------------------
@@ -410,19 +406,6 @@ def test_s0_ac_38_no_frontend_telemetry_dependencies() -> None:
     assert [n for n in names if FRONTEND_TELEMETRY.match(n)] == []
 
 
-def test_s0_ac_38_only_the_ollama_adapter_makes_http_calls() -> None:
-    """S0-AC-38: HTTP client libraries are imported only under adapters/ollama/."""
-    offenders = [
-        f"{path.relative_to(REPO_ROOT)}: {module}"
-        for path in _python_files(SRC)
-        if OLLAMA_ADAPTER not in path.parents
-        for module in _imported_modules(ast.parse(path.read_text(encoding="utf-8")))
-        if module in HTTP_CLIENT_MODULES or module.split(".")[0] in {"httpx", "requests", "aiohttp"}
-    ]
-
-    assert offenders == []
-
-
 def test_s0_ac_38_index_html_loads_nothing_external() -> None:
     """S0-AC-38: fonts, icons and scripts are self-hosted (no CDN links in index.html)."""
     html = read_text("frontend/index.html")
@@ -431,20 +414,6 @@ def test_s0_ac_38_index_html_loads_nothing_external() -> None:
 
 
 # --- S0-AC-36 ---------------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def readme() -> str:
-    return read_text("README.md")
-
-
-def test_s0_ac_39_windows_llm_host_steps_need_no_make(readme: str) -> None:
-    """S0-AC-39: the Makefile needs bash, so the Windows steps use plain `docker compose`."""
-    windows = readme.split("### Windows 11", 1)[1].split("### Linux", 1)[0]
-    commands = re.findall(r"```powershell\n(.*?)```", windows, re.DOTALL)
-
-    assert commands, "the Windows section has PowerShell blocks"
-    assert not any(re.search(r"^\s*make\b", block, re.MULTILINE) for block in commands)
 
 
 DOCS_WITH_LINKS = ("README.md", "CONTRIBUTING.md")

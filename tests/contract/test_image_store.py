@@ -80,15 +80,3 @@ def test_open_outside_the_root_is_refused_even_if_the_file_exists(
 
     with pytest.raises(NotFoundError):
         store.open("../secret.txt")
-
-
-def test_upright_at_zero_degrees_is_the_stored_image(store: ImageStore) -> None:
-    """The vision attempt opens the photo as the OCR read it; unturned, it is ``open``'s."""
-    stored = store.save(RED)
-
-    assert store.open_upright(stored.relative_path, 0) == store.open(stored.relative_path)
-
-
-def test_upright_of_a_missing_image_is_not_found(store: ImageStore) -> None:
-    with pytest.raises(NotFoundError):
-        store.open_upright("ab/cd/missing.jpg", 90)

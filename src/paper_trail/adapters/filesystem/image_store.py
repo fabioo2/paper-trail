@@ -56,15 +56,6 @@ class FilesystemImageStore:
             raise NotFoundError(msg)
         return path.read_bytes()
 
-    def open_upright(self, relative_path: str, rotation_degrees: int) -> bytes:
-        data = self.open(relative_path)
-        if rotation_degrees % 360 == 0:
-            return data
-        with Image.open(io.BytesIO(data)) as image:
-            # Quarter turns with expand, as the OCR adapter turns its reads: a lossless transpose.
-            turned = image.rotate(rotation_degrees, expand=True)
-        return _jpeg(turned)
-
     def _resolve(self, relative_path: str) -> Path | None:
         """The path inside the root, or None for anything that could lead outside it."""
         candidate = Path(relative_path)

@@ -35,16 +35,16 @@ from tests.agent_harness import (
     agent_settings,
     build_harness,
 )
-from tests.extractions import PURCHASED_ON, extraction, inconsistent_extraction
+from tests.extractions import PURCHASED_ON, inconsistent_answer
 from tests.factories import MASKED_TEST_PAN, TEST_PAN, cad, draft_with, line_item, receipt_draft
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.pans import card_numbers
 from tests.support import require_id
 
 
-def _parked(llm: ScriptedLlm, settings: Settings | None = None) -> tuple[Harness, int, int]:
+def _parked(reader: ScriptedReader, settings: Settings | None = None) -> tuple[Harness, int, int]:
     """A receipt parked for review; returns (harness, receipt_id, review_id)."""
-    harness = build_harness(llm, settings=settings)
+    harness = build_harness(reader, settings=settings)
     graph = harness.process_image().graph
     assert graph is not None
     assert graph.status is ReceiptStatus.NEEDS_REVIEW
@@ -52,7 +52,7 @@ def _parked(llm: ScriptedLlm, settings: Settings | None = None) -> tuple[Harness
 
 
 def _validation_failed() -> tuple[Harness, int, int]:
-    return _parked(ScriptedLlm(inconsistent_extraction()), agent_settings(max_text_attempts=1))
+    return _parked(ScriptedReader(inconsistent_answer()), agent_settings(max_attempts=1))
 
 
 def _corrected() -> ReceiptDraft:
@@ -64,11 +64,13 @@ def test_s3_ac_07_a_consistent_draft_completes_the_same_thread() -> None:
     """S3-AC-07 / AC-A-08: resumes from the checkpoint (no new extraction), persists the
     person's draft, COMPLETED, review RESOLVED."""
     harness, receipt_id, review_id = _validation_failed()
-    calls_before = harness.llm.calls
+    reader = harness.reader
+    assert isinstance(reader, ScriptedReader)
+    calls_before = reader.calls
 
     receipt = harness.resolve(review_id, _corrected())
 
-    assert harness.llm.calls == calls_before
+    assert reader.calls == calls_before
     assert receipt.id == receipt_id
     assert (receipt.status, receipt.stage) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
     assert receipt.store_name == "Costco"
@@ -79,7 +81,7 @@ def test_s3_ac_07_a_consistent_draft_completes_the_same_thread() -> None:
     assert review.resolved_at is not None
     stored = harness.receipt(receipt_id)
     assert stored.image_sha256 is not None  # kept from the stored receipt
-    assert stored.ocr_text is not None  # the draft has none: the graph's OCR text is saved
+    assert stored.ocr_text is None  # claude-extraction R6: no longer written
     resumed = [name for _, name in harness.steps(receipt_id)]
     assert resumed[-1] == "save_matches"  # slice C: matching follows the save
     assert "save_receipt" in resumed
@@ -127,19 +129,6 @@ def test_force_needs_a_reason(reason: str | None) -> None:
     assert harness.review(review_id).status is ReviewStatus.OPEN
 
 
-def test_ac_a_08_accept_resumes_with_the_stored_extraction() -> None:
-    """AC-A-08 (--accept): a LOW_CONFIDENCE extraction adds up, so it can be accepted as is."""
-    harness, _, review_id = _parked(ScriptedLlm(extraction(confidence=0.2)))
-
-    receipt = harness.resolve(review_id)
-
-    assert harness.llm.calls == 1
-    assert receipt.status is ReceiptStatus.COMPLETED
-    assert receipt.purchased_on == PURCHASED_ON
-    assert receipt.total == Money(2683, "CAD")
-    assert harness.review(review_id).status is ReviewStatus.RESOLVED
-
-
 def test_ac_a_08_accepting_an_inconsistent_extraction_needs_force() -> None:
     harness, _, review_id = _validation_failed()
 
@@ -150,8 +139,10 @@ def test_ac_a_08_accepting_an_inconsistent_extraction_needs_force() -> None:
     assert receipt.status is ReceiptStatus.COMPLETED
 
 
-def test_ac_a_08_nothing_to_accept_after_extraction_failed() -> None:
-    harness, _, review_id = _parked(ScriptedLlm("not JSON", "still not JSON"))
+def test_ac_a_08_nothing_to_accept_after_the_answers_failed_the_schema() -> None:
+    """CE-TC-024: an answer that fails the schema is a failed attempt; after two there is no
+    reading to accept, only a person's file."""
+    harness, _, review_id = _parked(ScriptedReader({"items": []}, {"items": []}))
 
     assert harness.runner.pending_draft(harness.review(review_id).receipt_id) is None
     with pytest.raises(DomainValidationError, match=r"--file|draft"):
@@ -167,6 +158,7 @@ def test_pending_draft_is_the_extraction_the_graph_holds() -> None:
     assert pending.total == Money(2683, "CAD")
     assert pending.items[2].line_total == Money(989, "CAD")
     assert pending.purchased_on == PURCHASED_ON
+    assert pending.ocr_text is None
 
 
 def test_unknown_and_closed_reviews_are_refused() -> None:
@@ -193,7 +185,7 @@ def test_the_person_s_draft_is_masked_like_any_other() -> None:
 
 def test_a_review_without_an_agent_thread_cannot_be_resumed() -> None:
     """A Stage 1 import opens reviews with no graph thread: there is nothing to resume."""
-    harness = build_harness(ScriptedLlm())
+    harness = build_harness(ScriptedReader())
     eggs, milk = receipt_draft().items
     imported = harness.record(receipt_draft(items=(eggs, replace(milk, line_total=cad(685)))))
     assert imported.review is not None

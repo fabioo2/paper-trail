@@ -1,7 +1,7 @@
 """SQLAlchemy Core tables of the regular (non-virtual) tables of the schema (PLAN 3.5).
 
-The migrations own the schema: tables, indexes, CHECK constraints, triggers and the FTS5 and
-sqlite-vec virtual tables. This module mirrors the regular tables for queries, and a test
+The migrations own the schema: tables, indexes, CHECK constraints, triggers and the FTS5
+virtual tables. This module mirrors the regular tables for queries, and a test
 (``tests/integration/test_schema_matches_metadata.py``) keeps both in step: columns, types,
 nullability and foreign keys must match the migrated database.
 """
@@ -176,4 +176,15 @@ corrections = Table(
         "line_item_id", Integer, ForeignKey("line_items.id", ondelete="SET NULL"), nullable=True
     ),
     Column("created_at", UtcDateTime, nullable=False),
+)
+
+claude_calls = Table(
+    "claude_calls",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("at", UtcDateTime, nullable=False),
+    Column("model", Text, nullable=False),
+    Column("input_tokens", Integer, nullable=True),  # None while the call is reserved
+    Column("output_tokens", Integer, nullable=True),
+    Column("cost_usd", DecimalText, nullable=False),
 )

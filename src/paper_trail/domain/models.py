@@ -70,7 +70,7 @@ class LineItem:
     description: str  # human-readable normalized description
     quantity: Decimal  # > 0; fractional for weighed goods
     unit_price: Money | None
-    line_total: Money  # negative only for DISCOUNT lines
+    line_total: Money  # negative only for DISCOUNT lines and a DEPOSIT returned
     product_id: int | None = None
     category: Category | None = None
     id: int | None = None

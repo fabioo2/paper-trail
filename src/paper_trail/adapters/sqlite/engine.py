@@ -1,4 +1,5 @@
-"""The SQLite engine: one file, WAL mode, sqlite-vec and FTS5 on every connection (ADR-0004).
+"""The SQLite engine: one file, WAL mode and FTS5 on every connection (ADR-0004). sqlite-vec is
+not loaded here: only the migration runner needs it (``load_sqlite_vec``).
 
 Transactions are begun explicitly by SQLAlchemy, not implicitly by the sqlite3 driver, so a
 write transaction can take SQLite's write lock up front with ``BEGIN IMMEDIATE``
@@ -14,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import sqlalchemy
-import sqlite_vec
 from sqlalchemy import URL, Connection, Engine, RootTransaction, event
 from sqlalchemy.engine import Dialect
 from sqlalchemy.pool import ConnectionPoolEntry
@@ -92,11 +92,6 @@ def _create_parent_directory(
 def _configure_connection(connection: sqlite3.Connection, _record: ConnectionPoolEntry) -> None:
     # The driver must not open transactions on its own: _begin does, with the chosen mode.
     connection.isolation_level = None
-    connection.enable_load_extension(True)
-    try:
-        sqlite_vec.load(connection)
-    finally:
-        connection.enable_load_extension(False)
     cursor = connection.cursor()
     try:
         for pragma in CONNECTION_PRAGMAS:

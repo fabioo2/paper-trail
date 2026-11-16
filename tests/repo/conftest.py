@@ -42,9 +42,3 @@ def compose() -> dict[str, Any]:
 def compose_dev() -> dict[str, Any]:
     data: dict[str, Any] = load_yaml("compose.dev.yaml")
     return data
-
-
-@pytest.fixture(scope="session")
-def compose_llm() -> dict[str, Any]:
-    data: dict[str, Any] = load_yaml("deploy/llm/compose.yaml")
-    return data

@@ -1,4 +1,5 @@
-"""SQLite engine: pragmas, sqlite-vec and FTS5 on every connection (S0-AC-22)."""
+"""SQLite engine: pragmas and FTS5 on every connection (S0-AC-22); no sqlite-vec, which only the
+migration runner loads (CE-TC-050)."""
 
 import threading
 from collections.abc import Iterator
@@ -50,29 +51,14 @@ def test_s0_ac_22_every_connection_gets_the_pragmas(engine: Engine) -> None:
             conn.close()
 
 
-def test_s0_ac_22_sqlite_vec_is_loaded(engine: Engine) -> None:
-    """S0-AC-22: SELECT vec_version() succeeds on every connection."""
+def test_ce_tc_050_the_engine_does_not_load_sqlite_vec(engine: Engine) -> None:
     for _ in range(2):
-        with engine.connect() as conn:
-            version = conn.execute(text("SELECT vec_version()")).scalar_one()
-            assert isinstance(version, str)
-            assert version.startswith("v")
-
-
-def test_s0_ac_22_sqlite_vec_functions_work(engine: Engine) -> None:
-    """S0-AC-22: the extension is usable, not just present (vec0 table round trip)."""
-    with engine.begin() as conn:
-        conn.execute(text("CREATE VIRTUAL TABLE temp.v USING vec0(embedding float[2])"))
-        conn.execute(text("INSERT INTO temp.v(rowid, embedding) VALUES (1, '[0.0, 1.0]')"))
-        nearest = conn.execute(
-            text("SELECT rowid FROM temp.v WHERE embedding MATCH '[0.0, 0.9]' AND k = 1")
-        ).scalar_one()
-
-    assert nearest == 1
+        with engine.connect() as conn, pytest.raises(OperationalError, match="no such function"):
+            conn.execute(text("SELECT vec_version()"))
 
 
 def test_s0_ac_22_extension_loading_is_disabled_after_connect(engine: Engine) -> None:
-    """S0-AC-22: enable_load_extension(False) after loading sqlite-vec (no arbitrary loads)."""
+    """S0-AC-22: extension loading stays disabled on application connections."""
     with engine.connect() as conn, pytest.raises(OperationalError, match="not authorized"):
         conn.execute(text("SELECT load_extension('/nonexistent/evil')"))
 

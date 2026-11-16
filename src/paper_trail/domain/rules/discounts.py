@@ -25,13 +25,15 @@ class Refusal(StrEnum):
     """Why a discount stays at receipt level: ``MULTIPLE`` (a saving over several items),
     ``NO_REFERENCE`` (no code on the line, "TPD", "INSTANT SAVINGS"), ``NO_ITEM`` (no earlier
     ITEM line with that code that has no discount yet), ``EXCEEDS_ITEM`` (larger than the item's
-    line total) or ``NOT_A_SAVING`` (the amount is not negative)."""
+    line total), ``NOT_A_SAVING`` (the amount is not negative) or ``AS_READ`` (the reading that
+    made the receipt left it unlinked: a discount on the whole order)."""
 
     MULTIPLE = auto()
     NO_REFERENCE = auto()
     NO_ITEM = auto()
     EXCEEDS_ITEM = auto()
     NOT_A_SAVING = auto()
+    AS_READ = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,32 @@ def discount_reference(raw_text: str) -> str | None:
     if _CODE.fullmatch(left) and not any(char.isdigit() for char in right):
         return left
     return None
+
+
+def kept_attribution(lines: Sequence[LineItem]) -> DiscountAttribution:
+    """The links the lines already carry, and every other discount at receipt level
+    (``AS_READ``), adding none: for a draft whose discounts were placed by the reading that made
+    it (claude-extraction plan E4), where the rule must not move an order discount onto an
+    item."""
+    ordered = sorted(lines, key=lambda line: line.position)
+    discounts = [line for line in ordered if line.kind is LineKind.DISCOUNT]
+    return DiscountAttribution(
+        tuple(
+            DiscountLink(
+                line.position,
+                line.applies_to_position,
+                discount_reference(line.raw_text),
+                new=False,
+            )
+            for line in discounts
+            if line.applies_to_position is not None
+        ),
+        tuple(
+            ReceiptLevelDiscount(line.position, Refusal.AS_READ, discount_reference(line.raw_text))
+            for line in discounts
+            if line.applies_to_position is None
+        ),
+    )
 
 
 def attribute_discounts(lines: Sequence[LineItem]) -> DiscountAttribution:

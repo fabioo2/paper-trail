@@ -24,9 +24,3 @@ class ImageStore(Protocol):
     def open(self, relative_path: str) -> bytes:
         """The stored bytes; NotFoundError for anything that is not a stored image."""
         ...
-
-    def open_upright(self, relative_path: str, rotation_degrees: int) -> bytes:
-        """The stored image as the OCR read it: turned ``rotation_degrees`` counter-clockwise
-        (``OcrResult.rotation_degrees``, a multiple of 90) as a JPEG; ``open``'s bytes at 0.
-        NotFoundError as ``open``."""
-        ...

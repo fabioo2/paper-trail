@@ -3,7 +3,7 @@
 Resolving resumes the receipt's parked graph thread, in this process, from its checkpoint.
 Exit codes: 0 done; 1 an unknown review or one that is no longer open; 2 invalid input (an
 inconsistent draft without ``--force``, ``--force`` without ``--reason``, not exactly one of
-``--file``/``--accept``, an invalid file); 4 the LLM host is unreachable.
+``--file``/``--accept``, an invalid file).
 """
 
 from pathlib import Path
@@ -14,7 +14,6 @@ from paper_trail.application.receipts import InconsistentDraftError
 from paper_trail.config import Settings
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import JsonValue, ReviewItem, require_id
-from paper_trail.interfaces.cli.process import EXIT_LLM_UNAVAILABLE
 from paper_trail.interfaces.cli.receipts import (
     EXIT_INVALID_INPUT,
     EXIT_UNAVAILABLE,
@@ -23,7 +22,6 @@ from paper_trail.interfaces.cli.receipts import (
     read_draft,
 )
 from paper_trail.interfaces.cli.runs import open_run, write_trace
-from paper_trail.ports.llm import LlmUnavailableError
 
 
 def list_reviews(settings: Settings, run: str | None) -> None:
@@ -85,8 +83,6 @@ def resolve_review(  # noqa: PLR0913 - the command's options
             fail(EXIT_INVALID_INPUT, str(error))
         except (NotFoundError, ConflictError) as error:
             fail(EXIT_UNAVAILABLE, str(error))
-        except LlmUnavailableError as error:
-            fail(EXIT_LLM_UNAVAILABLE, str(error))
         receipt_id = require_id(receipt.id)
         write_trace(
             agents, receipt_id, f"review #{review_id}", started, None, resumed_from="review"

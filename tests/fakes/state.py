@@ -34,7 +34,6 @@ class FakeState:
     corrections: dict[int, Correction] = field(default_factory=dict)
     jobs: dict[int, Job] = field(default_factory=dict)
     reviews: dict[int, ReviewItem] = field(default_factory=dict)
-    vectors: dict[int, tuple[float, ...]] = field(default_factory=dict)
     _sequences: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     def next_id(self, table: str) -> int:

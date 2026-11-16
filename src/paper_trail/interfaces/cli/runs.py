@@ -42,11 +42,18 @@ def check_run_name(run: str | None) -> None:
 
 @contextmanager
 def open_run(settings: Settings, run: str | None) -> Iterator[AgentContainer]:
-    """The agents over the run's database (exit 1 when the main one is not migrated). With
+    """The agents over the run's database. The Claude spend is always kept in the main
+    database, so a named run never gets a budget of its own: the main database must be migrated
+    whatever the run (exit 1 otherwise; only a named run's own database is migrated here). With
     ``TOOLS__TRANSPORT=mcp`` the run's tools are served over MCP on a loopback port in this
     process and called through it."""
-    settings = _prepared(settings, run)
-    with agent_container(settings, run or MAIN_RUN, tool_server=serve_on_loopback) as agents:
+    ledger_path = settings.database_path
+    if run is not None:
+        _prepared(settings, None)
+    run_settings = _prepared(settings, run)
+    with agent_container(
+        run_settings, run or MAIN_RUN, tool_server=serve_on_loopback, ledger_path=ledger_path
+    ) as agents:
         yield agents
 
 
@@ -100,8 +107,7 @@ def write_trace(  # noqa: PLR0913 - one receipt's run, described for its trace f
             review_id=None if graph is None else graph.review_id,
             review_reason=None if graph is None else graph.review_reason,
             resumed_from=resumed_from,
-            text_attempts=0 if graph is None else graph.text_attempts,
-            vision_attempts=0 if graph is None else graph.vision_attempts,
+            attempts=0 if graph is None else graph.attempts,
             events=agents.tracer.events(receipt_id),
         )
     )

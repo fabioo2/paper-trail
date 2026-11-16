@@ -50,13 +50,13 @@ from paper_trail.domain.rules.arithmetic import (
 from paper_trail.domain.rules.discounts import (
     DiscountAttribution,
     attribute_discounts,
+    kept_attribution,
     with_attribution,
 )
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.rules.normalization import normalize_alias, normalize_store_name
 from paper_trail.ports.agents import ReceiptGraphRunner
 from paper_trail.ports.clock import Clock
-from paper_trail.ports.embeddings import EmbeddingPort
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 log = structlog.get_logger(__name__)
@@ -102,11 +102,15 @@ class RecordReceipt:
         self._clock = clock
         self._tolerances = tolerances
 
-    def assess(self, draft: ReceiptDraft) -> ReceiptAssessment:
+    def assess(self, draft: ReceiptDraft, *, attribute: bool = True) -> ReceiptAssessment:
         """Mask ``draft``, link its discounts to their items and check it, without writing
-        anything (``receipts import --dry-run``). Linking changes no amount."""
+        anything (``receipts import --dry-run``). Linking changes no amount. Without
+        ``attribute`` the draft's own links are kept and no other is added (a draft mapped from
+        a Claude reading, whose discounts are already where the reading put them)."""
         masked, masked_pans = _masked(draft)
-        discounts = attribute_discounts(masked.items)
+        discounts = (
+            attribute_discounts(masked.items) if attribute else kept_attribution(masked.items)
+        )
         masked = replace(masked, items=with_attribution(masked.items, discounts))
         report = check_arithmetic(masked, self._tolerances)
         if report.ok:
@@ -136,7 +140,13 @@ class RecordReceipt:
         return self._recorded(receipt, assessment, review)
 
     def replace(
-        self, receipt_id: int, draft: ReceiptDraft, *, force: bool = False, matching: bool = False
+        self,
+        receipt_id: int,
+        draft: ReceiptDraft,
+        *,
+        force: bool = False,
+        matching: bool = False,
+        attribute: bool = True,
     ) -> RecordReceiptResult:
         """Record ``draft`` as the contents of an existing receipt (the graph's save step).
 
@@ -144,10 +154,10 @@ class RecordReceipt:
         image path when the draft has none. The receipt is accepted when the draft adds up or
         ``force`` is set (a person approved it), else NEEDS_REVIEW; no review item is opened
         (the graph opens its own). An accepted receipt is COMPLETED, or with ``matching`` set
-        PROCESSING/MATCHING until ``record_matches`` has linked its lines. NotFoundError for an
-        unknown receipt.
+        PROCESSING/MATCHING until ``record_matches`` has linked its lines. ``attribute`` as for
+        ``assess``. NotFoundError for an unknown receipt.
         """
-        assessment = self.assess(draft)
+        assessment = self.assess(draft, attribute=attribute)
         if (assessment.arithmetic.ok or force) and matching:
             status, stage = ReceiptStatus.PROCESSING, ProcessingStage.MATCHING
         elif assessment.arithmetic.ok or force:
@@ -175,23 +185,12 @@ class RecordReceipt:
             uow.commit()
         return self._recorded(receipt, assessment, None)
 
-    def record_matches(
-        self, receipt_id: int, choices: Sequence[MatchChoice], embeddings: EmbeddingPort
-    ) -> MatchesRecorded:
-        """Link a saved receipt's lines to their products (the ``save_matches`` tool).
-
-        The new products that will be confirmed are embedded first, in one call (none when
-        there are none) and outside any transaction (a slow or absent embedding host must not
-        hold the write lock), then everything is written in one unit of work. A failure writes
-        nothing.
-        """
-        with self._uow_factory(read_only=True) as uow:
-            plan = plan_matches(uow, receipt_id, choices)
-        texts = plan.to_embed
-        vectors = dict(zip(texts, embeddings.embed(list(texts.values())), strict=True))
+    def record_matches(self, receipt_id: int, choices: Sequence[MatchChoice]) -> MatchesRecorded:
+        """Link a saved receipt's lines to their products (the ``save_matches`` tool), all in
+        one unit of work. A failure writes nothing."""
         with self._uow_factory() as uow:
             recorded = record_matches(
-                uow, plan_matches(uow, receipt_id, choices), choices, vectors, self._clock.now()
+                uow, plan_matches(uow, receipt_id, choices), choices, self._clock.now()
             )
             uow.commit()
         log.info(
@@ -267,8 +266,9 @@ class InconsistentDraftError(DomainValidationError):
 class ResolveReview:
     """A person's answer to a review: it resumes the receipt's parked graph thread (S3-AC-07).
 
-    The answer is a corrected draft, or (``draft=None``) the extraction the graph holds. It
-    must add up unless ``force`` is set with a reason, which is remembered as a correction.
+    The answer is a corrected draft, or (``draft=None``) the extraction the graph holds, which
+    the graph then saves itself, exactly as it would have without a review. It must add up
+    unless ``force`` is set with a reason, which is remembered as a correction.
     The graph then saves the draft as PROCESSING/MATCHING, ``save_matches`` completes it, and only
     after that is the review RESOLVED.
     """
@@ -301,6 +301,7 @@ class ResolveReview:
         if force and not (reason and reason.strip()):
             msg = "forcing a draft that does not add up needs a reason"
             raise DomainValidationError(msg)
+        accepted = draft is None
         if draft is None:
             draft = self._runner.pending_draft(receipt_id)
         if draft is None:
@@ -310,7 +311,9 @@ class ResolveReview:
         overridden = not assessment.arithmetic.ok
         if overridden and not force:
             raise InconsistentDraftError(assessment.arithmetic)
-        self._runner.resume(receipt_id, assessment.draft)  # masked before it enters the graph
+        # Accepted as it is, the graph saves its own extraction (its codes and the source of
+        # each category kept); a person's draft is masked before it enters the graph.
+        self._runner.resume(receipt_id, None if accepted else assessment.draft)
         with self._uow_factory() as uow:
             if overridden and reason is not None:
                 uow.corrections.add(

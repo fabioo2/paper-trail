@@ -57,6 +57,14 @@ git rm --quiet staged.py
 git commit --quiet -m "remove the leak"
 expect "secret removed from the tree but still in history is caught" nonzero sh "$SCAN" all "$repo"
 
+# The Claude key (claude-extraction plan R7, CE-TC-069): one pasted into a file is caught.
+fresh="$workdir/anthropic"
+mkdir "$fresh"
+command git -C "$fresh" init --quiet
+anthropic_key="sk-ant-api03-$(head -c 8192 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 93)AA"
+printf 'ANTHROPIC_API_KEY=%s\n' "$anthropic_key" > "$fresh/settings.env"
+expect "an Anthropic API key in the working tree is caught" nonzero sh "$SCAN" all "$fresh"
+
 if [ "$failures" -gt 0 ]; then
     printf '%s secrets self-test(s) failed\n' "$failures" >&2
     exit 1

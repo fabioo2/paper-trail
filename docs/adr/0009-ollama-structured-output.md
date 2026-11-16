@@ -4,7 +4,7 @@ Date: 2026-11-06
 
 ## Status
 
-Accepted
+Superseded by [ADR-0019](0019-claude-reads-receipts.md)
 
 ## Context
 

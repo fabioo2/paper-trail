@@ -66,7 +66,7 @@ EXPECTED_MEMBERS: dict[type[StrEnum], set[str]] = {
     enums.Unit: {"EACH", "G", "KG", "ML", "L", "LB", "OZ"},
     enums.ReceiptStatus: {"PROCESSING", "NEEDS_REVIEW", "COMPLETED", "FAILED"},
     enums.ProcessingStage: {
-        "QUEUED", "WAITING_FOR_GPU", "READING", "EXTRACTING", "VALIDATING", "MATCHING",
+        "QUEUED", "READING", "EXTRACTING", "VALIDATING", "MATCHING",
         "ENRICHING", "SAVING", "DONE", "NEEDS_REVIEW", "FAILED",
     },
     enums.JobKind: {"PROCESS_RECEIPT"},
@@ -78,7 +78,8 @@ EXPECTED_MEMBERS: dict[type[StrEnum], set[str]] = {
     enums.AliasSource: {"IMPORT", "EXTRACTED", "MATCHED", "USER_CORRECTION"},
     enums.CorrectionKind: {"PRODUCT_LINK", "CATEGORY", "FIELD"},
     IssueCode: {
-        "LINE_MATH", "ITEMS_VS_SUBTOTAL", "SUBTOTAL_PLUS_TAX_VS_TOTAL", "ITEMS_PLUS_TAX_VS_TOTAL",
+        "LINE_MATH", "ITEM_PRICE_MATH", "ITEMS_VS_SUBTOTAL", "SUBTOTAL_PLUS_TAX_VS_TOTAL",
+        "ITEMS_PLUS_TAX_VS_TOTAL",
         "NEGATIVE_ITEM", "CURRENCY_MISMATCH", "EMPTY_RECEIPT",
         "MISSING_STORE", "MISSING_DATE",  # completeness, extraction accuracy (ADR-0017)
     },

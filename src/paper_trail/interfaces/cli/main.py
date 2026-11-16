@@ -260,18 +260,14 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
     ] = None,
     *,
     run: RunOption = None,
-    max_text_attempts: Annotated[
+    max_attempts: Annotated[
         int | None,
-        typer.Option("--max-text-attempts", min=1, help="Extraction attempts on the OCR text."),
+        typer.Option(
+            "--max-attempts", min=1, max=2, help="Claude reads per receipt (2: one retry)."
+        ),
     ] = None,
     no_feedback: Annotated[
         bool, typer.Option("--no-feedback", help="Retry with a generic line, not the issues.")
-    ] = False,
-    no_vision: Annotated[
-        bool, typer.Option("--no-vision", help="No vision re-read (max vision attempts 0).")
-    ] = False,
-    no_examples: Annotated[
-        bool, typer.Option("--no-examples", help="Leave the few-shot examples out of prompts.")
     ] = False,
     no_catalog: Annotated[
         bool,
@@ -283,17 +279,7 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
             ),
         ),
     ] = False,
-    prompt_version: Annotated[
-        str | None,
-        typer.Option("--prompt-version", metavar="V", help="Extraction prompt version, e.g. v1."),
-    ] = None,
     transport: TransportOption = None,
-    text_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--text-file", metavar="FILE", help="Process OCR text from a file instead of images."
-        ),
-    ] = None,
     interrupt_after: Annotated[
         str | None,
         typer.Option(
@@ -312,12 +298,19 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
     ] = None,
     reprocess: Annotated[
         bool,
-        typer.Option("--reprocess", help="Run already stored photos again (from their OCR text)."),
+        typer.Option("--reprocess", help="Read already stored photos again with Claude."),
     ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Also print the feedback and the model's answers.")
     ] = False,
     no_color: Annotated[bool, typer.Option("--no-color", help="Plain text output.")] = False,
+    table: Annotated[
+        bool,
+        typer.Option(
+            "--table",
+            help="End with a table per receipt: store, sums, models, attempts and cost.",
+        ),
+    ] = False,
 ) -> None:
     """Process receipts through the agents and print a trace per receipt."""
     from paper_trail.interfaces.cli.process import (
@@ -330,35 +323,30 @@ def process(  # noqa: PLR0913 - one parameter per command-line option
     configure_agent_logging(settings)
     options = ProcessOptions(
         run=run,
-        max_text_attempts=max_text_attempts,
+        max_attempts=max_attempts,
         feedback=not no_feedback,
-        vision=not no_vision,
-        examples=not no_examples,
         catalog=not no_catalog,
-        prompt_version=prompt_version,
         transport=transport,
         interrupt_after=interrupt_after,
         reprocess=reprocess,
         verbose=verbose,
         color=not no_color,
+        table=table,
     )
     if resume is None:
-        process_receipts(settings, paths or [], text_file, options)
+        process_receipts(settings, paths or [], options)
         return
-    if paths or text_file is not None or reprocess or interrupt_after is not None:
+    if paths or reprocess or interrupt_after is not None:
         fail(
             EXIT_INVALID_INPUT,
-            "--resume ID continues a stored receipt: it takes no PATH, --text-file,"
-            " --reprocess or --interrupt-after",
+            "--resume ID continues a stored receipt: it takes no PATH, --reprocess or"
+            " --interrupt-after",
         )
     # A resumed thread keeps the configuration it started with (slice C review note 5).
     changing = {
-        "--max-text-attempts": max_text_attempts is not None,
+        "--max-attempts": max_attempts is not None,
         "--no-feedback": no_feedback,
-        "--no-vision": no_vision,
-        "--no-examples": no_examples,
         "--no-catalog": no_catalog,
-        "--prompt-version": prompt_version is not None,
     }
     if refused := [flag for flag, given in changing.items() if given]:
         fail(
@@ -417,7 +405,8 @@ def review_resolve(  # noqa: PLR0913 - one parameter per command-line option
     ] = None,
     run: RunOption = None,
 ) -> None:
-    """Resolve a review: resume the receipt's graph with a corrected or accepted draft."""
+    """Resolve a review: resume the receipt's graph with a corrected draft, or accept the
+    extraction it holds (the graph then saves it as it would have without a review)."""
     from paper_trail.interfaces.cli.review import resolve_review
 
     settings = load_settings()
@@ -433,7 +422,7 @@ def tools_list(
     ] = None,
     transport: TransportOption = None,
 ) -> None:
-    """List the tools each role may call. Needs neither a database nor the LLM host."""
+    """List the tools each role may call. Needs neither a database nor Claude."""
     from paper_trail.interfaces.cli.tools import list_tools
 
     settings = with_transport(load_settings(), transport)
@@ -682,7 +671,7 @@ def graph(
         bool, typer.Option("--mermaid", help="Print the graph as a Mermaid diagram.")
     ] = False,
 ) -> None:
-    """Print the agents' graph. Needs neither a database nor the LLM host."""
+    """Print the agents' graph. Needs neither a database nor Claude."""
     from paper_trail.bootstrap.agents import receipt_graph_mermaid
 
     if not mermaid:

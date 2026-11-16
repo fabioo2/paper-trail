@@ -13,25 +13,21 @@ Pinned:
   ``ea`` and ``@``/``x`` markers around the number are dropped.
 - ``parse_unit_price(text | None) -> int | None`` is lenient: unreadable is None; ``N/$X`` is
   X/N rounded half-up.
-- ``line_kind(kind, cents) -> (LineKind, cents)``: negative or ``discount`` -> DISCOUNT with a
-  negative amount; anything else as given.
 """
 
 from decimal import Decimal
+from fractions import Fraction
 
 import pytest
 
-from paper_trail.domain.enums import LineKind
 from paper_trail.domain.errors import PrintedValueError
 from paper_trail.domain.rules.printed import (
     TaxReading,
-    is_item_reference,
-    line_kind,
-    line_quantity,
     parse_amount,
     parse_quantity,
     parse_tax,
     parse_unit_price,
+    parse_unit_price_exact,
     printed_tax,
 )
 
@@ -134,31 +130,21 @@ def test_ea_ac_02_unit_prices_are_parsed_leniently(text: str | None, cents: int 
     assert parse_unit_price(text) == cents
 
 
-# --- EA-AC-03: sign and kind ---------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
-    ("kind", "cents", "expected"),
+    ("text", "cents"),
     [
-        (LineKind.ITEM, -400, (LineKind.DISCOUNT, -400)),  # an "item" printed 4.00-
-        (LineKind.DISCOUNT, 400, (LineKind.DISCOUNT, -400)),  # a discount printed 4.00
-        (LineKind.DISCOUNT, -400, (LineKind.DISCOUNT, -400)),
-        (LineKind.ITEM, 899, (LineKind.ITEM, 899)),
-        (LineKind.DEPOSIT, 10, (LineKind.DEPOSIT, 10)),
-        (LineKind.FEE, 25, (LineKind.FEE, 25)),
+        ("2 for 5.00", Fraction(250)),
+        ("2 for $5.00", Fraction(250)),
+        (".99/lb", Fraction(99)),
+        ("1.99 ea", Fraction(199)),
+        ("1.99 each", Fraction(199)),
+        ("$2.18/kg", Fraction(218)),
+        ("3/$10.00", Fraction(1000, 3)),
     ],
 )
-def test_ea_ac_03_the_sign_decides_the_kind(
-    kind: LineKind, cents: int, expected: tuple[LineKind, int]
-) -> None:
-    assert line_kind(kind, cents) == expected
-
-
-@pytest.mark.parametrize("kind", list(LineKind))
-@pytest.mark.parametrize("cents", [-1, -400, -129900])
-def test_ea_ac_03_a_negative_line_is_always_a_discount(kind: LineKind, cents: int) -> None:
-    """Property: a negative charge (item, deposit, fee) cannot survive the conversion."""
-    assert line_kind(kind, cents) == (LineKind.DISCOUNT, cents)
+def test_c14_printed_unit_prices_parse_exactly(text: str, cents: Fraction) -> None:
+    """Ruling C14: "N for X" is X/N, a unit suffix is ignored, ".99" is 0.99."""
+    assert parse_unit_price_exact(text) == cents
 
 
 # --- fix round (review findings 4 and 6, real-run findings 7 and 8) ------------------------------
@@ -186,39 +172,6 @@ def test_review_6_a_whole_detail_line_gives_its_leading_quantity(
     text: str, quantity: Decimal
 ) -> None:
     assert parse_quantity(text) == quantity
-
-
-@pytest.mark.parametrize(
-    ("quantity", "unit", "cents", "expected"),
-    [
-        (Decimal("1.5"), 1099, 1099, Decimal(1)),  # "KIMCHI 1.5KG": the size, not a quantity
-        (Decimal(15), 1099, 1099, Decimal(1)),  # "DOUGHNUTS 15": a count in the name
-        (Decimal(2), 329, 658, Decimal(2)),
-        (Decimal("0.460"), 331, 152, Decimal("0.460")),
-        (Decimal(3), None, 999, Decimal(3)),
-        (Decimal(2), 500, None, Decimal(2)),  # no amount printed (a multi-buy group)
-    ],
-)
-def test_real_run_7_a_unit_price_equal_to_the_amount_means_one_unit(
-    quantity: Decimal, unit: int | None, cents: int | None, expected: Decimal
-) -> None:
-    assert line_quantity(quantity, unit, cents) == expected
-
-
-@pytest.mark.parametrize(
-    "raw_text",
-    ["0000392208 / 1362394", "0000398549 / MULTIPLE", "  1234/5678", "1362394/TPD"],
-)
-def test_real_run_8_a_reference_to_another_item_is_a_discount(raw_text: str) -> None:
-    assert is_item_reference(raw_text)
-
-
-@pytest.mark.parametrize(
-    "raw_text",
-    ["2 @ 2/$10.00", "1/2 PRICE CAKE", "TPD/1362394", "1362394 CHOC PISTACH", "123 / ABC", ""],
-)
-def test_real_run_8_other_lines_are_not_references(raw_text: str) -> None:
-    assert not is_item_reference(raw_text)
 
 
 # --- real run 2026-11-08 (Superstore): a tax the vision model read where none is printed --------

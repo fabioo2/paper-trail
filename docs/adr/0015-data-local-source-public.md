@@ -4,7 +4,7 @@ Date: 2026-11-06
 
 ## Status
 
-Accepted
+Accepted; amended by [ADR-0019](0019-claude-reads-receipts.md): the source and the data stay as decided, but each receipt photo is now sent to Anthropic to be read
 
 ## Context
 

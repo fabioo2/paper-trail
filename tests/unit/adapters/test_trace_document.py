@@ -45,10 +45,8 @@ def test_ac_a_09_document_fields_follow_the_plan() -> None:
     assert fields("TraceConfig") == {
         "models",
         "prompt_versions",
-        "examples",
         "feedback",
-        "max_text_attempts",
-        "max_vision_attempts",
+        "max_attempts",  # GRAPH__MAX_ATTEMPTS (claude-extraction plan TF)
         "enrichment",  # slice D: GRAPH__ENRICHMENT (docs/tests/agent-core-D.md)
         "catalog",  # product codes: CATALOG__ENABLED (PC-TC-84)
         "transport",
@@ -56,12 +54,11 @@ def test_ac_a_09_document_fields_follow_the_plan() -> None:
     assert fields("TraceOutcome") == {"status", "review_id", "review_reason", "resumed_from"}
     assert fields("TraceTotals") == {
         "llm_calls",
-        "prompt_tokens",
-        "completion_tokens",
+        "input_tokens",
+        "output_tokens",
         "tool_calls",
         "tool_denied",
-        "text_attempts",
-        "vision_attempts",
+        "attempts",
     }
     assert fields("TraceEventOut") == {
         "seq",

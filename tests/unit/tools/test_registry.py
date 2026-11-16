@@ -18,8 +18,10 @@ Pinned (docs/tests/agent-core-A.md and agent-core-B.md):
 - The allowlist is PLAN 7's table. The matrix below is generated from the registry, so a tool
   added in slice C or D is checked as soon as it is registered; it needs an entry in
   ``PLAN_ALLOWLIST`` (already there for the planned tools) and one in ``SAMPLE_PAYLOADS``.
-- Slice C registers ``product_lookup``, ``product_similarity_search`` and ``save_matches``
-  (docs/tests/agent-core-C.md; their behaviour is in ``tests/contract/test_matching_tools.py``).
+- Slice C registers ``product_lookup`` and ``save_matches`` (docs/tests/agent-core-C.md; their
+  behaviour is in ``tests/contract/test_matching_tools.py``).
+- Claude extraction (CE-TC-034, plan V2) removes ``ocr_read`` and ``product_similarity_search``:
+  both are unknown tools now, for every role; each role's list is pinned literally.
 - Slice D registered ``save_enrichment``; product codes (barcode-lookup PR 1a, PC-TC-43) remove
   it (``UnknownToolError``) and register ``catalog_lookup`` (MATCHING, ENRICHMENT, read-only) and
   ``describe_from_catalog`` (SUPERVISOR, a write); their behaviour is in
@@ -45,16 +47,15 @@ from paper_trail.ports.tools import (
     UnknownToolError,
 )
 from paper_trail.tools.models import (
+    CheckArithmeticInput,
     CheckArithmeticOutput,
-    OcrReadInput,
-    OcrReadOutput,
+    OpenReviewOutput,
 )
 from paper_trail.tools.registry import ToolRegistry, ToolSpec
 from tests.agent_harness import Harness, build_harness
 from tests.extractions import extraction, without_confidence
 from tests.factories import product, receipt, receipt_draft
-from tests.fakes.images import fake_png
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.storage import in_unit
 from tests.support import require_id
 
@@ -66,10 +67,8 @@ SUPERVISOR = AgentRole.SUPERVISOR
 
 # PLAN 7 / agent-core plan 2.3: specialists only read; every write is a supervisor tool.
 PLAN_ALLOWLIST: dict[str, frozenset[AgentRole]] = {
-    "ocr_read": frozenset({EXTRACTION}),
     "check_arithmetic": frozenset({VALIDATION}),
     "product_lookup": frozenset({MATCHING, ENRICHMENT}),
-    "product_similarity_search": frozenset({MATCHING}),
     "save_receipt": frozenset({SUPERVISOR}),
     "open_review": frozenset({SUPERVISOR}),
     "save_matches": frozenset({SUPERVISOR}),
@@ -77,11 +76,11 @@ PLAN_ALLOWLIST: dict[str, frozenset[AgentRole]] = {
     "describe_from_catalog": frozenset({SUPERVISOR}),
 }
 WRITE_TOOLS = frozenset({"save_receipt", "open_review", "save_matches", "describe_from_catalog"})
-SLICE_A_TOOLS = frozenset({"ocr_read", "check_arithmetic", "save_receipt", "open_review"})
-SLICE_C_TOOLS = frozenset({"product_lookup", "product_similarity_search", "save_matches"})
+SLICE_A_TOOLS = frozenset({"check_arithmetic", "save_receipt", "open_review"})
+SLICE_C_TOOLS = frozenset({"product_lookup", "save_matches"})
 CATALOG_TOOLS = frozenset({"catalog_lookup", "describe_from_catalog"})
 
-REGISTERED = tuple(spec.name for spec in build_harness(ScriptedLlm()).registry.specs)
+REGISTERED = tuple(spec.name for spec in build_harness(ScriptedReader()).registry.specs)
 
 
 def _processing_receipt(harness: Harness) -> int:
@@ -89,12 +88,8 @@ def _processing_receipt(harness: Harness) -> int:
     return require_id(in_unit(harness.uow_factory, lambda uow: uow.receipts.add(stored)).id)
 
 
-def _ocr_read(harness: Harness) -> dict[str, JsonValue]:
-    return {"image_path": harness.images.save(fake_png("matrix")).relative_path}
-
-
 def _check_arithmetic(_: Harness) -> dict[str, JsonValue]:
-    return {"receipt": without_confidence(extraction())}
+    return _check_arithmetic_payload()
 
 
 def _save_receipt(harness: Harness) -> dict[str, JsonValue]:
@@ -114,10 +109,6 @@ def _open_review(harness: Harness) -> dict[str, JsonValue]:
 
 def _product_lookup(_: Harness) -> dict[str, JsonValue]:
     return {"alias": "KS ORG EGGS 24CT", "store_key": "costco"}
-
-
-def _product_similarity_search(_: Harness) -> dict[str, JsonValue]:
-    return {"text": "ks org eggs 24ct", "k": 3}
 
 
 def _save_matches(harness: Harness) -> dict[str, JsonValue]:
@@ -150,12 +141,10 @@ def _describe_from_catalog(harness: Harness) -> dict[str, JsonValue]:
 
 # A valid payload per registered tool, so every allowed pair is shown to succeed.
 SAMPLE_PAYLOADS: dict[str, Callable[[Harness], dict[str, JsonValue]]] = {
-    "ocr_read": _ocr_read,
     "check_arithmetic": _check_arithmetic,
     "save_receipt": _save_receipt,
     "open_review": _open_review,
     "product_lookup": _product_lookup,
-    "product_similarity_search": _product_similarity_search,
     "save_matches": _save_matches,
     "catalog_lookup": _catalog_lookup,
     "describe_from_catalog": _describe_from_catalog,
@@ -175,7 +164,7 @@ DENIED = [
 
 @pytest.fixture
 def harness() -> Harness:
-    return build_harness(ScriptedLlm())
+    return build_harness(ScriptedReader())
 
 
 @pytest.fixture
@@ -243,58 +232,88 @@ def test_s5_ac_01_every_other_pair_is_denied_logged_and_raised(
     assert denied[0]["log_level"] == "warning"
 
 
-@pytest.mark.parametrize("tool", ["no_such_tool", "save_enrichment"])
-def test_unknown_tools_are_reported(registry: ToolRegistry, tool: str) -> None:
+# CE-TC-034: the lists after Claude extraction, literally (no OCR tool, no similarity search).
+ROLE_TOOLS: dict[AgentRole, tuple[str, ...]] = {
+    EXTRACTION: (),
+    VALIDATION: ("check_arithmetic",),
+    MATCHING: ("catalog_lookup", "product_lookup"),
+    ENRICHMENT: ("catalog_lookup", "product_lookup"),
+    SUPERVISOR: ("describe_from_catalog", "open_review", "save_matches", "save_receipt"),
+}
+
+
+def test_ce_tc_034_each_roles_tool_list_is_exactly_the_planned_one(
+    registry: ToolRegistry,
+) -> None:
+    assert {role: registry.for_role(role).names for role in AgentRole} == ROLE_TOOLS
+
+
+@pytest.mark.parametrize(
+    ("role", "tool"),
+    [
+        *[(role, "ocr_read") for role in AgentRole],
+        *[(role, "product_similarity_search") for role in AgentRole],
+        (SUPERVISOR, "no_such_tool"),
+        (SUPERVISOR, "save_enrichment"),
+    ],
+)
+def test_unknown_tools_are_reported(registry: ToolRegistry, role: AgentRole, tool: str) -> None:
     with pytest.raises(UnknownToolError, match=tool):
-        registry.for_role(SUPERVISOR).call(tool, {})
+        registry.for_role(role).call(tool, {})
 
 
 # --- S5-AC-02: input and output validated ---------------------------------------------------------
 
 
 def test_s5_ac_02_invalid_input_names_the_field(registry: ToolRegistry) -> None:
-    with pytest.raises(ToolInputError, match="image_path"):
-        registry.for_role(EXTRACTION).call("ocr_read", {"image_path": 42})
-    with pytest.raises(ToolInputError, match="image_path"):
-        registry.for_role(EXTRACTION).call("ocr_read", {})
+    with pytest.raises(ToolInputError, match="receipt"):
+        registry.for_role(VALIDATION).call("check_arithmetic", {"receipt": 42})
+    with pytest.raises(ToolInputError, match="receipt"):
+        registry.for_role(VALIDATION).call("check_arithmetic", {})
 
 
 def test_s5_ac_02_unexpected_input_fields_are_refused(registry: ToolRegistry) -> None:
+    payload = {**_check_arithmetic_payload(), "sneaky": True}
     with pytest.raises(ToolInputError, match="sneaky"):
-        registry.for_role(EXTRACTION).call("ocr_read", {"image_path": "a.jpg", "sneaky": True})
+        registry.for_role(VALIDATION).call("check_arithmetic", payload)
 
 
-def _one_tool_registry(handler: Callable[[OcrReadInput], BaseModel]) -> ToolRegistry:
-    """``ocr_read`` declared with a handler that returns something else than its output."""
+def _check_arithmetic_payload() -> dict[str, JsonValue]:
+    return {"receipt": without_confidence(extraction())}
+
+
+def _one_tool_registry(handler: Callable[[CheckArithmeticInput], BaseModel]) -> ToolRegistry:
+    """``check_arithmetic`` declared with a handler that returns something else than its
+    output."""
     return ToolRegistry(
         (
-            ToolSpec[OcrReadInput, Any](
-                name="ocr_read",
+            ToolSpec[CheckArithmeticInput, Any](
+                name="check_arithmetic",
                 description="A tool whose handler misbehaves.",
-                input_model=OcrReadInput,
-                output_model=OcrReadOutput,
+                input_model=CheckArithmeticInput,
+                output_model=CheckArithmeticOutput,
                 handler=handler,
-                roles=frozenset({EXTRACTION}),
+                roles=frozenset({VALIDATION}),
             ),
         )
     )
 
 
 def test_s5_ac_02_output_that_does_not_validate_is_an_output_error() -> None:
-    invalid: dict[str, Any] = {"text": 5, "mean_confidence": "high", "masked_pans": 0}
-    broken = _one_tool_registry(lambda _: OcrReadOutput.model_construct(**invalid))
+    invalid: dict[str, Any] = {"ok": "maybe", "issues": 5}
+    broken = _one_tool_registry(lambda _: CheckArithmeticOutput.model_construct(**invalid))
 
-    with pytest.raises(ToolOutputError, match="ocr_read") as raised:
-        broken.for_role(EXTRACTION).call("ocr_read", {"image_path": "a.jpg"})
+    with pytest.raises(ToolOutputError, match="check_arithmetic") as raised:
+        broken.for_role(VALIDATION).call("check_arithmetic", _check_arithmetic_payload())
 
     assert not isinstance(raised.value, ToolError)  # a bug in the tool, not the caller's fault
 
 
 def test_s5_ac_02_output_of_the_wrong_model_is_an_output_error() -> None:
-    wrong = _one_tool_registry(lambda _: CheckArithmeticOutput(ok=True, issues=[]))
+    wrong = _one_tool_registry(lambda _: OpenReviewOutput(review_id=1))
 
-    with pytest.raises(ToolOutputError, match="ocr_read"):
-        wrong.for_role(EXTRACTION).call("ocr_read", {"image_path": "a.jpg"})
+    with pytest.raises(ToolOutputError, match="check_arithmetic"):
+        wrong.for_role(VALIDATION).call("check_arithmetic", _check_arithmetic_payload())
 
 
 # --- the registry itself ------------------------------------------------------------------------
@@ -308,17 +327,15 @@ def test_two_tools_with_one_name_are_refused(registry: ToolRegistry) -> None:
 
 
 def test_a_tool_no_role_may_call_is_refused() -> None:
-    with pytest.raises(ValueError, match="ocr_read"):
+    with pytest.raises(ValueError, match="check_arithmetic"):
         ToolRegistry(
             (
                 ToolSpec(
-                    name="ocr_read",
+                    name="check_arithmetic",
                     description="Nobody may call this.",
-                    input_model=OcrReadInput,
-                    output_model=OcrReadOutput,
-                    handler=lambda _: OcrReadOutput(
-                        text="", mean_confidence=None, rotation_degrees=0, masked_pans=0
-                    ),
+                    input_model=CheckArithmeticInput,
+                    output_model=CheckArithmeticOutput,
+                    handler=lambda _: CheckArithmeticOutput(ok=True, issues=[]),
                     roles=frozenset(),
                 ),
             )

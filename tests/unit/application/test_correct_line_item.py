@@ -14,7 +14,7 @@ Pinned (docs/tests/agent-core-C.md):
   None, ``new_value`` the new product id, the receipt's ``store_key``, ``receipt_id``,
   ``line_item_id``); a USER_CORRECTION alias (alias, store) for that product. With ``category``
   also a CATEGORY correction (subject: the alias, ``new_value`` the category, the store).
-- No embedding and no LLM call.
+- No Claude call.
 - Product codes (barcode-lookup plan R10, TQ12; PC-TC-73..75): when the line's raw text parses
   to a code at the receipt's store, the same unit upserts it to the target with source
   ``correction`` (a person's: it replaces another product's mapping) and logs
@@ -44,7 +44,6 @@ from paper_trail.domain.trace import TraceKind
 from tests.agent_harness import Harness, build_harness
 from tests.extractions import (
     C1,
-    COSTCO_OCR,
     EGGS_ALIAS,
     L1,
     L4,
@@ -55,18 +54,24 @@ from tests.extractions import (
     STORE_KEY,
     STORE_NAME,
     U1,
-    coded_extraction,
-    extraction,
+    answer,
+    coded_answer,
 )
 from tests.factories import TEST_PAN, cad, line_item, product, receipt, simple_draft
-from tests.fakes.llm import Reply, ScriptedLlm
+from tests.fakes.reader import Reply, ScriptedReader
 from tests.storage import in_unit
 from tests.support import require_id
 
 
+def _reader(harness: Harness) -> ScriptedReader:
+    reader = harness.reader
+    assert isinstance(reader, ScriptedReader)
+    return reader
+
+
 def _processed(*replies: Reply) -> tuple[Harness, int]:
-    harness = build_harness(ScriptedLlm(extraction(), *replies))
-    outcome = harness.process_text(COSTCO_OCR, "a.txt")
+    harness = build_harness(ScriptedReader(answer(), *replies))
+    outcome = harness.process_image("a")
     assert outcome.graph is not None
     return harness, outcome.receipt_id
 
@@ -81,7 +86,7 @@ def test_s4_ac_06_relinks_moves_the_price_and_remembers() -> None:
     before = harness.line(receipt_id, 0)
     old = require_id(before.product_id)
     target = _other_product(harness)
-    calls = (harness.llm.calls, harness.embeddings.calls)
+    calls = _reader(harness).calls
 
     corrected = harness.correct(receipt_id, 0, product_id=target)
 
@@ -98,23 +103,20 @@ def test_s4_ac_06_relinks_moves_the_price_and_remembers() -> None:
     assert harness.find_by_alias(EGGS_ALIAS, STORE_KEY) == harness.product(target)
     sources = {(alias.alias, alias.store_key, alias.source) for alias in harness.aliases(target)}
     assert (EGGS_ALIAS, STORE_KEY, AliasSource.USER_CORRECTION) in sources
-    assert (harness.llm.calls, harness.embeddings.calls) == calls
+    assert _reader(harness).calls == calls
     assert harness.line(receipt_id, 1).match_source is MatchSource.NEW  # other lines untouched
 
 
 def test_s4_ac_06_the_next_receipt_links_through_memory() -> None:
-    harness, first = _processed(extraction())
+    harness, first = _processed(answer())
     target = _other_product(harness)
     harness.correct(first, 0, product_id=target)
-    embeddings_before = harness.embeddings.calls
 
-    second = harness.process_text(COSTCO_OCR, "b.txt").receipt_id
+    second = harness.process_image("b").receipt_id
 
     line = harness.line(second, 0)
     assert (line.product_id, line.match_source) == (target, MatchSource.MEMORY)
-    assert harness.embeddings.calls == embeddings_before
-    steps = harness.steps(second)
-    assert (TraceKind.TOOL, "product_similarity_search") not in steps
+    assert (TraceKind.TOOL, "product_lookup") in harness.steps(second)
 
 
 @pytest.mark.parametrize(
@@ -217,7 +219,7 @@ def test_unknown_things_are_not_found_and_nothing_changes(
 def test_tc_63_a_corrected_discounted_line_keeps_its_discount() -> None:
     """TC-63 (R8, wiring of TC-83): the observation moved to the new product is still the one
     with discount -5.00 and paid 3.99."""
-    harness = build_harness(ScriptedLlm())
+    harness = build_harness(ScriptedReader())
     recorded = harness.record(simple_draft(product_names={0: "Eggs"})).receipt
     receipt_id = require_id(recorded.id)
     target = _other_product(harness)
@@ -237,8 +239,8 @@ def test_tc_63_a_corrected_discounted_line_keeps_its_discount() -> None:
 
 
 def _coded(raw_text: str, store_name: str, *more: dict[str, Any]) -> tuple[Harness, int]:
-    harness = build_harness(ScriptedLlm(coded_extraction([raw_text], store_name=store_name), *more))
-    outcome = harness.process_text(COSTCO_OCR, "a.txt")
+    harness = build_harness(ScriptedReader(coded_answer([raw_text], store_name=store_name), *more))
+    outcome = harness.process_image("a")
     assert outcome.graph is not None
     return harness, outcome.receipt_id
 
@@ -290,7 +292,7 @@ def test_pc_tc_73_correcting_a_coded_line_teaches_the_code(
 
 
 def test_pc_tc_74_a_correction_replaces_the_mapping_and_the_next_receipt_follows() -> None:
-    again = coded_extraction([C1], store_name=STORE_NAME)
+    again = coded_answer([C1], store_name=STORE_NAME)
     harness, first = _coded(C1, STORE_NAME, again, again)
     printed = require_id(harness.line(first, 0).product_id)
     assert _codes(harness) == [
@@ -302,7 +304,7 @@ def test_pc_tc_74_a_correction_replaces_the_mapping_and_the_next_receipt_follows
     assert _codes(harness) == [
         (CodeScheme.STORE, STORE_KEY, "1362394", named, CodeSource.CORRECTION)
     ]
-    second = harness.process_text(COSTCO_OCR, "b.txt").receipt_id
+    second = harness.process_image("b").receipt_id
     assert (harness.line(second, 0).product_id, harness.match_sources(second)) == (
         named,
         [MatchSource.CATALOG],
@@ -313,7 +315,7 @@ def test_pc_tc_74_a_correction_replaces_the_mapping_and_the_next_receipt_follows
     assert _codes(harness) == [
         (CodeScheme.STORE, STORE_KEY, "1362394", printed, CodeSource.CORRECTION)
     ]
-    third = harness.process_text(COSTCO_OCR, "c.txt").receipt_id
+    third = harness.process_image("c").receipt_id
     assert (harness.line(third, 0).product_id, harness.match_sources(third)) == (
         printed,
         [MatchSource.CATALOG],
@@ -323,7 +325,7 @@ def test_pc_tc_74_a_correction_replaces_the_mapping_and_the_next_receipt_follows
 def test_correcting_a_store_code_on_a_receipt_without_a_store_teaches_no_code() -> None:
     """Fable P2: a store's own code names nothing without a store; the correction is saved and
     no code row is written (the CHECK would refuse one and roll the correction back)."""
-    harness = build_harness(ScriptedLlm())
+    harness = build_harness(ScriptedReader())
     stored = receipt(store_name="", store_key="", items=(line_item(position=0, raw_text=L5),))
     receipt_id = require_id(in_unit(harness.uow_factory, lambda uow: uow.receipts.add(stored)).id)
 
@@ -338,7 +340,7 @@ def test_correcting_a_store_code_on_a_receipt_without_a_store_teaches_no_code() 
 def test_correcting_a_discount_line_teaches_no_code() -> None:
     """A discount's reference (``0000392208 / 1362394``) reads like a Costco code but names no
     product: only ITEM lines teach their code."""
-    harness = build_harness(ScriptedLlm())
+    harness = build_harness(ScriptedReader())
     discount = line_item(
         position=0,
         kind=LineKind.DISCOUNT,

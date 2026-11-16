@@ -2,7 +2,9 @@
 
 Slice A ships ``process``, ``review list|show|resolve`` and ``graph``; slice B ``tools`` and
 ``mcp``; slice C the ``process`` flags ``--interrupt-after``, ``--resume``, ``--reprocess`` and
-``items correct`` (docs/tests/agent-core-C.md).
+``items correct`` (docs/tests/agent-core-C.md). Since Claude reads receipts the OCR, vision and
+prompt flags are gone (claude-extraction plan V7, DEL; their refusal is CE-TC-058 in
+``tests/e2e``).
 
 Slice B review note 3 (pinned in docs/tests/agent-core-C.md): one helper,
 ``paper_trail.interfaces.cli.options.with_transport(settings, transport) -> Settings``, applies
@@ -23,13 +25,8 @@ runner = CliRunner()
 
 PROCESS_FLAGS = (
     "--run",
-    "--max-text-attempts",
     "--no-feedback",
-    "--no-vision",
-    "--no-examples",
-    "--prompt-version",
     "--transport",
-    "--text-file",
     "--verbose",
     "--no-color",
     "--interrupt-after",  # slice C
@@ -155,27 +152,16 @@ def test_review_note_3_process_flags_apply_the_transport_the_same_way() -> None:
 @pytest.mark.parametrize(
     "flags",
     [
-        ("--prompt-version", "v1"),
-        ("--no-examples",),
         ("--no-feedback",),
-        ("--max-text-attempts", "3"),
-        ("--no-vision",),
         ("--no-catalog",),
     ],
-    ids=[
-        "prompt-version",
-        "no-examples",
-        "no-feedback",
-        "max-text-attempts",
-        "no-vision",
-        "no-catalog",
-    ],
+    ids=["no-feedback", "no-catalog"],
 )
 def test_review_note_5_resume_refuses_flags_that_would_change_the_run(
     flags: tuple[str, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A resumed thread continues with the configuration it started with: a flag that would
-    change the graph's prompts, attempts or feedback mid-run is a usage error, before anything
+    change the graph's feedback or matching mid-run is a usage error, before anything
     is opened."""
     monkeypatch.setenv("PAPER_TRAIL_DATA_DIR", str(tmp_path / "data"))
 
@@ -185,18 +171,6 @@ def test_review_note_5_resume_refuses_flags_that_would_change_the_run(
     assert "No such option" not in result.output  # refused by the command, not unknown
     assert flags[0] in result.output
     assert not (tmp_path / "data").exists()
-
-
-def test_slice_d_with_flags_turns_vision_off_and_keeps_enrichment() -> None:
-    """``--no-vision`` (slice A) is what sets ``max_vision_attempts`` to 0 now that the graph
-    has a vision node; no flag changes ``GRAPH__ENRICHMENT``."""
-    settings = Settings(env="test")
-
-    flagged = with_flags(settings, ProcessOptions(vision=False))
-
-    assert flagged.graph.max_vision_attempts == 0
-    assert flagged.graph.enrichment is settings.graph.enrichment
-    assert with_flags(settings, ProcessOptions()).graph.max_vision_attempts == 2  # EA default
 
 
 def test_no_catalog_turns_the_catalog_off_and_nothing_else() -> None:

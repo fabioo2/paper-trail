@@ -1,8 +1,8 @@
 """Matching memory and checkpointer resume on a real database file (agent core slice C).
 
-The application's tables, the sqlite-vec index and LangGraph's ``CheckpointSaver`` share one
-SQLite file, as in production; embeddings are ``FakeEmbeddings`` and the LLM is scripted. Each
-"process" is a new harness with its own checkpointer connection.
+The application's tables and LangGraph's ``CheckpointSaver`` share one SQLite file, as in
+production; Claude is scripted. Each "process" is a new harness with its own checkpointer
+connection.
 
 Covers barcode-lookup PC-TC-65 (codes and aliases persist across processes; a correction
 teaches the code), PC-TC-64 (a crash after ``save_matches`` resumed in a second process equals an
@@ -33,22 +33,21 @@ from paper_trail.ports.tools import ToolGateway
 from tests.agent_harness import Harness, agent_settings, build_harness
 from tests.extractions import (
     C1,
-    COSTCO_OCR,
     L4,
     LOBLAWS_KEY,
     NOW,
     PLU_CSV,
     STORE_KEY,
     U1,
-    coded_extraction,
-    extraction,
-    one_line_extraction,
+    answer,
+    coded_answer,
+    item,
+    receipt_answer,
 )
 from tests.factories import product
 from tests.fakes.clock import FakeClock
-from tests.fakes.embeddings import FakeEmbeddings
 from tests.fakes.images import FakeImageStore
-from tests.fakes.llm import Reply, ScriptedLlm
+from tests.fakes.reader import Reply, ScriptedReader
 from tests.fakes.tools import CrashAfterToolGateway
 from tests.storage import sqlite_uow_factory
 from tests.support import require_id
@@ -83,13 +82,12 @@ def process_on(migrated_engine: Engine, database: Path, plu: Path) -> Iterator[S
         connections.append(connection)
         clock = FakeClock(NOW)
         return build_harness(
-            ScriptedLlm(*replies),
+            ScriptedReader(*replies),
             settings=agent_settings(enrichment=enrichment),
             clock=clock,
             uow_factory=sqlite_uow_factory(migrated_engine, clock),
             checkpointer=CheckpointSaver(connection),
             images=images,
-            embeddings=FakeEmbeddings(),
             catalog=PluCatalog(plu),
             wrap_tools=wrap_tools,
         )
@@ -97,6 +95,12 @@ def process_on(migrated_engine: Engine, database: Path, plu: Path) -> Iterator[S
     yield start
     for connection in connections:
         connection.close()
+
+
+def _calls(harness: Harness) -> int:
+    reader = harness.reader
+    assert isinstance(reader, ScriptedReader)
+    return reader.calls
 
 
 def _codes(harness: Harness) -> list[tuple[CodeScheme, str, str, int, CodeSource]]:
@@ -108,13 +112,11 @@ def _codes(harness: Harness) -> list[tuple[CodeScheme, str, str, int, CodeSource
 
 
 def test_pc_tc_65_codes_and_aliases_persist_across_processes(process_on: StartProcess) -> None:
-    receipt = one_line_extraction(C1)
-    receipt["items"] += one_line_extraction(U1)["items"]
-    receipt["total_cents"] *= 2
+    receipt = receipt_answer([item(C1, "8.99", code="1362394"), item(U1, "8.99")], total="17.98")
 
-    first = process_on(receipt).process_text(f"{C1}\n{U1}", "a.txt").receipt_id
+    first = process_on(receipt).process_image("a").receipt_id
     second_process = process_on(receipt)
-    second = second_process.process_text(f"{C1}\n{U1}", "b.txt").receipt_id
+    second = second_process.process_image("b").receipt_id
 
     choc, eggs = (require_id(item.product_id) for item in second_process.receipt(first).items)
     assert second_process.match_sources(first) == [MatchSource.NEW, MatchSource.NEW]
@@ -125,7 +127,7 @@ def test_pc_tc_65_codes_and_aliases_persist_across_processes(process_on: StartPr
 
     corrected = second_process.correct(second, 0, new_product_name="Choc Pistachio Bars")
     third_process = process_on(receipt)
-    third = third_process.process_text(f"{C1}\n{U1}", "c.txt").receipt_id
+    third = third_process.process_image("c").receipt_id
 
     assert [(i.product_id, i.match_source) for i in third_process.receipt(third).items] == [
         (corrected.product_id, MatchSource.CATALOG),
@@ -142,11 +144,11 @@ def test_pc_tc_64_a_second_process_resumes_after_a_crash_in_save_matches(
 ) -> None:
     lines = [C1, C1, L4]
     first = process_on(
-        coded_extraction(lines),
+        coded_answer(lines),
         enrichment=True,
         wrap_tools=lambda gateway: CrashAfterToolGateway(gateway, "save_matches"),
     )
-    crashed = first.process_text("\n".join(lines))
+    crashed = first.process_image()
     assert crashed.failure is not None
 
     second = process_on(enrichment=True)
@@ -154,7 +156,7 @@ def test_pc_tc_64_a_second_process_resumes_after_a_crash_in_save_matches(
 
     assert resumed.graph is not None
     assert resumed.graph.status is ReceiptStatus.COMPLETED
-    assert second.llm.calls == 0
+    assert _calls(second) == 0
     choc, apple = second.product_ids()
     assert [(i.product_id, i.match_source) for i in second.receipt(crashed.receipt_id).items] == [
         (choc, MatchSource.NEW),
@@ -183,7 +185,6 @@ def test_pc_tc_64_a_second_process_resumes_after_a_crash_in_save_matches(
         (CodeScheme.PLU, "", "93101", apple, CodeSource.PLU),
     ]
     assert [len(second.price_history(pid)) for pid in (choc, apple)] == [2, 1]
-    assert (second.has_vector(choc), second.has_vector(apple)) == (False, True)
     describes = [
         event
         for harness in (first, second)
@@ -198,11 +199,11 @@ def test_pc_tc_64_a_persons_remap_before_the_resume_wins(process_on: StartProces
     run links the line there (``catalog``) with its price, and the product the first run
     created is neither priced nor described."""
     first = process_on(
-        coded_extraction([L4]),
+        coded_answer([L4]),
         enrichment=True,
         wrap_tools=lambda gateway: CrashAfterToolGateway(gateway, "save_matches"),
     )
-    crashed = first.process_text(L4)
+    crashed = first.process_image()
     assert crashed.failure is not None
     (created,) = first.product_ids()
     second = process_on(enrichment=True)
@@ -233,16 +234,16 @@ def test_pc_tc_64_a_persons_remap_before_the_resume_wins(process_on: StartProces
 
 
 def test_ac_c_04_a_second_process_resumes_after_the_breakpoint(process_on: StartProcess) -> None:
-    first = process_on(extraction())
-    paused = first.process_text(COSTCO_OCR, interrupt_after="extract_text")
+    first = process_on(answer())
+    paused = first.process_image(interrupt_after="extract")
     assert paused.graph is not None
-    assert paused.graph.paused_at == "extract_text"
+    assert paused.graph.paused_at == "extract"
 
     second = process_on()
     resumed = second.resume(paused.receipt_id)
 
     assert resumed.graph is not None
     assert resumed.graph.status is ReceiptStatus.COMPLETED
-    assert resumed.graph.resumed_from == "extract_text"
-    assert second.llm.calls == 0
+    assert resumed.graph.resumed_from == "extract"
+    assert _calls(second) == 0
     assert second.match_sources(paused.receipt_id) == [MatchSource.NEW] * 3

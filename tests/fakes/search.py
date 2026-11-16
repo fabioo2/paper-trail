@@ -1,20 +1,16 @@
-"""In-memory search indexes (implement ``paper_trail.ports.search``) over a ``FakeState``.
+"""In-memory text search (implements ``paper_trail.ports.search``) over a ``FakeState``.
 
-The text index mimics the SQLite adapter's query semantics (every query token is a prefix term,
-all tokens must match) without FTS5 ranking; the vector index is brute-force cosine distance.
+It mimics the SQLite adapter's query semantics (every query token is a prefix term, all tokens
+must match) without FTS5 ranking.
 """
 
-import math
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 
-from paper_trail.domain.errors import DomainValidationError
-from paper_trail.ports.search import HitKind, TextHit, VectorHit
+from paper_trail.ports.search import HitKind, TextHit
 from tests.fakes.state import FakeState
 from tests.support import require_id
-
-EMBEDDING_DIMENSION = 768
 
 _TOKEN = re.compile(r"[^\W_]+")
 
@@ -52,46 +48,3 @@ class FakeTextSearchIndex:
         ]
         hits.sort(key=lambda hit: (-hit.score, hit.kind, hit.id))
         return tuple(hits[:limit])
-
-
-class FakeVectorIndex:
-    def __init__(self, state: FakeState, dimension: int = EMBEDDING_DIMENSION) -> None:
-        self._state = state
-        self._dimension = dimension
-
-    @property
-    def dimension(self) -> int:
-        return self._dimension
-
-    def upsert(self, product_id: int, vector: Sequence[float]) -> None:
-        self._state.vectors[product_id] = self._checked(vector)
-
-    def delete(self, product_id: int) -> None:
-        self._state.vectors.pop(product_id, None)
-
-    def has(self, product_id: int) -> bool:
-        return product_id in self._state.vectors
-
-    def nearest(self, vector: Sequence[float], *, k: int) -> tuple[VectorHit, ...]:
-        query = self._checked(vector)
-        hits = sorted(
-            (
-                VectorHit(product_id=product_id, distance=_cosine_distance(query, stored))
-                for product_id, stored in self._state.vectors.items()
-            ),
-            key=lambda hit: (hit.distance, hit.product_id),
-        )
-        return tuple(hits[:k])
-
-    def _checked(self, vector: Sequence[float]) -> tuple[float, ...]:
-        if len(vector) != self._dimension:
-            msg = f"expected a vector of length {self._dimension}, got {len(vector)}"
-            raise DomainValidationError(msg)
-        return tuple(float(value) for value in vector)
-
-
-def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
-    norms = math.hypot(*a) * math.hypot(*b)
-    if norms == 0:
-        return 1.0
-    return 1.0 - math.fsum(x * y for x, y in zip(a, b, strict=True)) / norms

@@ -28,10 +28,8 @@ from paper_trail.tools.handlers import (
     catalog_lookup,
     check_arithmetic_tool,
     describe_from_catalog,
-    ocr_read,
     open_review,
     product_lookup,
-    product_similarity_search,
     save_matches,
     save_receipt,
 )
@@ -42,8 +40,6 @@ from paper_trail.tools.models import (
     CheckArithmeticOutput,
     DescribeFromCatalogInput,
     DescribeFromCatalogOutput,
-    OcrReadInput,
-    OcrReadOutput,
     OpenReviewInput,
     OpenReviewOutput,
     ProductLookupInput,
@@ -52,8 +48,6 @@ from paper_trail.tools.models import (
     SaveMatchesOutput,
     SaveReceiptInput,
     SaveReceiptOutput,
-    SimilaritySearchInput,
-    SimilaritySearchOutput,
 )
 
 log = structlog.get_logger(__name__)
@@ -150,14 +144,6 @@ def build_tool_registry(services: ToolServices) -> ToolRegistry:
     return ToolRegistry(
         (
             ToolSpec(
-                name="ocr_read",
-                description="OCR a stored receipt image; card numbers come back masked.",
-                input_model=OcrReadInput,
-                output_model=OcrReadOutput,
-                handler=partial(ocr_read, services),
-                roles=frozenset({AgentRole.EXTRACTION}),
-            ),
-            ToolSpec(
                 name="check_arithmetic",
                 description="Check that lines, subtotal, tax and total of a receipt add up.",
                 input_model=CheckArithmeticInput,
@@ -193,18 +179,10 @@ def build_tool_registry(services: ToolServices) -> ToolRegistry:
                 roles=frozenset({AgentRole.MATCHING, AgentRole.ENRICHMENT}),
             ),
             ToolSpec(
-                name="product_similarity_search",
-                description="The k products whose embeddings are nearest a text, nearest first.",
-                input_model=SimilaritySearchInput,
-                output_model=SimilaritySearchOutput,
-                handler=partial(product_similarity_search, services),
-                roles=frozenset({AgentRole.MATCHING}),
-            ),
-            ToolSpec(
                 name="save_matches",
                 description=(
                     "Link a saved receipt's lines to their products (new ones created), with"
-                    " aliases, vectors and prices, in one transaction."
+                    " aliases and prices, in one transaction."
                 ),
                 input_model=SaveMatchesInput,
                 output_model=SaveMatchesOutput,

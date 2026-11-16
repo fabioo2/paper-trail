@@ -1,5 +1,4 @@
-"""Repository wiring of agent core slice B: the MCP service, its Make targets and dependency,
-and the slice A review note that is about files (note 3).
+"""Repository wiring of agent core slice B: the MCP service, its Make targets and dependency.
 
 Pinned (docs/tests/agent-core-B.md):
 - Runtime dependency ``mcp`` with a lower bound and an upper bound below the next major
@@ -9,7 +8,9 @@ Pinned (docs/tests/agent-core-B.md):
   write), waits for ``migrate``, hardened like the runtime services, with memory and CPU limits.
 - ``make mcp-up`` = ``$(DC) --profile mcp up -d mcp``; ``make mcp-down`` stops and removes only
   the ``mcp`` container (never ``down``, which would stop the whole stack).
-- Review note 3: the ``+noex`` tag suffix is spelled in one source file, ``agents/prompts.py``.
+
+Review note 3 (the ``+noex`` prompt-tag suffix spelled in one file) went with the few-shot
+examples and ``PROMPTS__EXAMPLES`` (claude-extraction plan: one Claude prompt, no examples).
 """
 
 import re
@@ -18,7 +19,6 @@ from typing import Any
 
 from tests.repo.conftest import read_text
 from tests.repo.makefile_parser import Makefile
-from tests.support import REPO_ROOT
 
 APP_IMAGE = "paper-trail:${PAPER_TRAIL_IMAGE_TAG:-latest}"
 
@@ -68,13 +68,3 @@ def test_make_mcp_up_and_down(makefile: Makefile) -> None:
     assert down.startswith("$(DC) --profile mcp ")
     assert down.rstrip().endswith(" mcp")
     assert " down" not in down  # `down` would stop web and worker too
-
-
-def test_review_note_3_the_no_examples_suffix_has_one_source() -> None:
-    sources = sorted(
-        path.relative_to(REPO_ROOT / "src").as_posix()
-        for path in (REPO_ROOT / "src").rglob("*.py")
-        if "+noex" in path.read_text(encoding="utf-8")
-    )
-
-    assert sources == ["paper_trail/agents/prompts.py"]

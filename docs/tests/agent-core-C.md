@@ -150,7 +150,7 @@ Out of slice C, and not tested here:
 - `application/corrections.py`: `CorrectLineItem(uow_factory, clock)`, `__call__(receipt_id, position, *, product_id=None, new_product_name=None, category=None) -> LineItem`. One unit of work: the product (new: name masked, `category`), the line relinked as MEMORY, its price observation moved (never created), a PRODUCT_LINK correction (subject alias, old and new product ids, store, receipt, line), a USER_CORRECTION alias; with `category` also a CATEGORY correction (an existing product's category is left to slice D). No embedding or LLM call. DomainValidationError unless exactly one target; NotFoundError for an unknown receipt, position or product.
 - `ProcessReceiptFile.__call__(source, *, reprocess=False, interrupt_after=None)`. Reprocessing a stored image dismisses the receipt's OPEN review, resets the thread, sets PROCESSING/READING and starts from the stored OCR text (from the image when none is stored); `duplicate=False`, same id.
 - `ProcessReceiptFile.resume(receipt_id) -> ProcessOutcome`: as `__call__` for failures (`ProcessingStoppedError` for a GPU drop, FAILED outcome otherwise); NotFoundError for an unknown receipt; ConflictError naming `review resolve` when it has an OPEN review.
-- A GPU drop while the receipt is PROCESSING sets its stage to WAITING_FOR_GPU; a receipt already saved keeps status and stage.
+- A GPU drop while the receipt is PROCESSING sets its stage to WAITING_FOR_GPU; a receipt already saved keeps status and stage. (Superseded by ADR-0019: there is no GPU PC; a stopped Claude read fails the receipt with its checkpoint, and `WAITING_FOR_GPU` is gone.)
 
 ### CLI
 
@@ -174,4 +174,4 @@ Out of slice C, and not tested here:
 4. **Review note 1 is solved by validation, not derivation**: `MCP__TIMEOUT_S` must exceed the OCR and LLM request timeouts, with a default that does. The 30 s value in `.env.example` must change.
 5. **`process --resume` and `items correct` take `--run`**, and the plan's E2 commands were changed to pass it (and to resume through `make pt`).
 6. **`GraphOutcome.resumed_from`** carries the node a run continued after, so the CLI does not need a separate runner query. A review answer keeps the CLI's existing `resumed_from = "review"`.
-7. **A GPU drop marks the receipt WAITING_FOR_GPU only while it is PROCESSING** (S3-AC-10 says "sets WAITING_FOR_GPU"); after the save, a drop during matching leaves it COMPLETED with unlinked lines until `--resume`.
+7. **A GPU drop marks the receipt WAITING_FOR_GPU only while it is PROCESSING** (S3-AC-10 says "sets WAITING_FOR_GPU"); after the save, a drop during matching leaves it COMPLETED with unlinked lines until `--resume`. (Superseded by ADR-0019: there is no GPU PC; a stopped Claude read fails the receipt with its checkpoint, and `WAITING_FOR_GPU` is gone.)

@@ -25,9 +25,8 @@ from paper_trail.domain.enums import (
     ProcessingStage,
     ReceiptStatus,
 )
-from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
+from paper_trail.domain.errors import DomainValidationError, NotFoundError
 from paper_trail.domain.models import (
-    CONFIRMING_SOURCES,
     PERSON_CODE_SOURCES,
     CodeIdentity,
     Correction,
@@ -38,9 +37,8 @@ from paper_trail.domain.models import (
     Receipt,
     require_id,
 )
-from paper_trail.domain.rules.item_codes import ItemCode, parse_item_code
+from paper_trail.domain.rules.item_codes import ItemCode, parse_code_field, parse_item_code
 from paper_trail.domain.rules.normalization import legacy_alias, normalize_alias
-from paper_trail.ports.embeddings import Vector
 from paper_trail.ports.unit_of_work import UnitOfWork
 
 type RememberedSource = Literal[MatchSource.MEMORY, MatchSource.ALIAS]
@@ -107,7 +105,11 @@ class MatchChoice:
     ``code`` is the line's code identity when it was matched by its code (CATALOG, a MEMORY
     correction of a coded line, or NEW from a coded line); None for an uncoded line or with
     the catalog off. ``name_source`` is where a NEW product's name came from (None:
-    ``receipt_text``); only NEW takes one."""
+    ``receipt_text``); only NEW takes one. ``printed_code`` is the code a reading gave the line
+    (``parse_code_field``), when ``code`` came from it rather than from the line's raw text.
+    ``category_source`` is where the line's own
+    category came from (None: ``person``, a person's draft): ``receipt_text`` for a printed
+    department heading."""
 
     position: int
     source: MatchSource
@@ -115,6 +117,8 @@ class MatchChoice:
     new_product_name: str | None = None
     code: CodeIdentity | None = None
     name_source: FieldSource | None = None
+    category_source: FieldSource | None = None
+    printed_code: str | None = None
 
     def __post_init__(self) -> None:
         if (self.product_id is None) == (self.new_product_name is None):
@@ -176,15 +180,6 @@ class MatchPlan:
     # One product per code identity for coded lines, per alias for uncoded ones, in line order.
     to_create: Mapping[NewProductKey, _NewProduct]
     links: Mapping[int, _Link]  # by position
-
-    @property
-    def to_embed(self) -> Mapping[NewProductKey, str]:
-        """The text to embed for each new product that will be confirmed (named by a source)."""
-        return {
-            key: normalize_alias(wanted.name)
-            for key, wanted in self.to_create.items()
-            if wanted.field_sources.get("canonical_name") in CONFIRMING_SOURCES
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,8 +245,13 @@ def plan_matches(uow: UnitOfWork, receipt_id: int, choices: Sequence[MatchChoice
 def _checked_code(
     choice: MatchChoice, identity: CodeIdentity, line: LineItem, store_key: str
 ) -> ItemCode:
-    """The stored line's code, which must be the choice's."""
-    parsed = parse_item_code(line.raw_text, store_key)
+    """The line's code, which must be the choice's: the code its reading gave it, else the one
+    its raw text starts with."""
+    parsed = (
+        parse_item_code(line.raw_text, store_key)
+        if choice.printed_code is None
+        else parse_code_field(choice.printed_code, store_key)
+    )
     if parsed is None or parsed.identity_at(store_key) != identity:
         msg = (
             f"line {choice.position}: {identity.scheme.value} {identity.store_key}"
@@ -379,17 +379,18 @@ def _new_product(
     uow: UnitOfWork, choice: MatchChoice, line: LineItem, store_key: str
 ) -> _NewProduct:
     """The name's source as decided; the category a person gave the line (a correction at the
-    store, else the draft line's own), never a model's."""
+    store, ``person``), else the line's own with its source (``category_source``: a printed
+    department heading is ``receipt_text``, a person's draft ``person``), never a model's."""
     name_source = choice.name_source or FieldSource.RECEIPT_TEXT
     sources: dict[str, FieldSource] = {"canonical_name": name_source}
     correction = latest_correction(uow, CorrectionKind.CATEGORY, line.raw_text, store_key)
-    category = (
-        Category(correction.new_value)
-        if correction is not None and correction.new_value in Category
-        else line.category
-    )
+    category: Category | None
+    if correction is not None and correction.new_value in Category:
+        category, category_source = Category(correction.new_value), FieldSource.PERSON
+    else:
+        category, category_source = line.category, choice.category_source or FieldSource.PERSON
     if category is not None:
-        sources["category"] = FieldSource.PERSON
+        sources["category"] = category_source
     return _NewProduct(
         str(choice.new_product_name),
         category,
@@ -403,22 +404,17 @@ def record_matches(
     uow: UnitOfWork,
     plan: MatchPlan,
     choices: Sequence[MatchChoice],
-    vectors: Mapping[NewProductKey, Vector],
     now: datetime,
 ) -> MatchesRecorded:
-    """Create the new products (a confirmed one with its vector), link the lines, attach the
-    codes, remember each uncoded line's alias at the store (MATCHED), price every linked ITEM
-    line when the date is known (one with a negative total is left unpriced: a price cannot be
-    negative), and mark the receipt COMPLETED/DONE. ``vectors`` holds the embedding of each key
-    of ``plan.to_embed`` (``plan`` is made in this unit, so it sees the codes as they are now).
+    """Create the new products, link the lines, attach the codes, remember each uncoded line's
+    alias at the store (MATCHED), price every linked ITEM line when the date is known (one with
+    a negative total is left unpriced: a price cannot be negative), and mark the receipt
+    COMPLETED/DONE (``plan`` is made in this unit, so it sees the codes as they are now).
 
     A new product from a coded line gets its code (``plu`` when a source named it, else
     ``receipt``; machine policy), a person's correction of a coded line attaches the code to the
     corrected product (``correction``; person policy), a CATALOG choice whose code was removed
     meanwhile attaches it again (``receipt``), and nothing else attaches one."""
-    if not set(plan.to_embed) <= set(vectors):
-        msg = f"receipt {require_id(plan.receipt.id)} changed while its matches were being saved"
-        raise ConflictError(msg)
     receipt_id = require_id(plan.receipt.id)
     created: dict[NewProductKey, int] = {}
     for key, wanted in plan.to_create.items():
@@ -427,8 +423,6 @@ def record_matches(
                 uow, wanted.name, wanted.category, now, field_sources=wanted.field_sources
             ).id
         )
-        if key in plan.to_embed:
-            uow.vectors.upsert(product_id, vectors[key])
         if wanted.code is not None:
             attach_code(uow, wanted.code, product_id, wanted.code_source, now)
         created[key] = product_id

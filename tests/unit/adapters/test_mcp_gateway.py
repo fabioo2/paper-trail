@@ -27,7 +27,6 @@ from paper_trail.adapters.mcp.gateway import McpToolGateway
 from paper_trail.config import McpSettings
 from paper_trail.domain.enums import AgentRole
 from paper_trail.ports.tools import ToolError, ToolOutputError, ToolUnavailableError
-from tests.fakes.ollama_server import closed_loopback_url
 from tests.mcp_server import serve_text_only_mcp
 
 TIMEOUT_S = 0.5
@@ -43,13 +42,21 @@ def silent_url() -> Iterator[str]:
         yield f"http://127.0.0.1:{listener.getsockname()[1]}"
 
 
+def closed_loopback_url() -> str:
+    """A loopback URL on which nothing listens (the connection is refused)."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    return f"http://127.0.0.1:{port}"
+
+
 def _gateway(url: str) -> McpToolGateway:
     return McpToolGateway(McpSettings.model_validate({"url": url, "timeout_s": TIMEOUT_S}))
 
 
 def _calls(gateway: McpToolGateway) -> list[Callable[[], object]]:
     return [
-        lambda: gateway.call(AgentRole.EXTRACTION, "ocr_read", {"image_path": "a.jpg"}),
+        lambda: gateway.call(AgentRole.VALIDATION, "check_arithmetic", {}),
         lambda: gateway.describe(AgentRole.EXTRACTION),
     ]
 

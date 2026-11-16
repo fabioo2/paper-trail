@@ -30,7 +30,6 @@ from paper_trail.interfaces.cli.receipts import (
     fail,
 )
 from paper_trail.interfaces.mcp.server import create_mcp_app
-from paper_trail.ports.ocr import OcrError
 from paper_trail.ports.tools import (
     ToolFailedError,
     ToolInputError,
@@ -75,7 +74,6 @@ def call_tool(settings: Settings, role: AgentRole, name: str, payload_json: str)
         fail(EXIT_INVALID_INPUT, str(error))
     except (
         DomainError,
-        OcrError,
         ToolOutputError,
         ToolFailedError,
         ToolUnavailableError,

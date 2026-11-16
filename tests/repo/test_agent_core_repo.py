@@ -26,7 +26,6 @@ RUNTIME_DEPENDENCIES = (
     "pillow",
     "pillow-heif",
 )
-TESSERACT_PACKAGES = ("tesseract-ocr", "tesseract-ocr-eng")
 
 
 def _recipe(makefile: Makefile, target: str) -> str:
@@ -80,60 +79,14 @@ def test_the_receipts_dir_is_documented() -> None:
     assert line == "#PAPER_TRAIL_RECEIPTS_DIR=/path/to/your/receipts"
 
 
-def _comment_above(lines: list[str], setting: str) -> str:
-    """The comment lines directly above ``setting``'s line, joined."""
-    index = next(i for i, line in enumerate(lines) if line.startswith(f"{setting}="))
-    comment: list[str] = []
-    while index > 0 and lines[index - 1].startswith("#"):
-        index -= 1
-        comment.insert(0, lines[index])
-    return " ".join(comment)
-
-
 def test_the_catalog_settings_are_documented() -> None:
-    """Barcode-lookup PC-TC-79: both catalog settings, and the enrichment prompt unused (R9)."""
+    """Barcode-lookup PC-TC-79: both catalog settings; the enrichment prompt setting is gone
+    (claude-extraction ruling T16)."""
     lines = read_text(".env.example").splitlines()
 
     assert "PAPER_TRAIL_CATALOG__ENABLED=true" in lines
     assert [line for line in lines if re.match(r"^#\s*PAPER_TRAIL_CATALOG__PLU_PATH=", line)]
-    assert "unused" in _comment_above(lines, "PAPER_TRAIL_PROMPTS__ENRICHMENT_VERSION")
-
-
-def _stage(dockerfile: str, stage: str) -> str:
-    match = re.search(
-        rf"^FROM\s+\S+\s+AS\s+{re.escape(stage)}\s*$(.*?)(?=^FROM\s|\Z)",
-        dockerfile,
-        re.MULTILINE | re.DOTALL | re.IGNORECASE,
-    )
-    assert match, stage
-    return match.group(1)
-
-
-@pytest.mark.parametrize(
-    ("image", "stages"),
-    [
-        ("runtime", ("python-base", "runtime")),
-        ("dev", ("python-base", "python-deps", "python-dev")),
-    ],
-)
-def test_tesseract_is_installed_in_the_runtime_and_dev_images(
-    image: str, stages: tuple[str, ...]
-) -> None:
-    """ADR-0010: Tesseract + English data in the runtime image (and the dev image, where the
-    integration tests run it), without recommends, apt lists removed in the same layer."""
-    dockerfile = read_text("Dockerfile")
-    body = "\n".join(_stage(dockerfile, stage) for stage in stages)
-
-    installs = [
-        command
-        for command in re.split(r"\n(?=RUN )", body)
-        if "apt-get install" in command and "tesseract-ocr" in command
-    ]
-    assert installs, f"tesseract is not installed in the {image} image"
-    for package in TESSERACT_PACKAGES:
-        assert re.search(rf"\b{package}\b", installs[0]), package
-    assert "--no-install-recommends" in installs[0]
-    assert "rm -rf /var/lib/apt/lists" in installs[0]
+    assert not [line for line in lines if "PROMPTS__ENRICHMENT_VERSION" in line]
 
 
 def _names(requirements: list[str]) -> dict[str, str]:
@@ -141,16 +94,15 @@ def _names(requirements: list[str]) -> dict[str, str]:
 
 
 def test_agent_core_dependencies() -> None:
-    """Plan 2.1: LangGraph + its SQLite checkpointer, httpx, Pillow + HEIF at runtime; respx
-    for the adapter tests. Each with a lower bound."""
+    """Plan 2.1: LangGraph + its SQLite checkpointer, httpx, Pillow + HEIF at runtime, each with
+    a lower bound and locked. (respx went with the Ollama adapter's tests; the Anthropic SDK is
+    CE-TC-064.)"""
     pyproject = tomllib.loads(read_text("pyproject.toml"))
     runtime = _names(pyproject["project"]["dependencies"])
-    dev = _names(pyproject["dependency-groups"]["dev"])
 
     for name in RUNTIME_DEPENDENCIES:
         assert name in runtime, name
         assert ">=" in runtime[name], name
-    assert "respx" in dev
     lock = read_text("uv.lock")
-    for name in (*RUNTIME_DEPENDENCIES, "respx"):
+    for name in RUNTIME_DEPENDENCIES:
         assert f'name = "{name}"' in lock, f"{name} is not locked (make lock)"

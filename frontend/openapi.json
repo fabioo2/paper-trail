@@ -231,6 +231,7 @@
       "IssueCode": {
         "enum": [
           "line_math",
+          "item_price_math",
           "items_vs_subtotal",
           "subtotal_plus_tax_vs_total",
           "items_plus_tax_vs_total",
@@ -342,7 +343,7 @@
         "type": "object"
       },
       "LineKind": {
-        "description": "What a receipt line is. Only DISCOUNT lines carry negative totals.",
+        "description": "What a receipt line is. Only DISCOUNT lines, and a DEPOSIT returned, carry negative\ntotals.",
         "enum": [
           "item",
           "discount",
@@ -452,7 +453,6 @@
         "description": "Where a receipt is in the pipeline; reported live from Stage 2 (SSE).",
         "enum": [
           "queued",
-          "waiting_for_gpu",
           "reading",
           "extracting",
           "validating",

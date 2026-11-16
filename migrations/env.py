@@ -2,15 +2,20 @@
 
 The database comes from the Alembic config the caller built (see
 ``paper_trail.adapters.sqlite.migrations``): either an open connection, or a database path that
-is opened with the application's own ``create_engine`` so migrations see the same pragmas,
-sqlite-vec and FTS5. Logging is configured by the CLI, never here.
+is opened with the application's own ``create_engine`` so migrations see the same pragmas and
+FTS5, plus sqlite-vec (``load_sqlite_vec``), which only migrations load. Logging is configured
+by the CLI, never here.
 """
 
 from alembic import context
 from sqlalchemy import Connection
 
 from paper_trail.adapters.sqlite.engine import create_engine
-from paper_trail.adapters.sqlite.migrations import CONNECTION_ATTRIBUTE, DATABASE_PATH_ATTRIBUTE
+from paper_trail.adapters.sqlite.migrations import (
+    CONNECTION_ATTRIBUTE,
+    DATABASE_PATH_ATTRIBUTE,
+    load_sqlite_vec,
+)
 
 
 def _run(connection: Connection) -> None:
@@ -31,8 +36,10 @@ def run_migrations() -> None:
         raise RuntimeError(msg)
     engine = create_engine(database_path)
     try:
-        with engine.begin() as new_connection:
-            _run(new_connection)
+        with engine.connect() as new_connection:
+            load_sqlite_vec(new_connection)
+            with new_connection.begin():
+                _run(new_connection)
     finally:
         engine.dispose()
 

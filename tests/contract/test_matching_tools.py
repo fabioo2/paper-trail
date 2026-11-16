@@ -1,22 +1,17 @@
 """The matching tools, on every transport and storage (PLAN 6, PLAN 7, AC-C-01, AC-C-02).
 
-``product_lookup`` and ``product_similarity_search`` (the matching agent's read tools) and
-``save_matches`` (the supervisor's write tool) are called through the in-process gateway and
-over MCP, each over the fake and the SQLite unit of work (real sqlite-vec index). Embeddings are
-``FakeEmbeddings``; nothing contacts a model.
+``product_lookup`` (the matching agent's read tool) and ``save_matches`` (the supervisor's write
+tool) are called through the in-process gateway and over MCP, each over the fake and the SQLite
+unit of work; nothing contacts a model. ``product_similarity_search`` and the embeddings are gone
+(claude-extraction plan V1, V2; CE-TC-034 owns the tool list).
 
 Pinned (docs/tests/agent-core-C.md):
-- ``ToolServices`` gains ``embeddings: EmbeddingPort``.
 - ``product_lookup {alias: str, store_key: str | null = null}`` ->
   ``{product: ProductOut | null, source: "memory" | "alias" | null}``. The tool normalizes
   ``alias`` (``normalize_alias``, idempotent). Correction memory first: the newest PRODUCT_LINK
   correction for exactly (alias, store_key) names the product by id in ``new_value``; then the
   exact alias, the store's own before a global one. ``ProductOut`` = ``{id, canonical_name,
   brand, size_value: str | null, size_unit, category, tags}``.
-- ``product_similarity_search {text: str, k: int 1..10}`` -> ``{candidates: [{product:
-  ProductOut, distance: float}]}``: embeds ``text`` as given (one call, one text), then
-  ``VectorIndex.nearest``; ascending distance, at most ``k``. ``LlmUnavailableError`` from the
-  embeddings propagates, over MCP too (``tools.wire`` gains the kind ``llm_unavailable``).
 - ``save_matches {receipt_id, decisions: [{position, source, product_id: int | null,
   new_product_name: str | null}]}`` -> ``{receipt_id, linked, new_products, prices, lines:
   [{position, product_id, source}]}``. A decision has exactly one of ``product_id`` and
@@ -24,10 +19,9 @@ Pinned (docs/tests/agent-core-C.md):
   else is a ``ToolInputError``. In one unit of work: new products (canonical name as given; one
   product per distinct line alias among the new decisions), ``link_items`` with each decision's
   source, a MATCHED alias (the line's normalized raw text, the receipt's store) for every linked
-  line (a USER_CORRECTION alias is kept), one vector per new product (the embedding of its
-  alias, all embedded in one call, no call without new products), and one price observation
-  per linked ITEM line when the purchase date is known. Unknown receipt, position or product
-  -> NotFoundError, and nothing is written; so is a failed embedding call.
+  line (a USER_CORRECTION alias is kept), and one price observation per linked ITEM line when
+  the purchase date is known. Unknown receipt, position or product -> NotFoundError, and
+  nothing is written.
 - ``save_matches`` is idempotent: the same decisions again (a run resumed after a crash between
   the tool's commit and the checkpoint) leave the same products, links, aliases and prices.
 """
@@ -55,9 +49,8 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import DomainValidationError, NotFoundError
 from paper_trail.domain.models import CodeIdentity, JsonValue, ProductAlias, ProductCode
-from paper_trail.ports.llm import LlmUnavailableError
 from paper_trail.ports.tools import ToolGateway, ToolInputError
-from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
+from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import TOOL_TRANSPORTS, Harness, build_harness, mcp_gateway
 from tests.extractions import (
@@ -76,15 +69,13 @@ from tests.extractions import (
     WALMART_KEY,
 )
 from tests.factories import CREATED_AT, correction, line_item, product, receipt, receipt_draft
-from tests.fakes.embeddings import FakeEmbeddings, at_distance, basis
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import serve_mcp
 from tests.storage import in_unit
 from tests.support import require_id
 
 MATCHING = AgentRole.MATCHING
 SUPERVISOR = AgentRole.SUPERVISOR
-TABLE = {EGGS_ALIAS: basis(0), MILK_ALIAS: basis(5)}
 PRODUCT_KEYS = {
     "id",
     "canonical_name",
@@ -114,7 +105,7 @@ def transport_name(request: pytest.FixtureRequest) -> str:
 
 @pytest.fixture
 def harness(uow_factory: UnitOfWorkFactory) -> Harness:
-    return build_harness(ScriptedLlm(), uow_factory=uow_factory, embeddings=FakeEmbeddings(TABLE))
+    return build_harness(ScriptedReader(), uow_factory=uow_factory)
 
 
 @pytest.fixture
@@ -123,14 +114,9 @@ def gateway(harness: Harness, transport_name: str) -> Iterator[ToolGateway]:
         yield gateway
 
 
-def _product(harness: Harness, name: str, vector: tuple[float, ...] | None = None) -> int:
-    def add(uow: UnitOfWork) -> int:
-        product_id = require_id(uow.products.add(product(canonical_name=name)).id)
-        if vector is not None:
-            uow.vectors.upsert(product_id, vector)
-        return product_id
-
-    return in_unit(harness.uow_factory, add)
+def _product(harness: Harness, name: str) -> int:
+    stored = product(canonical_name=name)
+    return require_id(in_unit(harness.uow_factory, lambda uow: uow.products.add(stored)).id)
 
 
 def _alias(
@@ -206,62 +192,6 @@ def test_lookup_without_a_match(gateway: ToolGateway) -> None:
     assert _lookup(gateway, EGGS_ALIAS, STORE_KEY) == {"product": None, "source": None}
 
 
-# --- product_similarity_search ------------------------------------------------------------------
-
-
-def test_similarity_search_embeds_the_text_and_ranks_by_distance(
-    harness: Harness, gateway: ToolGateway
-) -> None:
-    near = _product(harness, "near", at_distance(0.05))
-    middle = _product(harness, "middle", at_distance(0.2, toward=2))
-    _product(harness, "far", at_distance(0.6, toward=3))
-
-    result = gateway.call(MATCHING, "product_similarity_search", {"text": EGGS_ALIAS, "k": 2})
-
-    assert harness.embeddings.requests == [(EGGS_ALIAS,)]
-    candidates = result["candidates"]
-    assert isinstance(candidates, list)
-    assert [_candidate(entry)[0] for entry in candidates] == [near, middle]
-    distances = [_candidate(entry)[1] for entry in candidates]
-    assert distances == pytest.approx([0.05, 0.2], abs=1e-4)
-
-
-def _candidate(entry: JsonValue) -> tuple[int, float]:
-    assert isinstance(entry, dict)
-    found, distance = entry["product"], entry["distance"]
-    assert isinstance(found, dict)
-    assert set(found) == PRODUCT_KEYS
-    assert isinstance(found["id"], int)
-    assert isinstance(distance, float)
-    return found["id"], distance
-
-
-def test_similarity_search_without_vectors_has_no_candidates(gateway: ToolGateway) -> None:
-    result = gateway.call(MATCHING, "product_similarity_search", {"text": EGGS_ALIAS, "k": 3})
-
-    assert result == {"candidates": []}
-
-
-@pytest.mark.parametrize("k", [0, 11])
-def test_similarity_search_k_is_bounded(gateway: ToolGateway, k: int) -> None:
-    with pytest.raises(ToolInputError, match="k"):
-        gateway.call(MATCHING, "product_similarity_search", {"text": EGGS_ALIAS, "k": k})
-
-
-def test_s4_ac_08_an_unavailable_embedding_host_keeps_its_class(
-    uow_factory: UnitOfWorkFactory, transport_name: str
-) -> None:
-    """S3-AC-10 over MCP too: the run must stop with its checkpoint, not fail the receipt."""
-    down = FakeEmbeddings(error=LlmUnavailableError("cannot reach llm-host.test:11434"))
-    harness = build_harness(ScriptedLlm(), uow_factory=uow_factory, embeddings=down)
-
-    with (
-        _gateway(harness, transport_name) as gateway,
-        pytest.raises(LlmUnavailableError, match=r"llm-host\.test:11434"),
-    ):
-        gateway.call(MATCHING, "product_similarity_search", {"text": EGGS_ALIAS, "k": 3})
-
-
 # --- save_matches -------------------------------------------------------------------------------
 
 
@@ -295,7 +225,6 @@ def _linked(harness: Harness, receipt_id: int) -> list[tuple[int | None, MatchSo
 def test_save_matches_links_creates_remembers_and_prices(
     harness: Harness, gateway: ToolGateway
 ) -> None:
-    """A new product named from its printed text is not confirmed: no vector (PC-TC-52)."""
     eggs = _product(harness, "Kirkland Organic Eggs 24")
     receipt_id = _stored_receipt(harness)
 
@@ -323,23 +252,9 @@ def test_save_matches_links_creates_remembers_and_prices(
     assert harness.find_by_alias(EGGS_ALIAS, STORE_KEY) == harness.product(eggs)
     assert harness.find_by_alias(MILK_ALIAS, STORE_KEY) == harness.product(milk)
     assert {alias.source for alias in harness.aliases(milk)} == {AliasSource.MATCHED}
-    assert harness.embeddings.calls == 0
-    assert not harness.has_vector(milk)
     for product_id in (eggs, milk):
         (price,) = harness.price_history(product_id)
         assert (price.receipt_id, price.store_key) == (receipt_id, STORE_KEY)
-
-
-def test_save_matches_without_new_products_embeds_nothing(
-    harness: Harness, gateway: ToolGateway
-) -> None:
-    eggs = _product(harness, "eggs")
-    receipt_id = _stored_receipt(harness)
-
-    result = _save(gateway, receipt_id, _decision(0, MatchSource.VECTOR, product_id=eggs))
-
-    assert (result["linked"], result["new_products"]) == (1, 0)
-    assert harness.embeddings.calls == 0
 
 
 def test_save_matches_creates_one_product_per_alias(harness: Harness, gateway: ToolGateway) -> None:
@@ -458,31 +373,6 @@ def test_save_matches_refuses_an_inconsistent_decision(
 
     with pytest.raises(ToolInputError):
         _save(gateway, receipt_id, decision)
-
-
-def test_ac_c_02_a_failed_embedding_writes_nothing(
-    uow_factory: UnitOfWorkFactory, transport_name: str
-) -> None:
-    """AC-C-02, PC-TC-52: a confirmed new product is embedded in the same unit of work as the
-    links; when the embedding fails nothing is written, codes included."""
-    down = FakeEmbeddings(error=LlmUnavailableError("cannot reach llm-host.test:11434"))
-    harness = build_harness(ScriptedLlm(), uow_factory=uow_factory, embeddings=down)
-    eggs = _product(harness, "eggs")
-    receipt_id = _coded_receipt(harness, U1, L3)
-
-    with _gateway(harness, transport_name) as gateway, pytest.raises(LlmUnavailableError):
-        _save(
-            gateway,
-            receipt_id,
-            _decision(0, MatchSource.ALIAS, product_id=eggs),
-            _new_from_code(1, "Test Apple", PLU_3101, FieldSource.PLU),
-        )
-
-    assert harness.product_ids() == [eggs]
-    assert _linked(harness, receipt_id) == [(None, None), (None, None)]
-    assert harness.aliases(eggs) == ()
-    assert harness.price_history(eggs) == ()
-    assert _codes(harness) == []
 
 
 # --- slice C review note 1 (pinned in docs/tests/agent-core-D.md) ------------------------------
@@ -865,40 +755,6 @@ def test_pc_tc_51_a_memory_link_teaches_the_code(
 
     assert _linked(harness, receipt_id) == [(corrected, MatchSource.MEMORY)]
     assert _codes(harness) == [(*_identity(C1_CODE), corrected, CodeSource.CORRECTION)]
-
-
-def test_pc_tc_52_only_a_confirmed_new_product_is_embedded(
-    harness: Harness, gateway: ToolGateway
-) -> None:
-    receipt_id = _coded_receipt(harness, L1, L3)
-
-    _save(
-        gateway,
-        receipt_id,
-        _new_from_code(0, "PC UNS BABYWIPES", L1_CODE),
-        _new_from_code(1, "Test Apple", PLU_3101, FieldSource.PLU, _entry("Test Apple")),
-    )
-
-    printed, apple = harness.product_ids()
-    assert harness.embeddings.requests == [("test apple",)]
-    assert harness.has_vector(apple)
-    assert not harness.has_vector(printed)
-
-
-def test_pc_tc_52_printed_text_products_embed_nothing(
-    harness: Harness, gateway: ToolGateway
-) -> None:
-    receipt_id = _coded_receipt(harness, C1, U1, store=COSTCO)
-
-    _save(
-        gateway,
-        receipt_id,
-        _new_from_code(0, "CHOC PISTACH", C1_CODE),
-        _decision(1, MatchSource.NEW, name=U1),
-    )
-
-    assert len(harness.product_ids()) == 2
-    assert harness.embeddings.calls == 0
 
 
 def test_pc_tc_53_saving_coded_decisions_twice_changes_nothing(

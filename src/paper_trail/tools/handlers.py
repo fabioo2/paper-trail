@@ -1,9 +1,8 @@
 """The tools themselves: plain functions over the ports and use cases (agent-core plan 2.3).
 
-Specialists only read (``ocr_read``, ``check_arithmetic``, ``product_lookup``,
-``product_similarity_search``, ``catalog_lookup``); every write is a supervisor tool
-(``save_receipt``, ``open_review``, ``save_matches``, ``describe_from_catalog``). Domain errors
-such as NotFoundError, and the embedding host's LlmUnavailableError, propagate unchanged.
+Specialists only read (``check_arithmetic``, ``product_lookup``, ``catalog_lookup``); every
+write is a supervisor tool (``save_receipt``, ``open_review``, ``save_matches``,
+``describe_from_catalog``). Domain errors such as NotFoundError propagate unchanged.
 """
 
 from dataclasses import dataclass
@@ -15,15 +14,10 @@ from paper_trail.application.receipts import RecordReceipt
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
 from paper_trail.domain.models import require_id
 from paper_trail.domain.rules.arithmetic import Tolerances, check_arithmetic
-from paper_trail.domain.rules.item_codes import parse_item_code
-from paper_trail.domain.rules.masking import mask_pans
+from paper_trail.domain.rules.item_codes import parse_code_field, parse_item_code
 from paper_trail.ports.catalog import ProductCatalog
-from paper_trail.ports.embeddings import EmbeddingPort
-from paper_trail.ports.images import ImageStore
-from paper_trail.ports.ocr import OcrPort
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from paper_trail.tools.models import (
-    CandidateOut,
     CatalogLookupInput,
     CatalogLookupOutput,
     CheckArithmeticInput,
@@ -32,8 +26,6 @@ from paper_trail.tools.models import (
     DescribeFromCatalogOutput,
     ItemCodeOut,
     LinkedLineOut,
-    OcrReadInput,
-    OcrReadOutput,
     OpenReviewInput,
     OpenReviewOutput,
     ProductLookupInput,
@@ -44,8 +36,6 @@ from paper_trail.tools.models import (
     SaveMatchesOutput,
     SaveReceiptInput,
     SaveReceiptOutput,
-    SimilaritySearchInput,
-    SimilaritySearchOutput,
     UnpricedLineOut,
 )
 
@@ -54,26 +44,10 @@ from paper_trail.tools.models import (
 class ToolServices:
     """What the tools work with, wired by the composition root."""
 
-    ocr: OcrPort
-    image_store: ImageStore
     uow_factory: UnitOfWorkFactory
     record_receipt: RecordReceipt
     tolerances: Tolerances
-    embeddings: EmbeddingPort
     catalog: ProductCatalog  # the store catalog, then the reference sources
-
-
-def ocr_read(services: ToolServices, request: OcrReadInput) -> OcrReadOutput:
-    """OCR a stored image. Card numbers are masked here, before the text leaves the tool, so
-    no unmasked text reaches graph state, checkpoints, prompts or traces (AC-A-04)."""
-    result = services.ocr.read(services.image_store.open(request.image_path))
-    masked = mask_pans(result.text)
-    return OcrReadOutput(
-        text=masked.text,
-        mean_confidence=result.mean_confidence,
-        rotation_degrees=result.rotation_degrees,
-        masked_pans=masked.masked_count,
-    )
 
 
 def check_arithmetic_tool(
@@ -92,7 +66,11 @@ def save_receipt(services: ToolServices, request: SaveReceiptInput) -> SaveRecei
     draft stays PROCESSING/MATCHING: ``save_matches`` completes the receipt once its lines are
     linked, so a receipt with unlinked lines never looks finished."""
     result = services.record_receipt.replace(
-        request.receipt_id, request.draft.to_draft(), force=request.force, matching=True
+        request.receipt_id,
+        request.draft.to_draft(),
+        force=request.force,
+        matching=True,
+        attribute=request.attribute_discounts,
     )
     receipt = result.receipt
     raw_texts = {item.position: item.raw_text for item in receipt.items}
@@ -147,26 +125,10 @@ def product_lookup(services: ToolServices, request: ProductLookupInput) -> Produ
     return ProductLookupOutput(product=ProductOut.of(product), source=source)
 
 
-def product_similarity_search(
-    services: ToolServices, request: SimilaritySearchInput
-) -> SimilaritySearchOutput:
-    """The ``k`` products whose vectors are nearest the text's embedding, nearest first."""
-    (vector,) = services.embeddings.embed([request.text])
-    with services.uow_factory(read_only=True) as uow:
-        candidates = [
-            CandidateOut(product=ProductOut.of(product), distance=hit.distance)
-            for hit in uow.vectors.nearest(vector, k=request.k)
-            if (product := uow.products.get(hit.product_id)) is not None
-        ]
-    return SimilaritySearchOutput(candidates=candidates)
-
-
 def save_matches(services: ToolServices, request: SaveMatchesInput) -> SaveMatchesOutput:
     """Link the receipt's lines to their products, all in one unit of work (idempotent)."""
     recorded = services.record_receipt.record_matches(
-        request.receipt_id,
-        [decision.to_choice() for decision in request.decisions],
-        services.embeddings,
+        request.receipt_id, [decision.to_choice() for decision in request.decisions]
     )
     return SaveMatchesOutput(
         receipt_id=recorded.receipt_id,
@@ -187,10 +149,15 @@ def save_matches(services: ToolServices, request: SaveMatchesInput) -> SaveMatch
 
 
 def catalog_lookup(services: ToolServices, request: CatalogLookupInput) -> CatalogLookupOutput:
-    """What the line's leading code names at the store: the code as parsed, our product when
-    the code is ours (with its field sources), and the entry of the first catalog that knows
-    it. A line without a code, or whose code is kind ``none``, asks no catalog. Reads only."""
-    code = parse_item_code(request.raw_text, request.store_key)
+    """What the line's code names at the store: the code as parsed (``code`` when given, by
+    ``parse_code_field``, else the raw text's leading code), our product when the code is ours
+    (with its field sources), and the entry of the first catalog that knows it. A line without
+    a code, or whose code is kind ``none``, asks no catalog. Reads only."""
+    code = (
+        parse_item_code(request.raw_text, request.store_key)
+        if request.code is None
+        else parse_code_field(request.code, request.store_key)
+    )
     if code is None:
         return CatalogLookupOutput(code=None, product=None, entry=None)
     found = None if code.scheme is None else services.catalog.lookup(code, request.store_key)

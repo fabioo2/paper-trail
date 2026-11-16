@@ -2,7 +2,7 @@
 
 This module wires the application core (database, use cases, health): what ``serve``,
 ``worker`` and ``db`` need. The agents are wired in ``paper_trail.bootstrap.agents``, which
-imports LangGraph, the MCP SDK and the Ollama and Tesseract adapters; it is a separate module so
+imports LangGraph, the MCP SDK and the Anthropic adapter; it is a separate module so
 the commands that run no agent never pay for importing them (CLI start-up).
 """
 

@@ -2,47 +2,38 @@
 
 Paper Trail turns photos of receipts into a searchable record of what you bought, where, and at
 what price, with a price history for every item. A small team of agents (extraction, validation,
-product matching, enrichment) built with LangGraph reads each receipt through a local LLM served
-by Ollama, so receipts, images and the database never leave your own hardware. It is a
-FastAPI + React app that runs in Docker on a home server, with the model on a GPU PC on the same
-network. Work is queued, so the GPU PC does not have to be on when you scan.
+product matching, enrichment) built with LangGraph processes each receipt: Claude reads the
+photo item by item, code checks that every number adds up, and a second, stronger Claude model
+reads it again when it does not. It is a FastAPI + React app that runs in Docker on a home
+server; the database and your photos stay on that server, and each photo is sent to Anthropic
+to be read (see [Data and privacy](#data-and-privacy)).
 
-> Status: agent core slice D. Receipts can be imported from JSON, or read from photos by the
-> agents from the command line (OCR, extraction by the local model, code-checked arithmetic with
-> a feedback loop, the photo read by the vision model, review by a person), and browsed
-> in the Receipts tab. Every agent calls its tools through a per-role allowlist, in-process or
-> over MCP. Each line is matched to a product across stores (a person's correction, an exact
-> alias, then embeddings, with the model confirming close calls), new products are described
-> (name, size, category, tags), and a run can be paused and resumed from its checkpoint. The
-> upload flow and the web pages for it arrive in the following stages (see
+> Status: Claude extraction (claude-extraction plan, PR 1). Receipts can be imported from JSON,
+> or read from photos by the agents from the command line (Claude reads each item with its
+> discount and price paid, code checks the arithmetic, one retry on the retry model with the
+> failures listed, then review by a person), and browsed in the Receipts tab. Every agent calls
+> its tools through a per-role allowlist, in-process or over MCP. Each line is matched to a
+> product by its printed code, a person's correction or an exact alias, new products are
+> described from the catalog that knows their code, and a run can be paused and resumed from
+> its checkpoint. The upload flow and the web pages for it arrive in the following stages (see
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/plans/agent-core.md`](docs/plans/agent-core.md)).
 
 ## Prerequisites
 
 - **Docker** with Docker Compose v2 (Docker Engine on Linux, or Docker Desktop)
-- **Make** and a POSIX shell (bash), on the app host and for development
+- **Make** and a POSIX shell (bash)
 - **Git**
+- An **Anthropic API key**, for reading receipt photos
 
-That is all: everything else runs in containers, so nothing is installed on the host. A Windows
-LLM host needs only Docker Desktop and Git: it runs plain `docker compose` commands, no Make.
+That is all: everything else runs in containers, so nothing is installed on the host.
 
 ## Quick start
-
-Paper Trail has two roles, which can be two machines or one:
-
-| Role | Runs | Compose file |
-|---|---|---|
-| **App host** (e.g. a home server) | `migrate`, `web` (API + web app), `worker` | `compose.yaml` |
-| **LLM host** (a PC with an NVIDIA GPU) | `ollama`, `ollama-init` (pulls the models) | `deploy/llm/compose.yaml` |
-
-### Two hosts: app server + GPU PC
-
-On the **app host**:
 
 ```sh
 git clone <this repository> paper-trail && cd paper-trail
 cp .env.example .env
-# Edit .env: PAPER_TRAIL_BIND_ADDR=<the server's LAN address>, e.g. 192.168.1.10
+# Edit .env: ANTHROPIC_API_KEY=<your key>
+#            PAPER_TRAIL_BIND_ADDR=<the server's LAN address>, e.g. 192.168.1.10
 make build up
 ```
 
@@ -51,118 +42,56 @@ Open `http://<server LAN address>:8420` on your phone (over the LAN, or WireGuar
 `0.0.0.0`: with the default `PAPER_TRAIL_BIND_ADDR=127.0.0.1` the app is reachable only from the
 server itself at `http://127.0.0.1:8420`.
 
-On the **LLM host**, follow [LLM host (GPU PC)](#llm-host-gpu-pc) below, then point the app host at
-it in `.env`: `PAPER_TRAIL_OLLAMA__BASE_URL=http://<GPU PC LAN address>:11434`.
+The key lives only in `.env` (git-ignored). Compose hands `.env` to `web`, `worker`, `cli` and
+`mcp` through `env_file` (a key exported in your shell is not passed on); `migrate` blanks it.
+The dev tooling containers (`make test`, `make shell`) mount the repository at `/app`, and the
+app's settings read `/app/.env` there too, so the key is readable inside them; the tests never
+call the API (they use fakes). Without a key the app starts and everything that needs no model
+works (browsing, imports, the catalog, prices, reviews); a receipt sent to the agents fails with
+a message naming `ANTHROPIC_API_KEY`, and can be resumed once the key is set.
 
-### One GPU machine running everything
+Claude calls cost money: about $0.001 per receipt on the extract model and about $0.04 for a
+retry on the retry model. `PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD` (default 5.00) caps the
+spend per UTC calendar month: it is checked before each call, and once it is reached receipts
+fail, resumable, until the cap is raised or the month ends. Each call reserves its largest
+possible cost before it starts, so processes running at once are admitted one at a time and
+cannot all slip under the cap. A read is up to three attempts (a rate limit, an overloaded API,
+a lost connection or a timeout is retried after a short pause), each reserved and charged on
+its own. An attempt that starts just under the cap can overshoot it by what it costs; one that
+times out or loses its connection may have been billed without saying for how much, so it is
+charged at its largest possible cost: the cap can be overshot by one attempt's worth at most.
+Every attempt's tokens and cost are recorded in the main database (`claude_calls`), whatever
+`RUN_NAME` the receipt is processed in, so a named run never starts a budget of its own; the
+main database must therefore be migrated before any run (`make migrate`; a named run exits 1
+otherwise and never migrates it itself).
 
-Both stacks run on the same Docker host and share a Docker network: the LLM stack's network is
-named `paper-trail-llm`, and the overlay
-[`deploy/single-host/compose.override.yaml`](deploy/single-host/compose.override.yaml) attaches
-the app's `worker` to it, so the worker reaches Ollama by service name and no Ollama port has to
-be reachable from outside the machine.
+### Upgrading from the local-model version
 
-```sh
-cp .env.example .env
-cp deploy/llm/.env.example deploy/llm/.env   # keep OLLAMA_BIND_ADDR=127.0.0.1
-cp deploy/single-host/compose.override.yaml compose.override.yaml
-make llm-up        # Ollama + models; creates the paper-trail-llm network
-make build up      # the app; its worker joins paper-trail-llm
-```
+Earlier versions read receipts on your own hardware, with OCR and local models. To upgrade, in
+this order:
 
-The Makefile adds `compose.override.yaml` to every compose command when the file exists (it is
-git-ignored, like `.env`). Start the LLM stack first: `make up` fails while the network is
-missing. Set `PAPER_TRAIL_OLLAMA__BASE_URL=http://ollama:11434` in `.env`.
+1. **Resolve open reviews and failed runs before upgrading**, with the old version still
+   running: `review list` must be empty and no receipt may be `processing` or `failed`. A run
+   saved by the old version cannot be resumed by the new one (`process --resume` refuses it);
+   after the upgrade its only ways out are answering its review with a corrected file
+   (`review resolve ID --file F`) or reading the photo again (`process PHOTO --reprocess`).
+2. **Back up the database** (`/data/paper_trail.db`): migration 0007 drops the product vectors,
+   which cannot be recovered, and turns any receipt still `waiting_for_gpu` into `failed`.
+3. `make build migrate`, then `make up`.
 
-Do not point the worker at `http://host.docker.internal:11434` instead: on Linux that name
-resolves to the Docker bridge gateway, where a port published on `127.0.0.1` is unreachable, and
-publishing Ollama on a wider address only to make it work would expose an unauthenticated API.
-
-## LLM host (GPU PC)
-
-The model runs in Docker with GPU access, from `deploy/llm/compose.yaml`. The compose file is the
-same on Windows and Linux.
-
-### Windows 11 (Docker Desktop, WSL2)
-
-1. Install the current **NVIDIA** Game Ready or Studio driver for your GPU. The driver brings GPU
-   support to WSL2; no CUDA toolkit is needed on Windows or inside WSL.
-2. Install **Docker Desktop** and keep the default **WSL2** backend (Settings, General, "Use the
-   WSL 2 based engine"). Check GPU access with
-   `docker run --rm --gpus all ubuntu nvidia-smi`.
-3. Install Git (for example `winget install Git.Git`), clone this repository, then in
-   PowerShell from the repository root:
-
-   ```powershell
-   copy deploy\llm\.env.example deploy\llm\.env
-   # Edit deploy\llm\.env: OLLAMA_BIND_ADDR=<this PC's LAN address>
-   docker compose -f deploy/llm/compose.yaml --env-file deploy/llm/.env up -d
-   ```
-
-   `ollama-init` pulls the three models (about 15 GB) once; they are kept in the `ollama-models`
-   volume. Stop Ollama with
-   `docker compose -f deploy/llm/compose.yaml --env-file deploy/llm/.env down` (the models are
-   kept). No Make is needed on Windows: the Makefile expects bash, so `make llm-up` works only
-   from WSL or Git Bash.
-4. Ollama has no authentication, so port 11434 must accept connections **only from the app
-   host**. An allow rule scoped to the app host is not enough on its own: Docker Desktop
-   publishes ports through `com.docker.backend.exe`, and accepting Windows' first-run "allow
-   access" prompt for it creates a program-wide inbound allow rule. Windows Firewall admits a
-   connection if *any* allow rule matches, so that rule would open 11434 to the whole LAN. Block
-   rules take precedence over allow rules, so add an allow rule for the app host **and** a block
-   rule for every other address. In an administrator PowerShell (Windows Defender Firewall):
-
-   ```powershell
-   $AppHost = "192.168.1.10"   # your app host's LAN address
-   New-NetFirewallRule -DisplayName "Ollama (Paper Trail app host only)" `
-     -Direction Inbound -Protocol TCP -LocalPort 11434 `
-     -RemoteAddress $AppHost -Action Allow -Profile Any
-   # Every IPv4 address except the app host (here 192.168.1.10): adjust both ranges.
-   New-NetFirewallRule -DisplayName "Ollama (block everyone else)" `
-     -Direction Inbound -Protocol TCP -LocalPort 11434 `
-     -RemoteAddress "0.0.0.0-192.168.1.9", "192.168.1.11-255.255.255.255" `
-     -Action Block -Profile Any
-   ```
-
-   Then look for program-wide Docker rules and remove them, or at least make sure the block rule
-   above exists:
-
-   ```powershell
-   Get-NetFirewallApplicationFilter -Program "*com.docker.backend*" |
-     Get-NetFirewallRule | Where-Object { $_.Direction -eq "Inbound" -and $_.Action -eq "Allow" } |
-     Format-Table DisplayName, Profile, Enabled
-   ```
-
-   Verify from both sides once Ollama is up: from the app host,
-   `docker run --rm curlimages/curl:8.23.0 -s http://<GPU PC address>:11434/api/version` prints a
-   version; from any other device on the LAN, for example another Windows PC,
-   `Test-NetConnection <GPU PC address> -Port 11434` reports `TcpTestSucceeded : False`. Keep
-   the network profile set to Private and do not forward the port on your router.
-
-The PC does not have to stay on: the app host queues receipts and processes them when Ollama
-answers again.
-
-### Linux
-
-Install the NVIDIA driver and the **NVIDIA Container Toolkit**
-(`nvidia-ctk runtime configure --runtime=docker`, then restart Docker), copy
-`deploy/llm/.env.example` to `deploy/llm/.env`, and run `make llm-up` (the same
-`docker compose ... up -d` as on Windows). Restrict port 11434 to the app host in Docker's
-`DOCKER-USER` chain: ports Docker publishes bypass ufw's rules, so a `ufw allow` restricts
-nothing. With `eth0` as the LAN interface and `192.168.1.10` as the app host:
-
-```sh
-sudo iptables -I DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 11434 \
-  ! -s 192.168.1.10 -j DROP
-```
-
-Make the rule persistent with your distribution's mechanism (for example `iptables-persistent`)
-and verify it as on Windows: the app host gets a version from `/api/version`, any other device
-cannot connect.
+These variables are no longer read and can be removed from `.env` (they are ignored if left):
+`PAPER_TRAIL_OCR__*`, `PAPER_TRAIL_OLLAMA__*`, `PAPER_TRAIL_MATCHING__*`,
+`PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`, `PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`,
+`PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW`, `PAPER_TRAIL_GRAPH__MIN_CONFIDENCE`,
+`PAPER_TRAIL_PROMPTS__VISION_VERSION`, `PAPER_TRAIL_PROMPTS__MATCHING_VERSION`,
+`PAPER_TRAIL_PROMPTS__ENRICHMENT_VERSION`,
+`PAPER_TRAIL_PROMPTS__EXAMPLES`. Remove `PAPER_TRAIL_PROMPTS__EXTRACTION_VERSION` too if it is
+set (for example to `v2`): only `v3`, the default, exists now, and any other value stops
+`process` with exit 2. The separate model host and its compose stack are no longer needed.
 
 ## Architecture
 
-Hexagonal (ports and adapters): the domain and use cases know nothing about SQLite, Ollama,
+Hexagonal (ports and adapters): the domain and use cases know nothing about SQLite, Claude,
 FastAPI or LangGraph. Every external dependency sits behind a small `Protocol` (a port) with one
 adapter, and tests swap in in-memory fakes. The layering is enforced by import-linter in
 `make lint`.
@@ -187,14 +116,12 @@ flowchart LR
             application["application<br/>(use cases)"]
             ports["ports<br/>(Protocols)"]
             domain["domain<br/>(models, rules)"]
-            adapters["adapters<br/>(sqlite, ollama, tesseract)"]
+            adapters["adapters<br/>(sqlite, anthropic)"]
         end
-        db[("SQLite + sqlite-vec + FTS5<br/>/data/paper_trail.db")]
+        db[("SQLite + FTS5<br/>/data/paper_trail.db")]
     end
 
-    subgraph llm["LLM host: deploy/llm/compose.yaml"]
-        ollama["Ollama (RTX 3080)<br/>qwen2.5, qwen2.5-vl, nomic-embed-text"]
-    end
+    claude["Claude API (Anthropic)<br/>claude-haiku-5-5, claude-opus-5-5"]
 
     phone -->|HTTP :8420| spa
     phone -->|HTTP :8420| api
@@ -209,15 +136,15 @@ flowchart LR
     ports --> domain
     adapters -. implements .-> ports
     adapters --> db
-    adapters -->|LAN :11434| ollama
+    adapters -->|HTTPS| claude
 ```
 
 - **web** serves the JSON API under `/api` and the built single-page app from the same origin
   (no CORS). **worker** runs the receipt pipeline. **migrate** applies database migrations once
   before either starts. All three run the same image as a non-root user with a read-only root
   filesystem.
-- One SQLite file holds everything (relational data, full-text index, vectors, agent
-  checkpoints).
+- One SQLite file holds everything (relational data, full-text index, agent checkpoints,
+  the Claude spend).
 - The TypeScript API client is generated from the backend's OpenAPI document
   (`make api-client`), so the contract is defined once, in Python.
 
@@ -285,65 +212,114 @@ The API behind the Receipts tab: `GET /api/receipts` (newest first; `limit`, `cu
 
 The agents run from the command line in the on-demand `cli` service, which mounts the receipts
 folder `PAPER_TRAIL_RECEIPTS_DIR` (default `./receipts`, git-ignored; set your own folder in `.env`)
-read-only at `/receipts`. Set `PAPER_TRAIL_OLLAMA__BASE_URL` in `.env` first, then:
+read-only at `/receipts`. Set `ANTHROPIC_API_KEY` in `.env` first, then:
 
 ```sh
 make build                                         # once, and after pulling changes
 make process RECEIPTS=costco.jpg RUN_NAME=try1     # one photo, in its own run "try1"
-make process RUN_NAME=e1-feedback ARGS="--no-vision --verbose"   # the whole folder
+make process RUN_NAME=e1-feedback ARGS="--verbose" # the whole folder
 make pt ARGS="review list --run e1-feedback"       # receipts parked for a person
 make pt ARGS="review show 3 --run e1-feedback"
 make pt ARGS="review resolve 3 --accept --run e1-feedback"
 make graph                                         # the agents' graph as Mermaid
 ```
 
-Each photo goes through `read` (Tesseract, card numbers masked at once; a sideways photo is
-retried at 90°, 180° and 270° and the most confident reading is kept), then straight to
-`extract_vision`: the vision model (`PAPER_TRAIL_OLLAMA__VISION_MODEL`) reads the upright photo.
-The model only transcribes: it copies every amount, date and tax line as printed, as text, and
-Python converts and adds them up (ADR-0017). `validate` checks the arithmetic, the store and the
-date in code, and the `supervisor` saves the receipt (`persist`), retries with the list of
-problems as feedback (`PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`, default 2), or sends it to a
-person (`review`). OCR text without a photo (`--text-file`, `--reprocess`) goes to the text model
-instead (`extract_text`, `PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`); setting
-`PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW` below 1.0 sends only photos with a poor OCR read straight
-to vision. Then `match` finds each line's product and `commit_matches` (the supervisor) links
-them, with a price observation per line, and completes the receipt. Finally `enrich` takes each product this receipt created
-from a catalog entry (the PLU table) and `commit_enrichment` writes what that entry says (name,
-category, tags) with its source; no model is asked, and a product named by its printed text is
-left as it is (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal shows one
-block per receipt: every tool call, model call and routing decision, with times; the same trace,
-with the prompts and answers, is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`,
-and a batch summary to `/data/runs/<run>/summary.json`.
+The graph, as `make graph` prints it:
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	extract(extract)
+	validate(validate)
+	supervisor(supervisor)
+	review(review)
+	persist(persist)
+	match(match)
+	commit_matches(commit_matches)
+	enrich(enrich)
+	commit_enrichment(commit_enrichment)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> extract;
+	commit_matches -.-> __end__;
+	commit_matches -.-> enrich;
+	enrich --> commit_enrichment;
+	extract --> validate;
+	match --> commit_matches;
+	persist --> match;
+	review --> persist;
+	supervisor -.-> extract;
+	supervisor -.-> persist;
+	supervisor -.-> review;
+	validate --> supervisor;
+	commit_enrichment --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
+`extract` sends the photo (upright, long edge at most 2576 px, JPEG) to Claude with the
+`extraction/v3` prompt and a structured-output schema: the receipt, every purchased item with
+its printed text, code, department, quantity, unit, unit price, regular price, discount and
+price paid, and the adjustments (deposits, fees, discounts on the whole order). Claude only
+transcribes: it copies every price as printed, as text, and never adjusts a value to make the
+totals match; Python converts and adds them up (ADR-0017). Card numbers in the answer are masked
+before it is kept anywhere. `validate` checks in code that each item's regular price minus its
+discount is its price paid, that a weighed item's quantity times its unit price matches its
+regular or its paid price (within 1 cent), that the prices paid plus the adjustments make the
+subtotal, and the subtotal plus the taxes the total; and that the store and date are known. The
+`supervisor` saves a valid receipt (`persist`); otherwise it has the retry model
+(`PAPER_TRAIL_CLAUDE__RETRY_MODEL`) read the photo again with the failures listed
+(`PAPER_TRAIL_GRAPH__MAX_ATTEMPTS`, default 2), then sends the receipt to a person (`review`).
+Each item is stored as an item line, followed by a discount line linked to it when it had a
+discount, so the price history shows its regular price, its discount and what was paid. Then
+`match` finds each line's product and `commit_matches` (the supervisor) links them, with a
+price observation per line, and completes the receipt. Finally `enrich` takes each product this
+receipt created from a catalog entry (the PLU table) and `commit_enrichment` writes what that
+entry says (name, category, tags) with its source; no model is asked, and a product named by its
+printed text is left as it is (`PAPER_TRAIL_GRAPH__ENRICHMENT=false` skips both). The terminal
+shows one block per receipt: every tool call, Claude read and routing decision, with times; the
+same trace, with each read's model, tokens, stop reason and the photo's SHA-256 (never the
+photo), is written to `/data/runs/<run>/traces/receipt-<id>-<UTC time>.json`, and a batch
+summary to `/data/runs/<run>/summary.json`.
 
 - `RUN_NAME=<name>` gives the run its own database and traces under `/data/runs/<name>/`
   (created and migrated on first use), so experiment arms never mix. Without it the main
   database is used (run `make migrate` first) and traces go to `/data/runs/main/`. Images are
   stored once, by content, in `/data/images` for every run; the same photo twice in one run is
   reported as a duplicate.
-- `ARGS` takes the flags of `paper-trail process`: `--max-text-attempts N`, `--no-feedback`
-  (retry with a generic line instead of the issues), `--no-examples` (no few-shot examples),
-  `--no-vision`, `--prompt-version V`, `--verbose` (print the feedback and the model's
-  answers), `--no-color`.
-- OCR text from a file skips the photo: `make pt ARGS="process --run e4 --text-file
-  /data/samples/inject.txt --verbose"`. The text is masked before anything else happens.
+- `ARGS` takes the flags of `paper-trail process`: `--max-attempts N` (1 or 2),
+  `--no-feedback` (retry with a generic line instead of the failures),
+  `--verbose` (print the feedback and Claude's answers), `--no-color`.
 - Exit codes: 0 every receipt completed, was parked for review or paused, 1 `--resume` has
   nothing to resume (unknown receipt, finished run, or a review waiting: use `review resolve`),
-  2 a usage error, 3 a receipt failed, 4 the LLM host is unreachable or not configured (the
-  batch stops; the receipt keeps its checkpoint, `waiting_for_gpu` if it was not saved yet, and
-  the output prints the `paper-trail process --resume <id>` command that continues it).
+  2 a usage error, 3 a receipt failed, 4 a Claude read stopped the batch (the API failed or
+  refused, the answer was cut off, there is no key, or the monthly budget is reached): the
+  receipt is `failed` and keeps its checkpoint, and the output prints the
+  `paper-trail process --resume <id>` command that continues it.
+  A photo that Claude refuses every time, or whose answer is always cut off, has no automatic
+  way out yet: `--resume` sends it again and gets the same answer. Such a receipt stays
+  `failed`; entering it by hand (`receipts import`) is the way out for now.
 - `review resolve ID` takes `--accept` (keep the extraction the review holds) or `--file F` (a
   corrected receipt in the import format below); a receipt that does not add up needs
   `--force --reason TEXT`. It resumes the receipt's graph from its checkpoint and completes it.
-- Receipt text and validation feedback are untrusted: before they go into the prompt's
-  `<receipt_data>` and `<validation_feedback>` blocks, any such tag inside them is escaped
-  (`&lt;/receipt_data&gt;`), so a line printed on a receipt cannot close the data block early.
+- Validation feedback is untrusted (it quotes Claude's reading of the receipt): before it goes
+  into the prompt's `<validation_feedback>` block, any such tag inside it is escaped, so text
+  printed on a receipt cannot close the block early.
+- `make smoke-claude` (opt-in, never part of `make check` or CI) reads the receipts folder with
+  the real API into a new run `smoke-claude-<UTC time>` each time, and ends with a table per
+  receipt (`process --table`): store, items, the lines' sum against the subtotal, total, whether
+  it adds up, the models, attempts and cost. It needs `ANTHROPIC_API_KEY` and costs money.
 
 ### Matching, corrections and resuming
 
 Every ITEM line is matched to a product within its store, and no model is asked (ADR-0018). A
-line that starts with a product code (a barcode, a PLU, or a store's own item number such as
-Costco's) is identified by that code:
+line with a product code (a barcode, a PLU, or a store's own item number such as Costco's; the
+code Claude read on the line, never one parsed out of its text) is identified by that code:
 
 1. the code already names one of our products (`catalog`; `product_codes`);
 2. a person's correction for that text at that store (`memory`), which also teaches the code;
@@ -368,8 +344,7 @@ new 4 (printed text 3, plu 1)`), and each line's source is stored in
 `line_items.match_source`. A product created from a source entry is then described from that
 entry (`describe_from_catalog`: PLU name, category `produce`, tag `organic`); every product
 field records its source (`products.field_sources`), a person's value is never overwritten, and
-a category a person gave the same line at the same store (a `category` correction) wins. The
-prompts `matching/v1` and `enrichment/v1` stay on disk, unused.
+a category a person gave the same line at the same store (a `category` correction) wins.
 
 ```sh
 make process RECEIPTS=costco-1.jpg RUN_NAME=e2     # new products
@@ -378,8 +353,8 @@ docker compose run --rm -e PAPER_TRAIL_DATABASE_PATH=/data/runs/e2/paper_trail.d
   cli receipts show 2                               # the lines and their positions
 make pt ARGS="items correct 2 0 --run e2 --new-product 'Kirkland Organic Eggs 24'"
 make process RECEIPTS=costco-2.jpg RUN_NAME=e2 ARGS="--reprocess"   # line 0 now by its code
-make process RECEIPTS=costco-3.jpg RUN_NAME=e2 ARGS="--interrupt-after extract_text"
-make pt ARGS="process --run e2 --resume 3"          # continues after extract_text
+make process RECEIPTS=costco-3.jpg RUN_NAME=e2 ARGS="--interrupt-after validate"
+make pt ARGS="process --run e2 --resume 3"          # continues after validate
 ```
 
 - `items correct RECEIPT_ID POSITION (--product-id N | --new-product NAME) [--category C]
@@ -389,25 +364,23 @@ make pt ARGS="process --run e2 --resume 3"          # continues after extract_te
   a product code, the code now names that product (`catalog.learned`), replacing a wrong
   mapping. `--new-product` and `--category` are a person's values (source `person`). It calls
   no model. Exit 1 for an unknown receipt, line or product, 2 for a usage error.
-- `--interrupt-after NODE` pauses each receipt after a node of the graph (`read`,
-  `extract_text`, `extract_vision`, `validate`, `supervisor`, `review`, `persist`, `match`,
-  `commit_matches`, `enrich`, `commit_enrichment`) and prints the resume command; the checkpoint
+- `--interrupt-after NODE` pauses each receipt after a node of the graph (`extract`,
+  `validate`, `supervisor`, `review`, `persist`, `match`, `commit_matches`, `enrich`,
+  `commit_enrichment`) and prints the resume command; the checkpoint
   is in the run's database. A saved receipt stays `processing` (stage `matching`) until
   `commit_matches` has linked its lines.
-- `--resume ID` continues a paused receipt, or one stopped by the LLM host going away or by a
-  crash, from its last completed node: nothing before it runs again, and the trace records
+- `--resume ID` continues a paused receipt, or one stopped by a Claude read or by a crash, from its last completed node: nothing before it runs again, and the trace records
   `resumed_from`. It takes no PATH (so it goes through `make pt`, not `make process`), and the
   `--run` the receipt was processed in, but none of the flags that would change the run's
-  configuration (`--max-text-attempts`, `--no-feedback`, `--no-vision`, `--no-examples`,
-  `--no-catalog`, `--prompt-version`: exit 2). A receipt saved by the version before product
-  codes and stopped after matching cannot be resumed (`run N was saved by an older version;
-  reprocess the receipt`, exit 2): process it again with `--reprocess`. A receipt
+  configuration (`--max-attempts`, `--no-feedback`, `--no-catalog`: exit
+  2). A run saved by an older version (OCR and local models) cannot be resumed (exit 2): answer
+  its review with a corrected file (`review resolve ID --file F`) or read the photo again with
+  `--reprocess`. A receipt
   waiting for a person is answered with `review resolve`, not resumed. A run that fails while
   products are being described leaves the receipt `failed` with its lines, codes and prices
   saved; `--resume` describes the rest and completes it.
-- `--reprocess` runs an already stored photo's receipt again, from its stored OCR text, on a new
-  thread (a pending review is dismissed). Without it the same photo is reported as a duplicate.
-  It does not apply to `--text-file` (a text is never stored).
+- `--reprocess` has Claude read an already stored photo again, on a new thread (a pending
+  review is dismissed). Without it the same photo is reported as a duplicate.
 
 ### Naming products by their codes
 
@@ -465,8 +438,7 @@ the app copies nothing from the page.
   with the most lines of it), then per product: moves lines whose code belongs to another product
   (lines you linked yourself stay and are reported as conflicts), attaches the code most of its
   lines carry, resets the model's name, brand, size, category and tags to the printed text, keeps a
-  name or category a person gave, fills what the PLU table knows and drops the vectors of unnamed
-  products. Last, it re-keys stored corrections and aliases after the tax-flag change. Two products
+  name or category a person gave and fills what the PLU table knows. Last, it re-keys stored corrections and aliases after the tax-flag change. Two products
   with the same code are reported as merge candidates, never merged. Each product is one
   transaction: if one fails the command exits 1 naming it, the ones before it stay applied, and
   running it again finishes the rest; a second `--apply` reports 0 changes. It is a deploy step, not
@@ -561,17 +533,17 @@ erDiagram
     receipts ||--o{ corrections : "corrected by"
 ```
 
-- `receipts`: store, date, subtotal, tax, total (integer cents), status, the masked OCR text
-  and the stored photo.
-- `line_items`: each printed line in order: raw text, kind (`item`, `discount`, `deposit`,
+- `receipts`: store, date, subtotal, tax, total (integer cents), status and the stored photo
+  (receipts read before Claude also keep their masked OCR text).
+- `line_items`: each line in order (an item, then its discount when it had one, then the
+  adjustments): raw text, kind (`item`, `discount`, `deposit`,
   `fee`), quantity, unit price, line total, and the product it was matched to, with how
   (`memory`, `catalog`, `alias`, `new`; `vector` and `llm` only on lines matched before product
   codes); a `discount` line's `applies_to_position` names the
   item line it reduces.
 - `products`: name, brand, size, category and tags, each with its source in `field_sources`
-  (`receipt_text`, `person`, `plu`, `legacy_model` for values a model wrote before 0006); a
-  product named by a person or a data source has an embedding in `product_vectors`
-  (sqlite-vec), and its names are in `product_aliases`.
+  (`receipt_text`, `person`, `plu`, `legacy_model` for values a model wrote before 0006); its
+  names are in `product_aliases`.
 - `product_codes`: the codes that name a product: a barcode or PLU at every store, a store's own
   code at that store, with who attached it (`receipt`, `plu`, `correction`, ...). A person's
   mapping replaces another product's; a machine's never does.
@@ -609,7 +581,7 @@ make pt ARGS="tools call --role matching save_receipt '{\"receipt_id\": 1, \"dra
 make mcp-up                                        # the MCP server on 127.0.0.1:8421
 make pt ARGS="tools list --role matching --transport mcp"
 make mcp-down
-make process RUN_NAME=e3-mcp ARGS="--transport mcp --no-vision"
+make process RUN_NAME=e3-mcp ARGS="--transport mcp"
 ```
 
 - `tools call` prints the result as JSON and exits 0; it exits 5 when the role may not call the
@@ -655,7 +627,7 @@ make process RUN_NAME=e3-mcp ARGS="--transport mcp --no-vision"
 | `make pt ARGS="..."` | Run any `paper-trail` command in the `cli` service, e.g. `ARGS="review list"` |
 | `make graph` | Print the agents' graph as Mermaid |
 | `make mcp-up` / `make mcp-down` | Start / stop and remove the MCP tool server (`127.0.0.1:8421`); the rest of the stack is untouched |
-| `make llm-up` / `make llm-down` / `make llm-config` | Run / stop / validate the LLM host stack |
+| `make smoke-claude` | Live smoke: Claude reads `RECEIPTS` into a new run `smoke-claude-<UTC time>` and prints a table per receipt (needs `ANTHROPIC_API_KEY`; costs money; never part of `check` or CI) |
 
 ## Configuration
 
@@ -668,26 +640,32 @@ most important ones:
 - `PAPER_TRAIL_PORT` (default `8420`): the host port.
 - `PAPER_TRAIL_DATA_VOLUME` (default: the `paper-trail-data` named volume): where the database
   and images live.
-- `PAPER_TRAIL_OLLAMA__BASE_URL` (default: unset, the LLM is "not configured"): Ollama on the
-  LLM host, e.g. `http://<GPU PC LAN address>:11434`.
+- `ANTHROPIC_API_KEY` (no prefix; default: unset): the Claude API key. Without it a receipt
+  sent to the agents fails with a message naming this variable.
+- `PAPER_TRAIL_CLAUDE__EXTRACT_MODEL` / `__RETRY_MODEL` (defaults `claude-haiku-5-5` /
+  `claude-opus-5-5`), `PAPER_TRAIL_CLAUDE__TIMEOUT_S` (default `300`, per attempt: the retry
+  model can take minutes for a long answer, and an attempt given up on is still billed by
+  Anthropic) and
+  `PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD` (default `5.00`, per UTC month, checked before each
+  call; `0` stops every call).
 - `PAPER_TRAIL_RECEIPTS_DIR`: the folder of receipt photos `make process` reads.
 - `PAPER_TRAIL_TOOLS__TRANSPORT` (default `inprocess`): how the agents call their tools,
   `inprocess` or `mcp`; `PAPER_TRAIL_MCP__URL` is the MCP server `tools --transport mcp` uses.
-  `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above the OCR and model request
-  timeouts, since one tool call waits for them.
-- `PAPER_TRAIL_MATCHING__AUTO_LINK_MAX_DISTANCE` / `__REVIEW_MAX_DISTANCE` (defaults `0.15` /
-  `0.30`, cosine distances): unused since product codes (ADR-0018); they come back with linking
-  products across stores.
+  `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above `PAPER_TRAIL_CLAUDE__TIMEOUT_S`.
 
 ## Data and privacy
 
 Only source code is published. Receipt images, the database, `.env` and evaluation receipts stay
-on your machines and are git-ignored. The app has no telemetry and loads nothing from CDNs; at
-runtime its only outbound traffic is the app host calling Ollama on your LAN. (LangGraph brings
-the LangSmith client as a dependency; it sends nothing unless `LANGSMITH_TRACING` is set, which
-Paper Trail never does.) Card numbers are masked before OCR text reaches the model, the graph's
-checkpoints, the traces or the database; the trace files are as private as the database and
-are never logged.
+on your machines and are git-ignored. The app has no telemetry and loads nothing from CDNs.
+
+**The whole photo of every receipt you process is sent to Anthropic** to be read by Claude: its
+only outbound traffic at runtime. Whatever the photo shows leaves your server: the card number
+as the terminal printed it (usually masked to the last four digits), the store, a loyalty
+number, sometimes your name. Nothing is redacted from the pixels. Card numbers in Claude's
+answer are masked before the answer reaches the graph's checkpoints, the traces or the
+database; the trace files record each photo's SHA-256, never the photo, are as private as the
+database and are never logged. (LangGraph brings the LangSmith client as a dependency; it sends
+nothing unless `LANGSMITH_TRACING` is set, which Paper Trail never does.)
 
 ## Contributing
 

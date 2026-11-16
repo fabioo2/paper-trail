@@ -1,4 +1,5 @@
-"""UnitOfWork contract (S1-AC-18): commit only on commit(), for the fake and SQLite units."""
+"""UnitOfWork contract (S1-AC-18): commit only on commit(), for the fake and SQLite units.
+CE-TC-043: neither unit has a vector index any more (claude-extraction plan V1, D5)."""
 
 import pytest
 
@@ -85,3 +86,8 @@ def test_s1_ac_18_a_read_only_unit_cannot_commit(uow_factory: UnitOfWorkFactory)
         uow.commit()
 
     assert _receipt_count(uow_factory) == 0
+
+
+def test_ce_tc_043_a_unit_has_no_vector_index(uow_factory: UnitOfWorkFactory) -> None:
+    with uow_factory(read_only=True) as uow:
+        assert not hasattr(uow, "vectors")

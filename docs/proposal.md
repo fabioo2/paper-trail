@@ -2,6 +2,8 @@
 
 Project Proposal, October 2026
 
+> **Update 2026-11-15 ([ADR-0019](adr/0019-claude-reads-receipts.md)):** receipts are now read by the Claude API, not by OCR and Ollama models on a GPU PC. The database, the images and the code stay as described here, but each receipt photo is sent to Anthropic to be read, so "no data leaves the owner's hardware" no longer holds for photos. There is no LLM host, no OCR and no vector search; the sections below are kept as the record of what was planned.
+
 ## Overview
 
 Paper Trail is a web app that turns photos of receipts into a searchable record of purchases: what was bought, where, and at what price, with a price history for each item. It runs as a single Python container on a home server. The agents are built with LangGraph for its explicit control over agent flow, retry loops and saved state. Models run through Ollama on a desktop GPU (RTX 3080); because it is not always on, uploads wait in a queue that is processed whenever the GPU is available. All data is stored in one SQLite database with the sqlite-vec extension, so everything stays on private hardware.

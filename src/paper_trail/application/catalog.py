@@ -4,14 +4,14 @@ and the ``catalog`` commands (plan section 5).
 ``describe_product`` is what the supervisor's ``describe_from_catalog`` tool writes: only the
 fields that come with a source, never over a person's, and a person's category for the line at
 that store over any source's. It reads the product again inside its unit of work, so a person's
-write between the caller's read and this one is kept. It never embeds.
+write between the caller's read and this one is kept.
 
 The commands: ``CatalogTodo`` lists the coded products nobody has named yet, ``AddCatalogCode``
 lets a person name one (or point its code at an existing product), ``ListCatalogCodes``,
 ``RemoveCatalogCode`` and ``LookupCatalogCode`` show and fix ``product_codes``, ``import_plu``
 writes ``plu.csv`` from an IFPS export, and ``BackfillCatalog`` turns the products stored before
-codes (``legacy_model``) into coded, printed-text ones. None of them calls a model, embeds, or
-opens a network connection.
+codes (``legacy_model``) into coded, printed-text ones. None of them calls a model or opens
+a network connection.
 """
 
 import csv
@@ -639,8 +639,8 @@ def _replace_file(target: Path, rows: Iterable[Sequence[str]]) -> None:
 @dataclass(frozen=True, slots=True)
 class BackfilledProduct:
     """A product the backfill changes (or would): the code it keeps (None: uncoded lines
-    only), its ITEM lines after the splits, its fields and sources before and after, whether
-    its code row is written and whether its vector is deleted."""
+    only), its ITEM lines after the splits, its fields and sources before and after, and
+    whether its code row is written."""
 
     product_id: int
     code: CodeIdentity | None
@@ -648,7 +648,6 @@ class BackfilledProduct:
     before: Product
     after: Product
     code_attached: bool
-    vector_deleted: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,12 +791,11 @@ class BackfillCatalog:
         (person-linked lines stay, reported), attaches its most frequent code (tie: the
         earliest line's; source ``backfill``), resets ``legacy_model`` fields to the printed
         text, keeps a person's name and category (stamped ``person``), fills from the PLU
-        table what a person did not keep, deletes unconfirmed products' vectors and re-points
-        the MATCHED aliases of moved lines. A person's aliases and corrections are read under
-        both the old and the new normalization, so the last two steps can re-key correction
-        subjects (in place) and aliases. Converges: a second ``apply`` reports 0 changes and
-        writes nothing. No model, no embedding. CatalogBackfillStoppedError names the failed
-        step.
+        table what a person did not keep and re-points the MATCHED aliases of moved lines. A
+        person's aliases and corrections are read under both the old and the new
+        normalization, so the last two steps can re-key correction subjects (in place) and
+        aliases. Converges: a second ``apply`` reports 0 changes and writes nothing. No model.
+        CatalogBackfillStoppedError names the failed step.
 
         The dry run runs the same steps in one writing unit that is never committed, so each
         step sees the ones before it and the report equals what ``apply`` does."""
@@ -954,7 +952,7 @@ class BackfillCatalog:
     def _finish(self, uow: UnitOfWork, product_id: int, found: _Found, *, moved_from: bool) -> None:
         """Settle the product from the fields it had when this run first read it and its own
         final lines only, so a later settle in the run, a second run or a resumed one gives the
-        same values; then delete an unconfirmed product's vector and report the product."""
+        same values; then report the product."""
         product = uow.products.get(product_id)
         if product is None:
             return
@@ -970,12 +968,9 @@ class BackfillCatalog:
             uow.products.update(settled)
         if product_id in found.created:
             return
-        vector_deleted = not is_confirmed(settled) and uow.vectors.has(product_id)
-        if vector_deleted:
-            uow.vectors.delete(product_id)
         earlier = found.products.get(product_id)
         attached = product_id in found.attached
-        unchanged = settled == original and not (attached or vector_deleted or moved_from)
+        unchanged = settled == original and not (attached or moved_from)
         if earlier is None and unchanged:
             return
         found.products[product_id] = BackfilledProduct(
@@ -985,7 +980,6 @@ class BackfillCatalog:
             before=original,
             after=settled,
             code_attached=attached,
-            vector_deleted=vector_deleted or (earlier is not None and earlier.vector_deleted),
         )
 
     def _created(self, uow: UnitOfWork, member: _Coded, now: datetime, found: _Found) -> int:

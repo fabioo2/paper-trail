@@ -6,7 +6,6 @@ import structlog
 from sqlalchemy import Engine, text
 
 from paper_trail.adapters.sqlite.migrations import head_revision, revision_of
-from paper_trail.adapters.sqlite.vector_index import EMBEDDING_DIMENSION, declared_dimension
 from paper_trail.domain.health import ComponentHealth, HealthStatus
 
 log = structlog.get_logger(__name__)
@@ -17,10 +16,9 @@ _IN_MEMORY = ":memory:"
 class DatabaseHealthProbe:
     """Implements ``paper_trail.ports.health.HealthProbe`` for the application database.
 
-    Ready means: the file exists and opens, the schema is at the Alembic head, sqlite-vec is
-    loaded, SQLite was built with FTS5 and the product vectors have the embedding model's
-    dimension. Probing has no side effects: a missing database is
-    reported, never created (opening it through the engine would create the file).
+    Ready means: the file exists and opens, the schema is at the Alembic head and SQLite was
+    built with FTS5. Probing has no side effects: a missing database is reported, never
+    created (opening it through the engine would create the file).
     """
 
     name = "database"
@@ -47,13 +45,9 @@ class DatabaseHealthProbe:
         try:
             with self._engine.connect() as connection:
                 revision = revision_of(connection)
-                sqlite_version, vec_version, has_fts5 = connection.execute(
-                    text(
-                        "SELECT sqlite_version(), vec_version(),"
-                        " sqlite_compileoption_used('ENABLE_FTS5')"
-                    )
+                sqlite_version, has_fts5 = connection.execute(
+                    text("SELECT sqlite_version(), sqlite_compileoption_used('ENABLE_FTS5')")
                 ).one()
-                vector_dimension = declared_dimension(connection)
         except Exception:
             log.warning("health.database_unavailable", exc_info=True)
             return self._error("the database cannot be opened", {"head": head})
@@ -62,12 +56,8 @@ class DatabaseHealthProbe:
             "revision": revision or "none",
             "head": head,
             "sqlite_version": str(sqlite_version),
-            "sqlite_vec": str(vec_version),
-            "vector_dimension": str(vector_dimension or "none"),
         }
-        problem = _schema_problem(
-            revision, head, has_fts5=bool(has_fts5), dimension=vector_dimension
-        )
+        problem = _schema_problem(revision, head, has_fts5=bool(has_fts5))
         if problem is not None:
             return self._error(problem, data)
         return ComponentHealth(name=self.name, status=HealthStatus.OK, data=data)
@@ -76,9 +66,7 @@ class DatabaseHealthProbe:
         return ComponentHealth(name=self.name, status=HealthStatus.ERROR, detail=detail, data=data)
 
 
-def _schema_problem(
-    revision: str | None, head: str, *, has_fts5: bool, dimension: int | None
-) -> str | None:
+def _schema_problem(revision: str | None, head: str, *, has_fts5: bool) -> str | None:
     """Why an open database is not ready, or None when it is."""
     if revision != head:
         return (
@@ -87,9 +75,4 @@ def _schema_problem(
         )
     if not has_fts5:
         return "SQLite was built without FTS5"
-    if dimension != EMBEDDING_DIMENSION:
-        return (
-            f"product_vectors holds vectors of dimension {dimension or 'none'},"
-            f" expected {EMBEDDING_DIMENSION}"
-        )
     return None

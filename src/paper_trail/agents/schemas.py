@@ -1,158 +1,162 @@
-"""What the models must answer (S3-AC-11, PLAN 6, ADR-0009, ADR-0017).
+"""What Claude must answer when it reads a receipt photo (claude-extraction plan E1, ADR-0017).
 
-The schema is sent to Ollama as ``format`` and the answer is validated against it. Extraction
-``extraction/v1``: no extra fields, integer cents, a positive decimal-string quantity, a
-three-letter currency; the date stays a string here and is parsed in code
-(``ExtractedReceipt.to_draft``). ``extraction/v2`` and ``vision/v1``: every number and the date
-as printed (strings), converted in code by ``PrintedExtraction.to_output``. Matching:
-"same" or "different" for one line and the candidates it was offered. Enrichment: a product's
-name, brand, size, one category of the fixed enum (S4-AC-05) and tags.
+``ReceiptAnswer`` is the ``ReceiptReader``'s schema: the receipt, its finished items and its
+adjustments, every amount a string as printed. ``to_reading`` converts it in code into a
+``ReceiptReading`` in cents, which the validator checks and the mapper stores.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any, Literal, Protocol, Self
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from paper_trail.application.payloads import (
-    CurrencyCode,
-    ExtractedLine,
-    ExtractedReceipt,
-    Last4,
-    ProductEnrichment,
-)
-from paper_trail.domain.enums import LineKind
+from paper_trail.application.payloads import CurrencyCode, Last4
+from paper_trail.domain.enums import Unit
 from paper_trail.domain.errors import PrintedValueError
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.printed import (
-    LineAmount,
-    PricedLine,
     TaxReading,
-    is_item_reference,
-    line_kind,
-    line_quantity,
     parse_amount,
     parse_quantity,
     parse_tax,
     parse_unit_price,
-    printed_tax,
-    share_amounts,
+    parse_unit_price_exact,
+)
+from paper_trail.domain.rules.readings import (
+    AdjustmentKind,
+    ReadAdjustment,
+    ReadItem,
+    ReceiptReading,
 )
 
 
-class ExtractionOutput(ExtractedReceipt):
-    """The receipt as read, plus how sure the model is of its reading (0..1)."""
-
-    confidence: float = Field(ge=0.0, le=1.0)
-
-    def receipt_json(self) -> dict[str, Any]:
-        """The receipt without the confidence: the ``check_arithmetic`` tool's input."""
-        return self.model_dump(mode="json", exclude={"confidence"})
-
-    def to_output(self) -> Self:
-        """Already integer cents (``extraction/v1``)."""
-        return self
-
-    def notes(self) -> list[str]:
-        """Nothing is set aside: the answer is the output."""
-        return []
-
-
-class PrintedLine(BaseModel):
-    """One printed line, every value copied as printed; signs and cents are computed in code."""
+class ItemAnswer(BaseModel):
+    """One purchased item, finished: its printed line, its discount and what was paid
+    (claude-extraction plan E1). Money as printed; a discount as its size."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    raw_text: StrictStr = Field(description="the line's text as printed, without the amount")
-    description: StrictStr = Field(description="a readable product name, without item codes")
-    quantity: StrictStr | None = Field(
-        description='only from an "N @ price" or weight line, e.g. "2" or "0.460 kg"; else null'
+    printed_text: StrictStr = Field(description="the item's line exactly as printed")
+    code: StrictStr | None = Field(description="the product code printed on the line, or null")
+    name: StrictStr = Field(description="a readable description of the line")
+    department: StrictStr | None = Field(
+        description="the department heading printed above the item, or null"
     )
-    unit_price: StrictStr | None = Field(
-        description='as printed on an "N @ price" or weight line, e.g. "1.29" or "$3.31/kg"'
+    quantity: StrictStr | None = Field(description='e.g. "2" or "0.365"; null when not printed')
+    unit: Literal["each", "kg", "lb"]
+    unit_price: StrictStr | None = Field(description="the unit price as printed, or null")
+    regular_price: StrictStr = Field(
+        description="the line amount before any discount; equals price_paid without one"
     )
-    amount: StrictStr | None = Field(
-        description='the line\'s amount exactly as printed, e.g. "1.29", "4.00-", "17.08 A"'
-    )
-    kind: LineKind
+    discount: StrictStr | None = Field(description="the saving on this item as printed, or null")
+    price_paid: StrictStr = Field(description="the line amount paid, as printed")
+
+    def to_item(self, label: str, problems: list[str], currency: str) -> ReadItem:
+        """The item in cents; an unreadable value is added to ``problems`` as
+        ``"<label> <field> <why>"`` and zero (one for the quantity) stands in."""
+
+        def money(field: str, text: str) -> Money:
+            cents = _read(problems, f"{label} {field}", parse_amount, text, fallback=0)
+            return Money(cents, currency)
+
+        unit_price = parse_unit_price(self.unit_price)
+        exact = parse_unit_price_exact(self.unit_price)
+        printed = None if self.unit_price is None else self.unit_price.strip()
+        discount = (
+            Money.zero(currency) if self.discount is None else money("discount", self.discount)
+        )
+        return ReadItem(
+            printed_text=self.printed_text,
+            code=self.code,
+            name=self.name,
+            department=self.department,
+            quantity=_read(
+                problems, f"{label} quantity", parse_quantity, self.quantity, fallback=Decimal(1)
+            ),
+            unit=Unit(self.unit),
+            unit_price=None if unit_price is None else Money(abs(unit_price), currency),
+            regular_price=money("regular_price", self.regular_price),
+            discount=Money(abs(discount.amount_cents), currency),
+            price_paid=money("price_paid", self.price_paid),
+            unit_price_exact=None if exact is None else abs(exact),
+            unreadable_unit_price=printed if printed and exact is None else None,
+        )
 
 
-class PrintedExtraction(BaseModel):
-    """The receipt as printed (``extraction/v2``, ``vision/v1``, ADR-0017): the model copies,
-    ``to_output`` computes."""
+class AdjustmentAnswer(BaseModel):
+    """A receipt line that is no item: a deposit, a fee or a discount on the whole order."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["deposit", "fee", "order_discount"]
+    printed_text: StrictStr
+    amount: StrictStr = Field(description="as printed")
+
+    def to_adjustment(self, label: str, problems: list[str], currency: str) -> ReadAdjustment:
+        """The adjustment as it counts in the receipt sum: an order discount is negative
+        whatever its printed sign, a deposit or fee as printed."""
+        kind = AdjustmentKind(self.kind)
+        cents = _read(problems, f"{label} amount", parse_amount, self.amount, fallback=0)
+        if kind is AdjustmentKind.ORDER_DISCOUNT:
+            cents = -abs(cents)
+        return ReadAdjustment(
+            kind=kind, printed_text=self.printed_text, amount=Money(cents, currency)
+        )
+
+
+class ReceiptAnswer(BaseModel):
+    """Claude's reading of a receipt photo (E1): the ``ReceiptReader``'s schema."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     store_name: StrictStr
-    purchased_on: StrictStr | None = Field(description='the date as printed, e.g. "26/11/02"')
+    purchased_on: StrictStr | None = Field(description="YYYY-MM-DD, or null when not printed")
     currency: CurrencyCode
     subtotal: StrictStr | None
     taxes: list[StrictStr] = Field(description="every tax amount as printed")
     total: StrictStr
     payment_last4: Last4 | None
-    items: list[PrintedLine]
-    confidence: float = Field(ge=0.0, le=1.0)
+    items: list[ItemAnswer]
+    adjustments: list[AdjustmentAnswer]
 
-    def notes(self) -> list[str]:
-        """What ``to_output`` decided beyond copying, for the trace (call after ``to_output``
-        succeeded): taxes ignored because the printed subtotal is the printed total, and taxes
-        computed from a printed base and rate."""
-        if not self.taxes:
-            return []
-        if self.subtotal is not None and parse_amount(self.subtotal) == parse_amount(self.total):
-            return [f"tax {', '.join(self.taxes)} ignored: subtotal equals total"]
-        readings = (parse_tax(tax) for tax in self.taxes)
-        return [
-            f"tax {Money(reading.cents, self.currency).amount_text} computed from"
-            f" {reading.computed_from}"
-            for reading in readings
-            if reading.computed_from is not None
-        ]
-
-    def to_output(self) -> ExtractionOutput:
-        """The answer in integer cents. Every unreadable value is named in one
-        ``PrintedValueError`` that quotes the printed text (the next attempt's feedback)."""
+    def to_reading(self) -> ReceiptReading:
+        """The answer in cents. Every unreadable value is named in one ``PrintedValueError``
+        that quotes the printed text and names the item and field (the next attempt's
+        feedback). A null quantity is 1, a null discount zero; discount and order discount
+        signs as printed do not matter (code applies the minus)."""
         problems: list[str] = []
+        currency = self.currency
 
-        def amount(field: str, text: str) -> int:
-            return _read(problems, field, parse_amount, text, fallback=0)
+        def money(field: str, text: str) -> Money:
+            return Money(_read(problems, field, parse_amount, text, fallback=0), currency)
 
-        def quantity(field: str, text: str | None) -> Decimal:
-            return _read(problems, field, parse_quantity, text, fallback=Decimal(1))
-
-        total = amount("total", self.total)
-        subtotal = None if self.subtotal is None else amount("subtotal", self.subtotal)
-        taxes = [
-            _read(problems, "tax", parse_tax, tax, fallback=TaxReading(0)).cents
+        total = money("total", self.total)
+        subtotal = None if self.subtotal is None else money("subtotal", self.subtotal)
+        taxes = tuple(
+            Money(_read(problems, "tax", parse_tax, tax, fallback=TaxReading(0)).cents, currency)
             for tax in self.taxes
-        ]
-        amounts: list[LineAmount] = []
-        for number, line in enumerate(self.items, start=1):
-            unit = parse_unit_price(line.unit_price)
-            cents = None if line.amount is None else amount(f"line {number} amount", line.amount)
-            read = quantity(f"line {number} quantity", line.quantity)
-            amounts.append(LineAmount(line_quantity(read, unit, cents), unit, cents))
-        priced: list[PricedLine] = []
-        try:
-            priced = share_amounts(amounts)
-        except PrintedValueError as error:
-            problems.append(str(error))
+        )
+        items = tuple(
+            item.to_item(f"item {number}", problems, currency)
+            for number, item in enumerate(self.items, start=1)
+        )
+        adjustments = tuple(
+            adjustment.to_adjustment(f"adjustment {number}", problems, currency)
+            for number, adjustment in enumerate(self.adjustments, start=1)
+        )
         if problems:
             raise PrintedValueError("; ".join(problems))
-        return ExtractionOutput(
+        return ReceiptReading(
             store_name=self.store_name,
             purchased_on=self.purchased_on,
-            currency=self.currency,
-            subtotal_cents=subtotal,
-            tax_cents=printed_tax(subtotal, total, taxes),
-            total_cents=total,
+            currency=currency,
+            subtotal=subtotal,
+            taxes=taxes,
+            total=total,
             payment_last4=self.payment_last4,
-            items=[
-                _extracted_line(line, numbers)
-                for line, numbers in zip(self.items, priced, strict=True)
-            ],
-            confidence=self.confidence,
+            items=items,
+            adjustments=adjustments,
         )
 
 
@@ -166,69 +170,3 @@ def _read[T, V](
     except PrintedValueError as error:
         problems.append(f"{field} {error}")
         return fallback
-
-
-def _extracted_line(line: PrintedLine, numbers: PricedLine) -> ExtractedLine:
-    printed_kind = LineKind.DISCOUNT if is_item_reference(line.raw_text) else line.kind
-    kind, cents = line_kind(printed_kind, numbers.cents)
-    unit = numbers.unit_price_cents
-    return ExtractedLine(
-        raw_text=line.raw_text,
-        description=line.description,
-        quantity=str(numbers.quantity),
-        # A discount's unit price carries its sign, so that quantity x unit price = amount.
-        unit_price_cents=None if unit is None else (-abs(unit) if cents < 0 else unit),
-        line_total_cents=cents,
-        kind=kind,
-    )
-
-
-class ExtractionAnswer(Protocol):
-    """What an extraction prompt's model answers: anything that converts to the output."""
-
-    def to_output(self) -> ExtractionOutput: ...
-
-    def notes(self) -> list[str]:
-        """What the conversion set aside, recorded as trace notes (never silent)."""
-        ...
-
-
-# The answer model of each extraction prompt id ("<name>/<version>", examples or not).
-ANSWER_MODELS: Mapping[str, type[ExtractionAnswer]] = {
-    "extraction/v1": ExtractionOutput,
-    "extraction/v2": PrintedExtraction,
-    "vision/v1": PrintedExtraction,
-}
-
-
-def answer_model(name: str, version: str) -> type[ExtractionAnswer]:
-    """The answer model of the prompt ``name/version``; LookupError when there is none."""
-    prompt_id = f"{name}/{version}"
-    try:
-        return ANSWER_MODELS[prompt_id]
-    except KeyError:
-        msg = f"no answer model for the prompt {prompt_id}"
-        raise LookupError(msg) from None
-
-
-class MatchDecision(BaseModel):
-    """Is the receipt line one of the offered products? (the matching model's answer)"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    line_position: StrictInt = Field(ge=0)
-    decision: Literal["same", "different"]
-    product_id: StrictInt | None  # the offered product it is, for "same"
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class EnrichmentOutput(ProductEnrichment):
-    """What a new product is, plus how sure the model is (0..1); below
-    ``GRAPH__MIN_CONFIDENCE`` the product is left as it is."""
-
-    confidence: float = Field(ge=0.0, le=1.0)
-
-    def enrichment_json(self) -> dict[str, Any]:
-        """The answer without the confidence: what the retired ``save_enrichment`` tool took
-        (``enrichment/v1`` is kept on disk, unused)."""
-        return self.model_dump(mode="json", exclude={"confidence"})

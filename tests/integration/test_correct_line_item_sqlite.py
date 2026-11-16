@@ -14,9 +14,9 @@ from paper_trail.domain.models import ProductCode
 from paper_trail.domain.rules.normalization import normalize_alias
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.agent_harness import build_harness
-from tests.extractions import C1, COSTCO_OCR, NOW, STORE_KEY, STORE_NAME, coded_extraction
+from tests.extractions import C1, NOW, STORE_KEY, STORE_NAME, coded_answer
 from tests.fakes.clock import FakeClock
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.storage import sqlite_uow_factory
 from tests.support import require_id
 
@@ -56,18 +56,18 @@ def test_pc_tc_76_a_failed_code_write_rolls_the_whole_correction_back(
 ) -> None:
     clock = FakeClock(NOW)
     working = build_harness(
-        ScriptedLlm(coded_extraction([C1], store_name=STORE_NAME)),
+        ScriptedReader(coded_answer([C1], store_name=STORE_NAME)),
         clock=clock,
         uow_factory=sqlite_uow_factory(migrated_engine, clock),
     )
-    receipt_id = working.process_text(COSTCO_OCR).receipt_id
+    receipt_id = working.process_image().receipt_id
     printed = require_id(working.line(receipt_id, 0).product_id)
     with working.uow_factory(read_only=True) as uow:
         codes_before = uow.product_codes.list()
     aliases_before = working.aliases(printed)
     prices_before = working.price_history(printed)
     failing = build_harness(
-        ScriptedLlm(), clock=clock, uow_factory=_failing_codes(migrated_engine, clock)
+        ScriptedReader(), clock=clock, uow_factory=_failing_codes(migrated_engine, clock)
     )
 
     with pytest.raises(CodeWriteError):

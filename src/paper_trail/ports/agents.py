@@ -13,8 +13,9 @@ class NothingToResumeError(ConflictError):
 
 
 class OutdatedCheckpointError(ConflictError):
-    """The receipt's thread was saved by a version whose state the next node cannot read (no
-    ``state_version``, past ``match``); the receipt must be processed again."""
+    """The receipt's thread was saved by an older version whose state this one cannot read
+    (``state_version`` below the current one); the message names the ways out: ``review
+    resolve`` with a corrected file, or ``process --reprocess``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,8 +24,7 @@ class GraphOutcome:
     status: ReceiptStatus
     review_id: int | None
     review_reason: ReviewReason | None
-    text_attempts: int
-    vision_attempts: int
+    attempts: int  # Claude reads made (extract model, then retry model)
     paused_at: str | None  # the node a static breakpoint stopped after (slice C); not a review
     resumed_from: str | None = None  # a continued thread's last completed node before this run
 
@@ -37,14 +37,14 @@ class ReceiptGraphRunner(Protocol):
         receipt_id: int,
         *,
         source_name: str,
-        image_path: str | None = None,
-        ocr_text: str | None = None,
+        image_path: str,
         interrupt_after: str | None = None,
     ) -> GraphOutcome:
-        """Run a new thread. With ``ocr_text`` (already masked) the OCR step is skipped. With
-        ``interrupt_after`` the run pauses after that node (``paused_at``), checkpoint kept.
+        """Run a new thread over the stored photo ``image_path``. With ``interrupt_after`` the
+        run pauses after that node (``paused_at``), checkpoint kept.
 
-        Raises LlmUnavailableError when the LLM host is down (the checkpoint is kept).
+        Raises a ``ReaderError`` (``ports.reader``) when a read stops the run (the checkpoint
+        is kept).
         """
         ...
 
@@ -53,8 +53,7 @@ class ReceiptGraphRunner(Protocol):
         pending extraction); after a pause or a run that raised, from its last checkpoint
         (``draft`` must be None, else ConflictError). NothingToResumeError when the receipt
         has no thread or its thread has finished; OutdatedCheckpointError, before any write,
-        when its saved state has no ``state_version`` and its next node is
-        ``commit_matches``, ``enrich`` or ``commit_enrichment``."""
+        when it is not waiting for a review and its saved state is from an older version."""
         ...
 
     def reset(self, receipt_id: int) -> None:
@@ -62,5 +61,6 @@ class ReceiptGraphRunner(Protocol):
         ...
 
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:
-        """The extraction a thread paused for review holds, as a draft (None if there is none)."""
+        """The extraction a thread paused for review holds, as a draft; None if there is none,
+        or if the thread was saved by an older version (only a person's draft answers it)."""
         ...

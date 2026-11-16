@@ -1,7 +1,7 @@
 """Tracing around the graph, so that nodes hold no tracing code (AC-A-09, plan 2.4).
 
-``traced_node`` brackets a node with NODE start/end events; ``TracingLlm`` and
-``TracingToolGateway`` decorate the ports so that every model call and every tool call, a
+``traced_node`` brackets a node with NODE start/end events; ``TracingReader`` and
+``TracingToolGateway`` decorate the ports so that every Claude read and every tool call, a
 denial included, becomes one event. A save that leaves a discount at receipt level or an item
 line without a price also gets a NOTE naming them, so neither goes unexplained. The runner
 applies all three.
@@ -14,11 +14,13 @@ from typing import Protocol
 
 from pydantic_core import to_jsonable_python
 
+from paper_trail.agents.json_values import masked_json
 from paper_trail.agents.state import ReceiptState
 from paper_trail.domain.enums import AgentRole, MatchSource
 from paper_trail.domain.models import JsonValue
+from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.trace import TraceKind
-from paper_trail.ports.llm import ChatMessage, LlmError, LlmPort, LlmRequest, LlmResult
+from paper_trail.ports.reader import ReaderError, ReadRequest, ReadResult, ReceiptReader
 from paper_trail.ports.tools import ToolDescription, ToolGateway, ToolNotPermittedError
 from paper_trail.ports.trace import Tracer
 
@@ -27,11 +29,6 @@ class Node(Protocol):
     """A graph node: the state in, a partial update out."""
 
     def __call__(self, state: ReceiptState) -> ReceiptState: ...
-
-
-_CENTS = 100
-# Prompts are named after their agent, except the extraction agent's vision prompt.
-_PROMPT_AGENTS = {"vision": AgentRole.EXTRACTION}
 
 
 def _elapsed_ms(started: float) -> int:
@@ -59,68 +56,59 @@ def traced_node(tracer: Tracer, agent: AgentRole, name: str, node: Node) -> Node
     return run
 
 
-class TracingLlm:
-    """An ``LlmPort`` that records each call on one receipt's trace: the prompt tag, model,
-    attempt (1-based per tag), token counts, rendered messages and the validated output. An
-    image is recorded as its SHA-256, never its bytes. A call whose request timed out and was
-    sent again records the count (``timeout_retries``) and leads its summary with ``↻N``."""
+class TracingReader:
+    """A ``ReceiptReader`` that records each read on one receipt's trace as an LLM event named
+    after the request's tag: model, the request's attempt (1-based, right across resumed runs),
+    input and output tokens, stop reason, and the SHA-256 of the image sent, never its bytes. A
+    failed read records the error's class and message (card numbers masked), and tokens only
+    when it was billed."""
 
-    def __init__(self, inner: LlmPort, tracer: Tracer, receipt_id: int) -> None:
+    def __init__(self, inner: ReceiptReader, tracer: Tracer, receipt_id: int) -> None:
         self._inner = inner
         self._tracer = tracer
         self._receipt_id = receipt_id
 
-    def complete_structured[M](self, request: LlmRequest, schema: type[M]) -> LlmResult[M]:
-        prompt = request.tag.partition("/")[0]
-        agent = _PROMPT_AGENTS.get(prompt) or AgentRole(prompt)
+    def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         data: dict[str, JsonValue] = {
             "tag": request.tag,
             "model": request.model,
-            "attempt": self._attempt(request.tag),
-            "messages": [_traced_message(message) for message in request.messages],
+            "attempt": request.attempt,
         }
         started = time.perf_counter()
         try:
-            result = self._inner.complete_structured(request, schema)
-        except LlmError as error:
-            data |= {"prompt_tokens": None, "completion_tokens": None, "output": None}
-            self._emit(
-                agent,
-                request.tag,
-                _retried(f"{type(error).__name__}: {error}", error.timeout_retries, data),
-                data,
-                started=started,
-                error=error,
-            )
+            result = self._inner.read(request, schema)
+        except ReaderError as error:
+            usage = error.usage
+            failure = f"{type(error).__name__}: {mask_pans(str(error)).text}"
+            data |= {
+                "image_sha256": _sent_sha256(request, error.image_sha256),
+                "input_tokens": None if usage is None else usage.input_tokens,
+                "output_tokens": None if usage is None else usage.output_tokens,
+                "stop_reason": None,
+                "output": None,
+                "error": failure,
+            }
+            self._emit(request.tag, failure, data, started)
             raise
-        output: JsonValue = to_jsonable_python(result.value)
+        output, _ = masked_json(to_jsonable_python(result.value))
         data |= {
-            "prompt_tokens": result.prompt_tokens,
-            "completion_tokens": result.completion_tokens,
+            "image_sha256": _sent_sha256(request, result.image_sha256),
+            "input_tokens": result.usage.input_tokens,
+            "output_tokens": result.usage.output_tokens,
+            "stop_reason": result.stop_reason,
             "output": output,
         }
-        summary = _retried(_llm_summary(output), result.timeout_retries, data)
-        self._emit(agent, request.tag, summary, data, started=started, error=None)
+        self._emit(request.tag, f"{request.model} · {_read_summary(output)}", data, started)
         return result
 
-    def _attempt(self, tag: str) -> int:
-        earlier = self._tracer.events(self._receipt_id)
-        return 1 + sum(1 for event in earlier if event.kind is TraceKind.LLM and event.name == tag)
-
-    def _emit(  # noqa: PLR0913 - the parts of one LLM event
-        self,
-        agent: AgentRole,
-        tag: str,
-        summary: str,
-        data: dict[str, JsonValue],
-        *,
-        started: float,
-        error: LlmError | None,
-    ) -> None:
-        if error is not None:
-            data["error"] = str(error)
+    def _emit(self, tag: str, summary: str, data: dict[str, JsonValue], started: float) -> None:
         self._tracer.emit(
-            agent, TraceKind.LLM, tag, summary, data=data, duration_ms=_elapsed_ms(started)
+            AgentRole.EXTRACTION,
+            TraceKind.LLM,
+            tag,
+            summary,
+            data=data,
+            duration_ms=_elapsed_ms(started),
         )
 
 
@@ -168,60 +156,24 @@ class TracingToolGateway:
         )
 
 
-def _traced_message(message: ChatMessage) -> JsonValue:
-    traced: dict[str, JsonValue] = {"role": message.role, "content": message.content}
-    if message.images:
-        traced["images"] = [hashlib.sha256(image).hexdigest() for image in message.images]
-    return traced
+def _sent_sha256(request: ReadRequest, reported: str | None) -> str:
+    """The SHA-256 of the image the reader sent: as it reports it (it may have re-encoded the
+    image to fit the API), else of the request's image, sent as it is."""
+    return reported or hashlib.sha256(request.image).hexdigest()
 
 
-def _retried(summary: str, retries: int, data: dict[str, JsonValue]) -> str:
-    """``summary`` led by ``↻N`` when ``retries`` timed-out tries were sent again, so the
-    trace table's narrow cell keeps it; the count also goes into ``data``."""
-    if not retries:
-        return summary
-    data["timeout_retries"] = retries
-    return f"↻{retries} {summary}"
-
-
-def _money(cents: object) -> str:
-    return f"{cents / _CENTS:.2f}" if isinstance(cents, int) else "?"
-
-
-def _llm_summary(output: JsonValue) -> str:
-    """One line about an answer: an extraction's lines, total and confidence, a matching
-    decision, or an enrichment's category and name, with the confidence."""
+def _read_summary(output: JsonValue) -> str:
+    """One line about an answer: its items and its total as printed."""
     if not isinstance(output, dict):
         return "ok"
-    confidence = output.get("confidence")
-    sure = f" · conf {confidence:.2f}" if isinstance(confidence, int | float) else ""
-    if "decision" in output:
-        product = output.get("product_id")
-        return f"{output['decision']}{'' if product is None else f' #{product}'}{sure}"
-    if "category" in output:
-        return f"{output['category']} · {output.get('canonical_name')}{sure}"
-    if "items" not in output:
-        return "ok"
-    items = output["items"]
+    items = output.get("items")
     count = len(items) if isinstance(items, list) else 0
-    return f"{count} lines · total {_money(output.get('total_cents'))}{sure}"
+    return f"{count} item{'s' if count != 1 else ''} · total {output.get('total')}"
 
 
 def _tool_summary(name: str, result: Mapping[str, JsonValue]) -> str:
     summarise = _TOOL_SUMMARIES.get(name)
     return "ok" if summarise is None else summarise(result)
-
-
-def _ocr_summary(result: Mapping[str, JsonValue]) -> str:
-    text, confidence, masked = result["text"], result["mean_confidence"], result["masked_pans"]
-    parts = [f"{len(text) if isinstance(text, str) else 0:,} chars"]
-    if isinstance(confidence, int | float):
-        parts.append(f"ocr conf {confidence:.0%}")
-    if rotation := result.get("rotation_degrees"):
-        parts.append(f"rotated {rotation}°")
-    if masked:
-        parts.append(f"{masked} card{'s' if masked != 1 else ''} masked")
-    return " · ".join(parts)
 
 
 def _arithmetic_summary(result: Mapping[str, JsonValue]) -> str:
@@ -254,16 +206,6 @@ def _lookup_summary(result: Mapping[str, JsonValue]) -> str:
     if not isinstance(product, dict):
         return "no match"
     return f"{result['source']} · #{product['id']} {product['canonical_name']}"
-
-
-def _search_summary(result: Mapping[str, JsonValue]) -> str:
-    candidates = result["candidates"]
-    if not isinstance(candidates, list) or not candidates:
-        return "no candidates"
-    nearest = candidates[0]
-    distance = nearest.get("distance") if isinstance(nearest, dict) else None
-    near = f" · nearest {distance:.2f}" if isinstance(distance, float) else ""
-    return f"{len(candidates)} candidate{'s' if len(candidates) != 1 else ''}{near}"
 
 
 def _matches_summary(result: Mapping[str, JsonValue]) -> str:
@@ -373,12 +315,10 @@ _TOOL_NOTES: dict[str, Callable[[Mapping[str, JsonValue]], _Note | None]] = {
 }
 
 _TOOL_SUMMARIES: dict[str, Callable[[Mapping[str, JsonValue]], str]] = {
-    "ocr_read": _ocr_summary,
     "check_arithmetic": _arithmetic_summary,
     "save_receipt": _save_summary,
     "open_review": _review_summary,
     "product_lookup": _lookup_summary,
-    "product_similarity_search": _search_summary,
     "save_matches": _matches_summary,
     "catalog_lookup": _catalog_lookup_summary,
     "describe_from_catalog": _describe_summary,

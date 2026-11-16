@@ -10,7 +10,7 @@ from paper_trail.ports.repositories import (
     ProductRepository,
     ReceiptRepository,
 )
-from paper_trail.ports.search import TextSearchIndex, VectorIndex
+from paper_trail.ports.search import TextSearchIndex
 
 
 class UnitOfWork(Protocol):
@@ -32,7 +32,6 @@ class UnitOfWork(Protocol):
     jobs: JobQueue
     reviews: ReviewQueue
     text_search: TextSearchIndex
-    vectors: VectorIndex
 
     def __enter__(self) -> Self: ...
 

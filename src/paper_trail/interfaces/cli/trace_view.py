@@ -1,8 +1,8 @@
 """The agent trace on the terminal: one block per receipt, at most 100 columns (plan 4.2).
 
-    ━━ receipt 12 · costco.jpg · run e1 · extraction/v1 · inprocess ━━
+    ━━ receipt 12 · costco.jpg · run e1 · extraction/v3 · inprocess ━━
       #  agent       step                        result                                   time
-      1  extraction  tool ocr_read               1,284 chars · ocr conf 81% · 1 card ma…  0.9s
+      1  extraction  llm extraction/v3           claude-haiku-5-5 · 7 items · total 42.04  3.1s
       ...
       ✔ COMPLETED in 24.0s · llm 2 · tools 4 (0 denied) · trace /data/runs/e1/traces/...
 

@@ -3,16 +3,20 @@
 What is saved is the person's draft after a review, else the valid extraction as a draft
 (``saved_draft``), approved either way (a person's draft even if forced through). The tool
 leaves the receipt PROCESSING/MATCHING: ``commit_matches`` completes it once its lines are
-linked.
+linked. An extraction's discounts are saved where the reading put them (an order discount
+stays at receipt level); a person's draft goes through the discount rule as before. The
+extraction's printed product codes go into the state for ``match``
+(``reading_codes``); a person's draft has none.
 """
 
 from paper_trail.agents.deps import AgentDeps
-from paper_trail.agents.drafts import saved_draft
+from paper_trail.agents.drafts import extraction_reading, saved_draft
 from paper_trail.agents.json_values import as_str
 from paper_trail.agents.state import ReceiptState
 from paper_trail.agents.tracing import Node
 from paper_trail.application.payloads import DraftPayload
 from paper_trail.domain.enums import AgentRole
+from paper_trail.domain.rules.readings import reading_codes
 
 
 def persist_node(deps: AgentDeps) -> Node:
@@ -24,8 +28,17 @@ def persist_node(deps: AgentDeps) -> Node:
                 "receipt_id": state["receipt_id"],
                 "draft": DraftPayload.from_draft(saved_draft(deps, state)).model_dump(mode="json"),
                 "force": state.get("approved", False),
+                "attribute_discounts": state.get("draft") is not None,
             },
         )
-        return {"saved": True, "status": as_str(result["status"])}
+        codes = (
+            []
+            if state.get("draft") is not None
+            else [
+                {"position": position, "code": code}
+                for position, code in reading_codes(extraction_reading(state)).items()
+            ]
+        )
+        return {"saved": True, "status": as_str(result["status"]), "codes": codes}
 
     return persist

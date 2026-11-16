@@ -21,7 +21,7 @@ Pinned (signatures "PR 1b", rulings I6, I7, I10, I11, I13, TQ19, TQ35):
   (else the earliest line); a person's name
   (creating PRODUCT_LINK correction, IMPORT alias) and newest CATEGORY correction are kept as
   ``person``; ``person``/``plu``/``receipt_text`` fields are left; a PLU code fills what no
-  person kept. Unconfirmed products lose their vector. MATCHED aliases of moved lines follow
+  person kept. MATCHED aliases of moved lines follow
   them (deleted when staying lines share the text); person aliases are untouched.
 - PRODUCT_LINK corrections teach codes first, from their original subjects and lines (newest
   per code, source ``correction``), never over a person's code row; person evidence (IMPORT
@@ -30,7 +30,7 @@ Pinned (signatures "PR 1b", rulings I6, I7, I10, I11, I13, TQ19, TQ35):
 - A product the run creates is described from every line moved into it, so a second ``apply``
   reports 0 changes and writes nothing.
 
-The legacy state (``Legacy``): products as 0006 stamps them with a vector each, receipts whose
+The legacy state (``Legacy``): products as 0006 stamps them, receipts whose
 linked ITEM lines have an observation (discounts applied) and a MATCHED alias per distinct line
 text at its store, stored under the current ``normalize_alias`` key.
 """
@@ -92,7 +92,7 @@ from tests.extractions import (
     PLU_CSV,
     U1,
     WALMART,
-    coded_extraction,
+    coded_answer,
 )
 from tests.factories import (
     CREATED_AT,
@@ -108,7 +108,7 @@ from tests.factories import (
     product_alias,
 )
 from tests.fakes.clock import FakeClock
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.fakes.repositories import FakeReceiptRepository
 from tests.fakes.unit_of_work import FakeDatabase, FakeUnitOfWork, fake_uow_factory
 from tests.storage import in_unit, seed_purchase
@@ -134,14 +134,8 @@ class Legacy:
         self.factory = factory
         self._days = count()
 
-    def add(self, stored: Product, *, vector: bool = True) -> int:
-        def store(uow: UnitOfWork) -> int:
-            product_id = require_id(uow.products.add(stored).id)
-            if vector:
-                uow.vectors.upsert(product_id, [1.0] + [0.0] * (uow.vectors.dimension - 1))
-            return product_id
-
-        return in_unit(self.factory, store)
+    def add(self, stored: Product) -> int:
+        return require_id(in_unit(self.factory, lambda uow: uow.products.add(stored)).id)
 
     def buy(
         self,
@@ -356,7 +350,7 @@ def test_pc_tc_126_a_one_code_product_gets_its_code_and_its_printed_name(
 
     after = _printed(before, "PC UNS BABYWIPES")
     assert found == CatalogBackfill(
-        products=(BackfilledProduct(p, WIPES, 2, before, after, True, True),),
+        products=(BackfilledProduct(p, WIPES, 2, before, after, True),),
         splits=(),
         conflicts=(),
         merge_candidates=(),
@@ -701,7 +695,7 @@ def test_pc_tc_132_two_products_of_one_code_are_reported_never_merged(
     )
 
 
-# --- person values, PLU, vectors (PC-TC-133, 134, 135) ------------------------------------------
+# --- person values, PLU (PC-TC-133, 134) --------------------------------------------------------
 
 type Arrange = Callable[[Legacy, int, Receipt], object]
 
@@ -840,21 +834,6 @@ def test_pc_tc_134_without_plu_csv_names_stay_printed_with_one_warning(
         for pid in (apple, organic)
     ] == [("TST APPLE", PRINTED), ("ORG TST APPLE", PRINTED)]
     assert [log["event"] for log in logs].count("catalog.missing") == 1
-
-
-def test_pc_tc_135_only_unconfirmed_products_lose_their_vector(
-    legacy: Legacy, backfill: BackfillCatalog, database: FakeDatabase
-) -> None:
-    p = legacy.add(legacy_product(canonical_name="Chocolate Pistachio Bars"))
-    q = legacy.add(_post("Gold Kiwi", FieldSource.PERSON))
-    r = legacy.add(legacy_product(canonical_name="Apples"))
-    legacy.buy(_item(0, C1, p), _item(1, C2, q))
-    legacy.buy(_item(0, L3, r), store=LOBLAWS)
-    kept = {pid: database.state.vectors[pid] for pid in (q, r)}
-
-    backfill(apply=True)
-
-    assert database.state.vectors == kept
 
 
 # --- aliases (PC-TC-136, 137) --------------------------------------------------------------------
@@ -1102,7 +1081,7 @@ def test_pc_tc_142_every_product_is_visited(
 ) -> None:
     """``products.ids()`` has no paging (its contract test owns that); three products pin that
     every one is reached, not only the first."""
-    ids = [legacy.add(legacy_product(canonical_name=f"Thing {n}"), vector=False) for n in range(3)]
+    ids = [legacy.add(legacy_product(canonical_name=f"Thing {n}")) for n in range(3)]
     legacy.buy(*(_item(n, f"{2000000 + n} THING {n}", pid) for n, pid in enumerate(ids)))
 
     backfill(apply=True)
@@ -1118,7 +1097,7 @@ def test_pc_tc_142_every_product_is_visited(
 
 def _post_0006(legacy: Legacy) -> None:
     named = legacy.add(_post("Choc Bars", FieldSource.PERSON))
-    printed = legacy.add(_post("GOLD KIWI", FieldSource.RECEIPT_TEXT), vector=False)
+    printed = legacy.add(_post("GOLD KIWI", FieldSource.RECEIPT_TEXT))
     legacy.code(named, X, CodeSource.MANUAL)
     legacy.code(printed, Y, CodeSource.RECEIPT)
     legacy.buy(
@@ -1151,7 +1130,7 @@ def test_pc_tc_171_a_product_made_with_the_catalog_off_gets_its_code(
     uow_factory: UnitOfWorkFactory,
     clock: FakeClock,
 ) -> None:
-    p = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT), vector=False)
+    p = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT))
     legacy.buy(_item(0, C1, p), _item(1, C1, p))
     product_row, aliases = _product(database, p), copy.deepcopy(database.state.aliases)
 
@@ -1166,7 +1145,7 @@ def test_pc_tc_171_a_product_made_with_the_catalog_off_gets_its_code(
     )
     clock.set(NOW)
     harness = build_harness(
-        ScriptedLlm(coded_extraction([C1], store_name=STORE_NAME)),
+        ScriptedReader(coded_answer([C1], store_name=STORE_NAME)),
         uow_factory=uow_factory,
         clock=clock,
     )
@@ -1180,8 +1159,8 @@ def test_pc_tc_171_a_product_made_with_the_catalog_off_gets_its_code(
 def test_pc_tc_171_when_the_code_names_another_product_nothing_moves(
     legacy: Legacy, backfill: BackfillCatalog, database: FakeDatabase
 ) -> None:
-    p = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT), vector=False)
-    n = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT), vector=False)
+    p = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT))
+    n = legacy.add(_post("CHOC PISTACH", FieldSource.RECEIPT_TEXT))
     legacy.code(n, X, CodeSource.RECEIPT)
     legacy.buy(_item(0, C1, p), _item(1, C1, p))
     legacy.buy(_item(0, C1, n, source=MatchSource.CATALOG))

@@ -5,8 +5,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-# A git-ignored compose.override.yaml holds per-host changes, e.g. the single-machine overlay from
-# deploy/single-host (PLAN 2.4a). On GitHub Actions compose.ci.yaml adds the GHA build cache
+# A git-ignored compose.override.yaml holds per-host changes. On GitHub Actions compose.ci.yaml adds the GHA build cache
 # (PLAN 2.6); locally it is unused.
 DC := docker compose -f compose.yaml -f compose.dev.yaml$(if $(wildcard compose.override.yaml), -f compose.override.yaml)$(if $(GITHUB_ACTIONS), -f compose.ci.yaml)
 RUN := $(DC) run --rm
@@ -25,7 +24,7 @@ BASE_IMAGES := python:3.12-slim-trixie node:24-trixie-slim
 	lint format typecheck test test-fast test-unit test-integration \
 	fe-install fe-deps fe-lint fe-format fe-typecheck fe-test fe-build fe-dev \
 	api-client api-check secrets smoke container-checks pre-commit hooks check ci \
-	llm-config llm-up llm-down process pt graph mcp-up mcp-down outdated clean
+	smoke-claude process pt graph mcp-up mcp-down outdated clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -85,7 +84,7 @@ typecheck: ## Type-check Python (mypy --strict)
 # Both run the tests in parallel with pytest-xdist; pytest-cov combines the workers' coverage
 # (and their child processes') into one report. At most 6 workers by default, never one per CPU:
 # the host's 8 cores also serve other self-hosted services, which must stay responsive. CI sets
-# PYTEST_WORKERS=auto: its 2-vCPU runner was oversubscribed by 6 workers (a Tesseract timeout).
+# PYTEST_WORKERS=auto: its 2-vCPU runner was oversubscribed by 6 workers (timeouts).
 PYTEST_WORKERS ?= 6
 
 test: ## Run every Python suite in parallel with branch coverage (fails under 90 %)
@@ -179,6 +178,12 @@ ci: build check smoke container-checks ## Full gate: build images, check, smoke-
 process: ## Process receipts: make process RECEIPTS=<file|dir> [RUN_NAME=<run>] [ARGS="<flags>"]
 	$(RUN) cli process "/receipts/$(RECEIPTS)" $(if $(RUN_NAME),--run $(RUN_NAME)) $(ARGS)
 
+# Opt-in, never part of check or ci: it calls the real Claude API and costs money.
+SMOKE_RUN ?= smoke-claude-$(shell date -u +%Y%m%dT%H%M%SZ)
+
+smoke-claude: ## Live smoke: Claude reads RECEIPTS into a new run and prints a table; needs ANTHROPIC_API_KEY
+	$(RUN) cli process "/receipts/$(RECEIPTS)" --run $(SMOKE_RUN) --table $(ARGS)
+
 pt: ## Run any paper-trail command in the cli service: make pt ARGS="review list"
 	$(RUN) cli $(ARGS)
 
@@ -190,18 +195,6 @@ mcp-up: ## Serve the agents' tools over MCP on 127.0.0.1:8421 (/mcp/<role>/)
 
 mcp-down: ## Stop and remove the MCP server only (web and worker keep running)
 	$(DC) --profile mcp rm --stop --force mcp
-
-# --- LLM host (run these on the GPU PC, ADR-0016) ------------------------------------------------
-# A Windows LLM host runs the same `docker compose` commands directly (README), not Make.
-
-llm-config: ## Validate the LLM host compose file
-	docker compose -f deploy/llm/compose.yaml config --quiet
-
-llm-up: ## Start Ollama and pull the configured models (on the LLM host)
-	docker compose -f deploy/llm/compose.yaml --env-file deploy/llm/.env up -d
-
-llm-down: ## Stop Ollama (models are kept in their volume)
-	docker compose -f deploy/llm/compose.yaml --env-file deploy/llm/.env down
 
 # --- maintenance ------------------------------------------------------------------------------
 

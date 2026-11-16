@@ -6,13 +6,12 @@ import pytest
 from sqlalchemy import Engine, text
 
 from paper_trail.domain.enums import CorrectionKind, JobKind, ReviewReason
+from paper_trail.ports.search import HitKind
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from tests.factories import correction, price_observation, product, product_alias, receipt
 from tests.fakes.clock import FakeClock
 from tests.storage import in_unit, sqlite_uow_factory
 from tests.support import require_id
-
-VECTOR = [1.0] + [0.0] * 767
 
 
 @dataclass(frozen=True)
@@ -35,7 +34,6 @@ def graph(uow_factory: UnitOfWorkFactory) -> Graph:
     def build(uow: UnitOfWork) -> Graph:
         product_id = require_id(uow.products.add(product()).id)
         uow.products.add_alias(product_alias(product_id))
-        uow.vectors.upsert(product_id, VECTOR)
         linked = tuple(replace(item, product_id=product_id) for item in receipt().items)
         saved = uow.receipts.add(receipt(items=linked))
         other = uow.receipts.add(receipt())
@@ -95,7 +93,11 @@ def test_s1_ac_13_deleting_a_receipt_keeps_corrections_without_their_links(
 def test_s1_ac_13_deleting_a_product_unlinks_and_cascades(
     migrated_engine: Engine, uow_factory: UnitOfWorkFactory, graph: Graph
 ) -> None:
-    """S1-AC-13: line_items.product_id -> NULL; aliases, observations and the vector go."""
+    """S1-AC-13: line_items.product_id -> NULL; aliases and observations go. CE-TC-043: at
+    head no vector table or trigger is left to fire, and the product's FTS row goes too."""
+    fts = "SELECT count(*) FROM products_fts WHERE rowid = :id"
+    assert _count(migrated_engine, fts, id=graph.product_id) == 1
+
     _delete(migrated_engine, "products", graph.product_id)
 
     assert (
@@ -104,9 +106,10 @@ def test_s1_ac_13_deleting_a_product_unlinks_and_cascades(
     assert _count(migrated_engine, "SELECT count(*) FROM line_items") == 4, "lines are kept"
     assert _count(migrated_engine, "SELECT count(*) FROM product_aliases") == 0
     assert _count(migrated_engine, "SELECT count(*) FROM price_observations") == 0
-    assert _count(migrated_engine, "SELECT count(*) FROM product_vectors") == 0
+    assert _count(migrated_engine, fts, id=graph.product_id) == 0
     with uow_factory() as uow:
-        assert uow.vectors.nearest(VECTOR, k=5) == ()
+        hits = uow.text_search.search("organic", limit=10)
+        assert [hit for hit in hits if hit.kind is HitKind.PRODUCT] == []
         assert uow.products.find_by_alias("ks org eggs 24ct", "costco") is None
 
 

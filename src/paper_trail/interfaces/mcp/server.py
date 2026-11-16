@@ -98,7 +98,7 @@ def _role_server(toolbox: RoleToolbox, role: AgentRole) -> Server[Any]:
     async def call_tool(_: object, params: CallToolRequestParams) -> CallToolResult:
         payload: dict[str, JsonValue] = dict(params.arguments or {})
         try:
-            # The tools are synchronous (SQLite, Tesseract): off the event loop.
+            # The tools are synchronous (SQLite): off the event loop.
             output = await anyio.to_thread.run_sync(toolbox.call, params.name, payload)
         except Exception as error:  # every failure goes back to the caller as an error result
             failure = error_payload(error)

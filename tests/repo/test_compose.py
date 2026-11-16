@@ -1,4 +1,5 @@
-"""Compose files: services, ports, hardening, pinning, LLM host (S0-AC-07/10/12/36/37/39).
+"""Compose files: services, ports, hardening, pinning, the Claude key (S0-AC-07/10/12/36/37;
+claude-extraction plan CE-TC-068: no LLM host any more, the key reaches the app's services).
 
 These read the raw YAML (anchors and merge keys resolved by PyYAML). Interpolated values are
 checked again against `docker compose config` by tests/container/run.sh.
@@ -48,10 +49,11 @@ HOST_PORTS_IN_USE = frozenset(
 PINNED_TAG = re.compile(r"^[^:@\s]+:v?[0-9][\w.-]*$")
 INTERPOLATION_DEFAULT = re.compile(r"\$\{[A-Z0-9_]+:-([^}]*)\}")
 SEMVER_TAG = re.compile(r":\d+\.\d+\.\d+$")
-MODELS = ("qwen2.5:7b-instruct", "qwen2.5vl:7b", "nomic-embed-text")
-SINGLE_HOST_OVERLAY = "deploy/single-host/compose.override.yaml"
-LLM_NETWORK = "paper-trail-llm"
-COMPOSE_FILES = ("compose.yaml", "compose.dev.yaml", "deploy/llm/compose.yaml", SINGLE_HOST_OVERLAY)
+COMPOSE_FILES = ("compose.yaml", "compose.dev.yaml")
+# CE-TC-068: the services that call Claude (process, review, upload, MCP tools) get the key.
+KEY_VARIABLE = "ANTHROPIC_API_KEY"
+KEY_SERVICES = {"web", "worker", "cli", "mcp"}
+LOCAL_STACK = re.compile(r"ollama|tesseract|PAPER_TRAIL_OCR__|\bllm\b|gpu|nvidia", re.IGNORECASE)
 
 
 def _services(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -143,28 +145,6 @@ def test_s0_ac_07_worker_has_heartbeat_healthcheck(compose: dict[str, Any]) -> N
     assert check["test"] == ["CMD", "paper-trail", "worker", "--check-heartbeat"]
 
 
-def test_s0_ac_36_llm_stack_network_has_a_fixed_name(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-36 / PLAN 2.4a: the LLM project's default network is named paper-trail-llm, so the
-    app stack on the same machine can join it."""
-    assert compose_llm["networks"]["default"]["name"] == LLM_NETWORK
-    for name, service in _services(compose_llm).items():
-        assert "networks" not in service, f"{name} must stay on the default (named) network"
-
-
-def test_s0_ac_36_single_host_overlay_joins_worker_to_the_llm_network() -> None:
-    """S0-AC-36 / PLAN 2.4a: the single-machine overlay attaches only the worker to the existing
-    LLM network (external, same default name), keeping it on its own default network too."""
-    overlay = load_yaml(SINGLE_HOST_OVERLAY)
-    services = _services(overlay)
-
-    assert set(services) == {"worker"}
-    assert set(services["worker"]) == {"networks"}
-    assert services["worker"]["networks"] == ["default", "llm"]
-    network = overlay["networks"]["llm"]
-    assert network["external"] is True
-    assert INTERPOLATION_DEFAULT.sub(r"\1", network["name"]) == LLM_NETWORK
-
-
 def test_s0_ac_36_runtime_stack_does_not_rely_on_host_gateway(compose: dict[str, Any]) -> None:
     """PLAN 2.4a: host.docker.internal cannot reach a port published on 127.0.0.1 on Linux, so
     the runtime stack does not offer it as the single-machine route."""
@@ -244,16 +224,16 @@ def test_s0_ac_10_nothing_publishes_on_all_interfaces(compose_file: str) -> None
 
 
 def test_s0_ac_10_default_ports_avoid_host_services(
-    compose: dict[str, Any], compose_dev: dict[str, Any], compose_llm: dict[str, Any]
+    compose: dict[str, Any], compose_dev: dict[str, Any]
 ) -> None:
-    """S0-AC-10: default host ports (8420, 8421 for MCP, 5173, 11434) are not in the PLAN 1.1
-    in-use list."""
+    """S0-AC-10: default host ports (8420, 8421 for MCP, 5173) are not in the PLAN 1.1 in-use
+    list (Ollama's 11434 went with the LLM host, CE-TC-068)."""
     defaults: set[int] = set()
-    for data in (compose, compose_dev, compose_llm):
+    for data in (compose, compose_dev):
         for service in _services(data).values():
             defaults.update(_default_port_mapping(p)[1] for p in _port_strings(service))
 
-    assert defaults == {8420, 8421, 5173, 11434}
+    assert defaults == {8420, 8421, 5173}
     assert not defaults & HOST_PORTS_IN_USE
 
 
@@ -312,75 +292,42 @@ def test_s0_ac_37_images_are_pinned_never_latest(compose_file: str) -> None:
         assert not image.endswith(":latest"), f"{compose_file}:{name}"
 
 
-# --- S0-AC-39 --------------------------------------------------------------------------------
+# --- CE-TC-068: no LLM host; the key reaches exactly the services that call Claude ------------
 
 
-def test_s0_ac_39_llm_services(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39: the LLM host runs `ollama` and a one-shot `ollama-init`."""
-    assert set(_services(compose_llm)) == {"ollama", "ollama-init"}
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES)
+def test_ce_tc_068_no_local_model_stack(compose_file: str) -> None:
+    """No Ollama or OCR service, variable, network or GPU reservation is left."""
+    data = load_yaml(compose_file)
+
+    assert set(data.get("networks", {})) <= {"default"}
+    for name, service in _services(data).items():
+        assert "deploy" not in service, f"{name} reserves devices"
+        assert "networks" not in service, name
+        assert not LOCAL_STACK.search(name), name
+        assert not LOCAL_STACK.search(str(service.get("image", ""))), name
+        assert [key for key in _environment(service) if LOCAL_STACK.search(key)] == [], name
 
 
-def test_s0_ac_39_ollama_image_is_pinned_to_an_exact_version(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39 / S0-AC-37: ollama/ollama is pinned to x.y.z (both services, same image)."""
-    services = _services(compose_llm)
-    image = services["ollama"]["image"]
+def test_c8_the_key_comes_from_env_file_and_only_migrate_blanks_it(
+    compose: dict[str, Any],
+) -> None:
+    """Ruling C8 (supersedes CE-TC-068's per-service entries): ``env_file`` (``.env``) delivers
+    the key to every app service, so no ``environment:`` names it, except ``migrate``, which
+    blanks it: migrations never call Claude."""
+    services = _services(compose)
 
-    assert image.startswith("ollama/ollama:")
-    assert SEMVER_TAG.search(image), image
-    assert services["ollama-init"]["image"] == image
-
-
-def test_s0_ac_39_ollama_reserves_the_nvidia_gpu(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39: deploy.resources.reservations.devices requests an NVIDIA GPU."""
-    devices = _services(compose_llm)["ollama"]["deploy"]["resources"]["reservations"]["devices"]
-
-    assert any(
-        d.get("driver") == "nvidia" and "gpu" in d.get("capabilities", []) for d in devices
-    ), devices
+    assert {
+        name: _environment(service)[KEY_VARIABLE]
+        for name, service in services.items()
+        if KEY_VARIABLE in _environment(service)
+    } == {"migrate": ""}
+    assert {name for name in KEY_SERVICES if services[name].get("env_file")} == KEY_SERVICES
 
 
-def test_s0_ac_39_models_live_in_a_named_volume(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39: models persist in a named volume mounted at /root/.ollama."""
-    volumes = _services(compose_llm)["ollama"]["volumes"]
-    (mount,) = [v for v in volumes if v.endswith(":/root/.ollama")]
-    source = mount.split(":", 1)[0]
-
-    assert not source.startswith((".", "/", "$")), "must be a named volume"
-    assert source in compose_llm["volumes"]
-
-
-def test_s0_ac_39_ollama_port_bound_to_configurable_address(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39: 11434 is published only on ${OLLAMA_BIND_ADDR:-127.0.0.1}."""
-    services = _services(compose_llm)
-
-    assert _port_strings(services["ollama"]) == ["${OLLAMA_BIND_ADDR:-127.0.0.1}:11434:11434"]
-    assert _port_strings(services["ollama-init"]) == []
-
-
-def test_s0_ac_39_init_is_one_shot_after_ollama(compose_llm: dict[str, Any]) -> None:
-    """S0-AC-39: ollama-init waits for ollama, pulls the models and exits (no restart)."""
-    init = _services(compose_llm)["ollama-init"]
-
-    assert init.get("restart", "no") == "no"
-    assert "ollama" in init["depends_on"]
-    assert "deploy" not in init, "the init job needs no GPU"
-
-
-def test_s0_ac_39_llm_env_example_documents_bind_addr_and_models() -> None:
-    """S0-AC-39: deploy/llm/.env.example documents OLLAMA_BIND_ADDR and the three models."""
-    text = read_text("deploy/llm/.env.example")
-
-    assert re.search(r"^#?\s*OLLAMA_BIND_ADDR=", text, re.MULTILINE)
-    for model in MODELS:
-        assert model in text, model
-
-
-def test_s0_ac_39_init_pulls_every_configured_model() -> None:
-    """S0-AC-39: the ollama-init definition references each model (literal or ${VAR:-default})."""
-    init_text = read_text("deploy/llm/compose.yaml").split("ollama-init:", 1)[1]
-
-    for model in MODELS:
-        assert model in init_text, f"ollama-init does not pull {model}"
+def test_ce_tc_068_dev_tooling_never_gets_the_key(compose_dev: dict[str, Any]) -> None:
+    for name, service in _services(compose_dev).items():
+        assert KEY_VARIABLE not in _environment(service), name
 
 
 # --- S0-AC-11 / S0-AC-34: smoke and container-check runners -----------------------------------

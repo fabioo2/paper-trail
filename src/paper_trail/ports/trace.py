@@ -38,12 +38,10 @@ class Tracer(Protocol):
 class RunConfig:
     """How a run was configured; recorded in every trace so experiment arms can be compared."""
 
-    models: Mapping[str, str]  # role of the model ("text", "vision", "embed") -> model name
+    models: Mapping[str, str]  # role of the model ("extract", "retry") -> model name
     prompt_versions: Mapping[str, str]  # prompt name -> version
-    examples: bool
     feedback: bool
-    max_text_attempts: int
-    max_vision_attempts: int
+    max_attempts: int
     enrichment: bool  # new products are described after matching (GRAPH__ENRICHMENT)
     catalog: bool  # coded lines are matched by their code (CATALOG__ENABLED)
     transport: str  # how tools are called ("inprocess")
@@ -62,8 +60,7 @@ class ReceiptRun:
     review_id: int | None
     review_reason: ReviewReason | None
     resumed_from: str | None  # the node a resumed run continued after
-    text_attempts: int
-    vision_attempts: int
+    attempts: int
     events: Sequence[TraceEvent]
 
 
@@ -77,7 +74,7 @@ class RunSummary:
     failed: int
     skipped: int
     llm_calls: int
-    mean_text_attempts: float
+    mean_attempts: float
 
 
 class TraceWriter(Protocol):

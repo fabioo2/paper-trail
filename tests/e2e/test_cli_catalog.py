@@ -3,7 +3,7 @@
 
 The CLI runs in-process through Typer's runner on real SQLite files under ``tmp_path``
 (``PAPER_TRAIL_DATA_DIR``); state is stored through the real repositories. Receipts are
-processed against a scripted fake Ollama on 127.0.0.1 that answers the extraction only.
+processed against a scripted fake Claude (Messages API) on 127.0.0.1 that answers the read only.
 
 Pinned:
 - Exit codes: 0 done (also an empty ``todo`` and every ``lookup``); 2 an unparsable code or
@@ -46,9 +46,17 @@ from paper_trail.domain.enums import Category, CodeScheme, CodeSource, FieldSour
 from paper_trail.domain.models import LineItem, Product, ProductCode
 from paper_trail.interfaces.cli.main import app
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
-from tests.e2e.agent_cli import StartOllama, configure_cli, fake_ollama_env, invoke, rows
-from tests.extractions import C1, C2, L1, L3, L4, LOBLAWS, PLU_CSV, STORE_NAME, U1, coded_extraction
+from tests.e2e.agent_cli import (
+    StartClaude,
+    configure_cli,
+    fake_claude_env,
+    invoke,
+    migrate_main,
+    rows,
+)
+from tests.extractions import C1, C2, L1, L3, L4, LOBLAWS, PLU_CSV, STORE_NAME, U1, coded_answer
 from tests.factories import CREATED_AT, discount_line, item_line, legacy_product, product
+from tests.images import receipt_jpeg
 from tests.storage import in_unit, seed_purchase
 from tests.support import CopyMigrated, MakeSettings, require_id
 
@@ -125,13 +133,23 @@ def main_db(data_dir: Path, copy_migrated: CopyMigrated) -> Path:
 
 
 @pytest.fixture
-def run_db(data_dir: Path, copy_migrated: CopyMigrated) -> Path:
+def main_migrated(data_dir: Path) -> Path:
+    """The main database at head: a ``--run`` needs it (its spend ledger, R3) and never
+    migrates it itself (C1)."""
+    migrate_main(data_dir)
+    return data_dir
+
+
+@pytest.fixture
+def run_db(main_migrated: Path, copy_migrated: CopyMigrated) -> Path:
+    """The run's database, migrated (the main one too)."""
+    data_dir = main_migrated
     return copy_migrated(data_dir / RUNS_DIRNAME / RUN / DATABASE_FILENAME)
 
 
 @pytest.fixture
-def ollama(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartOllama]:
-    with fake_ollama_env(monkeypatch) as start:
+def claude(monkeypatch: pytest.MonkeyPatch) -> Iterator[StartClaude]:
+    with fake_claude_env(monkeypatch) as start:
         yield start
 
 
@@ -299,12 +317,12 @@ def _line_with(output: str, *facts: str) -> str:
     return line
 
 
-def _process(ollama: StartOllama, tmp_path: Path, *receipts: list[str], store: str) -> Any:
-    """Process each receipt (its raw texts) in ``RUN``; returns the fake Ollama."""
-    fake = ollama(*[coded_extraction(texts, store_name=store) for texts in receipts])
+def _process(claude: StartClaude, tmp_path: Path, *receipts: list[str], store: str) -> Any:
+    """Process a photo per receipt (its printed texts) in ``RUN``; returns the fake Claude."""
+    fake = claude(*[coded_answer(texts, store_name=store) for texts in receipts])
     for index, texts in enumerate(receipts):
-        text = _export(tmp_path, "\n".join([store, *texts]), f"receipt-{index}.txt")
-        result = invoke("process", "--no-color", "--run", RUN, "--text-file", str(text))
+        image = _export(tmp_path, receipt_jpeg([store, *texts]), f"{store}-{index}.jpg")
+        result = invoke("process", "--no-color", "--run", RUN, str(image))
         assert result.exit_code == 0, result.output
     return fake
 
@@ -590,15 +608,16 @@ def test_pc_tc_116_yes_asks_nothing(main_db: Path, make_settings: MakeSettings) 
     assert "Save?" not in result.output
 
 
+@pytest.mark.usefixtures("main_migrated")
 def test_pc_tc_118_after_add_a_receipt_links_to_the_named_product(
-    data_dir: Path, ollama: StartOllama, tmp_path: Path
+    data_dir: Path, claude: StartClaude, tmp_path: Path
 ) -> None:
     added = _catalog("add", "costco", "1543210", "Gold Kiwi 1 kg", "--yes", "--run", RUN)
     assert added.exit_code == 0, added.output
     database = data_dir / RUNS_DIRNAME / RUN / DATABASE_FILENAME
     ((named,),) = rows(database, "SELECT id FROM products")
 
-    _process(ollama, tmp_path, [C2], store=STORE_NAME)
+    _process(claude, tmp_path, [C2], store=STORE_NAME)
 
     assert rows(database, "SELECT product_id, match_source FROM line_items") == [(named, "catalog")]
     assert rows(database, "SELECT count(*) FROM products") == [(1,)]
@@ -682,13 +701,13 @@ def test_pc_tc_120_remove_refusals(
 
 
 def test_pc_tc_120_after_remove_the_next_receipt_makes_a_new_product(
-    run_db: Path, make_settings: MakeSettings, ollama: StartOllama, tmp_path: Path
+    run_db: Path, make_settings: MakeSettings, claude: StartClaude, tmp_path: Path
 ) -> None:
     todo = _seeded(make_settings, run_db, _store_todo)
     removed = _catalog("remove", "--store", "costco", "--code", "1362394", "--run", RUN)
     assert removed.exit_code == 0, removed.output
 
-    _process(ollama, tmp_path, [C1], store=STORE_NAME)
+    _process(claude, tmp_path, [C1], store=STORE_NAME)
 
     ((new_id, name, sources),) = rows(
         run_db, "SELECT id, canonical_name, field_sources FROM products WHERE id > ?", todo.apple
@@ -855,10 +874,11 @@ def test_pc_tc_168_the_summary_line(
     assert imported + int(summary.split()[2]) == len(names)
 
 
+@pytest.mark.usefixtures("main_migrated")
 def test_pc_tc_169_after_an_import_lookups_and_receipts_use_the_names(
     data_dir: Path,
     tmp_path: Path,
-    ollama: StartOllama,
+    claude: StartClaude,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PAPER_TRAIL_GRAPH__ENRICHMENT", "true")
@@ -876,7 +896,7 @@ def test_pc_tc_169_after_an_import_lookups_and_receipts_use_the_names(
         for fact in facts:
             assert fact in result.stdout, (code, result.stdout)
 
-    fake = _process(ollama, tmp_path, [L3], store=LOBLAWS)
+    fake = _process(claude, tmp_path, [L3], store=LOBLAWS)
 
     database = data_dir / RUNS_DIRNAME / RUN / DATABASE_FILENAME
     ((name, category, sources),) = rows(
@@ -902,7 +922,7 @@ class Legacy:
 
 
 def _store_legacy(factory: UnitOfWorkFactory) -> Legacy:
-    """PC-TC-128's product P (X, X, X, a discounted Y, U1; with a vector), plus R (two
+    """PC-TC-128's product P (X, X, X, a discounted Y, U1), plus R (two
     ``1234567`` lines and a Y line a person linked: a conflict), M (one X line: a merge
     candidate with P) and K (a printed-text product whose only change is its code row)."""
 
@@ -910,7 +930,7 @@ def _store_legacy(factory: UnitOfWorkFactory) -> Legacy:
         def add(name: str, **fields: Any) -> int:
             return require_id(uow.products.add(legacy_product(canonical_name=name, **fields)).id)
 
-        stored = Legacy(
+        return Legacy(
             p=add("Chocolate Pistachio Bars", brand="Acme"),
             r=add("Organic Eggs Mix"),
             m=add("Pistachio Snack"),
@@ -920,8 +940,6 @@ def _store_legacy(factory: UnitOfWorkFactory) -> Legacy:
                 ).id
             ),
         )
-        uow.vectors.upsert(stored.p, [1.0] + [0.0] * (uow.vectors.dimension - 1))
-        return stored
 
     legacy = in_unit(factory, store)
 
@@ -980,11 +998,11 @@ def test_pc_tc_138_144_the_dry_run_report_then_apply(
     assert after_dry == before
     assert "dry run" in dry.stdout.lower()
     row = _line_with(dry.stdout, "Chocolate Pistachio Bars -> CHOC PISTACH (receipt_text)")
-    for fact in ("1362394", "| 4 ", "Acme ->", "dairy_eggs ->", "code attached", "vector deleted"):
+    for fact in ("1362394", "| 4 ", "Acme ->", "dairy_eggs ->", "code attached"):
         assert fact in row, row
+    assert "vector" not in dry.stdout.lower()  # CE-TC-054: the backfill knows no vectors
     only_code = _line_with(dry.stdout, f"product {legacy.k}:")
     assert ("1876543" in only_code, "code attached" in only_code) == (True, True), only_code
-    assert "vector deleted" not in only_code, only_code
     assert re.findall(r"(\S+) -> \1(?:\s|$)", dry.stdout) == [], dry.stdout
     lowered = dry.stdout.lower()
     places = [lowered.index(name) for name in ("splits", "conflicts", "merge candidates")]
@@ -1063,8 +1081,9 @@ def test_pc_tc_144_an_unknown_option_is_exit_2(main_db: Path) -> None:
 
 
 def test_pc_tc_145_after_the_backfill_receipts_link_by_code(
-    run_db: Path, make_settings: MakeSettings, ollama: StartOllama, tmp_path: Path
+    run_db: Path, make_settings: MakeSettings, claude: StartClaude, tmp_path: Path
 ) -> None:
+
     def store(factory: UnitOfWorkFactory) -> tuple[int, int]:
         def add(uow: UnitOfWork) -> tuple[int, int]:
             choc = require_id(uow.products.add(legacy_product(canonical_name="Choc Bars")).id)
@@ -1086,12 +1105,11 @@ def test_pc_tc_145_after_the_backfill_receipts_link_by_code(
     backfilled = _catalog("backfill", "--apply", "--run", RUN)
     assert backfilled.exit_code == 0, backfilled.output
 
-    costco = _process(ollama, tmp_path, [C1], store=STORE_NAME)
-    loblaws = _process(ollama, tmp_path, [L1], store=LOBLAWS)
+    costco = _process(claude, tmp_path, [C1], store=STORE_NAME)
+    loblaws = _process(claude, tmp_path, [L1], store=LOBLAWS)
 
     assert rows(
         run_db, "SELECT product_id, match_source FROM line_items WHERE receipt_id > 2 ORDER BY id"
     ) == [(choc, "catalog"), (wipes, "catalog")]
     assert rows(run_db, "SELECT count(*) FROM products") == [(2,)]
     assert (costco.calls, loblaws.calls) == (1, 1)
-    assert costco.embed_requests == loblaws.embed_requests == []

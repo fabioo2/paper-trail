@@ -4,7 +4,8 @@ The graph suites run their tools in-process. Here a representative set of scenar
 once with ``InProcessToolGateway`` and once with ``McpToolGateway`` talking to the production
 MCP app on a loopback port (``tests.agent_harness.tool_transport``), and everything observable
 about the run must be equal: the outcomes, every trace event (minus timing), the stored
-receipt, the reviews, the model calls and the ``tool.denied`` log lines.
+receipt, the reviews, Claude's reads and the ``tool.denied`` log lines (CE-TC-033: the Metro
+answer is one of the scenarios).
 
 Each scenario also asserts what it is about, so two runs that broke the same way cannot pass as
 equal. A change to how tools are called gets a scenario here; the in-process suites stay the
@@ -39,22 +40,13 @@ from tests.agent_harness import (
     build_harness,
     tool_transport,
 )
-from tests.extractions import (
-    C1,
-    COSTCO_OCR,
-    L3,
-    L4,
-    LOBLAWS,
-    extraction,
-    inconsistent_extraction,
-    printed_extraction,
-    printed_fixture,
-)
-from tests.factories import PRINTED_LINKS, receipt_draft
+from tests.extractions import C1, L3, L4, answer, coded_answer, inconsistent_answer, metro_answer
+from tests.factories import receipt_draft
 from tests.fakes.catalog import ORGANIC_TEST_APPLE, TEST_APPLE
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.fakes.tools import MisroutedToolGateway
 from tests.support import require_id
+from tests.unit.agents.graph_support import scripted
 
 type Event = tuple[int, AgentRole, TraceKind, str, str, dict[str, JsonValue]]
 
@@ -67,7 +59,7 @@ class Observed:
     events: tuple[Event, ...]
     receipt: Receipt
     reviews: tuple[ReviewItem, ...]
-    llm_calls: int
+    reads: int
     denied: tuple[tuple[str, str], ...]
 
     @property
@@ -95,7 +87,7 @@ def _observe(
         ),
         receipt=last.receipt(receipt_id),
         reviews=tuple(reviews),
-        llm_calls=sum(harness.llm.calls for harness in harnesses),
+        reads=sum(scripted(harness).calls for harness in harnesses),
         denied=tuple(
             (str(entry["role"]), str(entry["tool"]))
             for entry in logs
@@ -115,7 +107,7 @@ def _single_run(harness: Harness) -> Observed:
 
 def clean_run() -> Observed:
     """Extract, validate, save, then match every line (slice C's matching tools)."""
-    observed = _single_run(build_harness(ScriptedLlm(extraction())))
+    observed = _single_run(build_harness(ScriptedReader(answer())))
     assert observed.receipt.status is ReceiptStatus.COMPLETED
     assert observed.tools[-1] == "save_matches"
     return observed
@@ -123,16 +115,16 @@ def clean_run() -> Observed:
 
 def validation_retry() -> Observed:
     """The first answer does not add up; the retry with the issues does."""
-    observed = _single_run(build_harness(ScriptedLlm(inconsistent_extraction(), extraction())))
+    harness = build_harness(ScriptedReader(inconsistent_answer(), answer()))
+    observed = _single_run(harness)
     assert observed.receipt.status is ReceiptStatus.COMPLETED
-    assert observed.tools.count("check_arithmetic") == 2
+    assert observed.reads == 2
     return observed
 
 
 def review_routing() -> Observed:
     """Never adds up: the supervisor opens a review and the graph waits for a person."""
-    llm = ScriptedLlm(inconsistent_extraction(), then=inconsistent_extraction(line=1))
-    observed = _single_run(build_harness(llm, settings=agent_settings(max_vision_attempts=0)))
+    observed = _single_run(build_harness(ScriptedReader(then=inconsistent_answer())))
     assert observed.receipt.status is ReceiptStatus.NEEDS_REVIEW
     assert [(r.reason, r.status) for r in observed.reviews] == [
         (ReviewReason.VALIDATION_FAILED, ReviewStatus.OPEN)
@@ -144,7 +136,7 @@ def denied_tool() -> Observed:
     """A node calls ``save_receipt`` as the matching agent: the registry (over MCP, the
     server) denies it, and the run fails loudly."""
     harness = build_harness(
-        ScriptedLlm(extraction()),
+        ScriptedReader(answer()),
         wrap_tools=lambda gateway: MisroutedToolGateway(
             gateway, "save_receipt", AgentRole.MATCHING
         ),
@@ -156,12 +148,12 @@ def denied_tool() -> Observed:
 
 
 def resume() -> Observed:
-    """``--interrupt-after extract_text`` in one process, ``--resume`` in a second one."""
-    first = build_harness(ScriptedLlm(extraction()))
+    """``--interrupt-after extract`` in one process, ``--resume`` in a second one."""
+    first = build_harness(ScriptedReader(answer()))
     with capture_logs() as logs:
-        paused = first.process_text(COSTCO_OCR, interrupt_after="extract_text")
+        paused = first.process_image(interrupt_after="extract")
         second = build_harness(
-            ScriptedLlm(),
+            ScriptedReader(),
             settings=first.settings,
             checkpointer=first.checkpointer,
             uow_factory=first.uow_factory,
@@ -170,14 +162,14 @@ def resume() -> Observed:
         resumed = second.resume(paused.receipt_id)
     observed = _observe((first, second), paused.receipt_id, (paused, resumed), logs)
     assert observed.receipt.status is ReceiptStatus.COMPLETED
-    assert observed.llm_calls == 1, "the resumed run does not extract again"
+    assert observed.reads == 1, "the resumed run does not read again"
     return observed
 
 
 def review_resolution() -> Observed:
     """A parked receipt resolved with the person's draft: the graph resumes and saves it."""
     harness = build_harness(
-        ScriptedLlm(inconsistent_extraction()), settings=agent_settings(max_text_attempts=1)
+        ScriptedReader(inconsistent_answer()), settings=agent_settings(max_attempts=1)
     )
     with capture_logs() as logs:
         parked = harness.process_image()
@@ -202,36 +194,16 @@ class _PluTable:
         return ORGANIC_TEST_APPLE if code.organic else TEST_APPLE
 
 
-def _printed_coded(*raw_texts: str) -> dict[str, Any]:
-    """A Loblaws receipt as the vision model answers it (printed values), 4.99 a line."""
-    items = [
-        {
-            "raw_text": text,
-            "description": text.title(),
-            "quantity": "1",
-            "unit_price": "4.99",
-            "amount": "4.99",
-            "kind": "item",
-        }
-        for text in raw_texts
-    ]
-    total = f"{4.99 * len(raw_texts):.2f}"
-    return printed_extraction(store_name=LOBLAWS, subtotal=None, taxes=[], total=total, items=items)
-
-
-def vision_and_catalog() -> Observed:
-    """Slice D and barcode lookup PC-TC-62: both text attempts fail, the vision attempt reads
-    the photo, the coded lines are matched by code and the PLU-named products are described
-    with ``describe_from_catalog``; no model request after the vision answer."""
-    llm = ScriptedLlm(
-        inconsistent_extraction(),
-        inconsistent_extraction(),
-        _printed_coded(C1, L3, L4),  # the vision answer: printed values (vision/v1)
+def catalog() -> Observed:
+    """Barcode lookup PC-TC-62: the coded items are matched by code and the PLU-named products
+    are described with ``describe_from_catalog``; no read after the extraction."""
+    settings = agent_settings(enrichment=True)
+    harness = build_harness(
+        ScriptedReader(coded_answer([C1, L3, L4])), settings=settings, catalog=_PluTable()
     )
-    settings = agent_settings(max_vision_attempts=1, enrichment=True)
-    observed = _single_run(build_harness(llm, settings=settings, catalog=_PluTable()))
+    observed = _single_run(harness)
     assert observed.receipt.status is ReceiptStatus.COMPLETED
-    assert observed.llm_calls == 3
+    assert observed.reads == 1
     assert observed.tools[-9:] == [
         *["catalog_lookup", "product_lookup"] * 3,
         "save_matches",
@@ -241,21 +213,17 @@ def vision_and_catalog() -> Observed:
     return observed
 
 
-def discounts() -> Observed:
-    """The Costco printed answer: ``save_receipt`` links its seven discounts (discounts plan
-    TC-95); the links and the tool's result are part of what is compared."""
-    harness = build_harness(
-        ScriptedLlm(printed_fixture("costco_printed")),
-        settings=agent_settings(extraction_version="v2"),
-    )
-    observed = _single_run(harness)
+def metro() -> Observed:
+    """CE-TC-033: the Metro answer; ``save_receipt`` keeps its five item discounts linked; the
+    links and the tool's result are part of what is compared."""
+    observed = _single_run(build_harness(ScriptedReader(metro_answer())))
     assert observed.receipt.status is ReceiptStatus.COMPLETED
     links = {
         item.position: item.applies_to_position
         for item in observed.receipt.items
         if item.applies_to_position is not None
     }
-    assert links == PRINTED_LINKS
+    assert links == {3: 2, 5: 4, 7: 6, 9: 8, 11: 10}
     (saved,) = [
         data["output"]
         for _, _, kind, name, _, data in observed.events
@@ -264,7 +232,7 @@ def discounts() -> Observed:
     assert isinstance(saved, dict)
     refused = saved["discounts_receipt_level"]
     assert isinstance(refused, list)
-    assert (saved["discounts_linked"], len(refused)) == (7, 1)
+    assert (saved["discounts_linked"], len(refused)) == (5, 0)
     return observed
 
 
@@ -277,8 +245,8 @@ SCENARIOS: dict[str, Callable[[], Observed]] = {
         denied_tool,
         resume,
         review_resolution,
-        vision_and_catalog,
-        discounts,
+        catalog,
+        metro,
     )
 }
 
@@ -296,5 +264,5 @@ def test_s5_ac_04_a_run_is_the_same_over_both_transports(scenario: str) -> None:
 def test_the_mcp_runs_really_call_their_tools_over_mcp() -> None:
     """Guards the comparison above against comparing in-process with in-process."""
     with tool_transport("mcp"):
-        assert isinstance(build_harness(ScriptedLlm()).deps.tools, McpToolGateway)
-    assert isinstance(build_harness(ScriptedLlm()).deps.tools, InProcessToolGateway)
+        assert isinstance(build_harness(ScriptedReader()).deps.tools, McpToolGateway)
+    assert isinstance(build_harness(ScriptedReader()).deps.tools, InProcessToolGateway)

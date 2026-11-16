@@ -27,11 +27,11 @@ from paper_trail.application.catalog import (
 from paper_trail.domain.enums import MatchSource, ReceiptStatus
 from paper_trail.domain.rules.item_codes import ItemCode, lookup_url, parse_item_code
 from tests.agent_harness import build_harness
-from tests.extractions import C1, L3, LOBLAWS, LOBLAWS_KEY, PLU_CSV, coded_extraction
+from tests.extractions import C1, L3, LOBLAWS, LOBLAWS_KEY, PLU_CSV, coded_answer
 from tests.factories import item_line, legacy_product
 from tests.fakes.catalog import TEST_APPLE, FakeCatalog
 from tests.fakes.clock import FakeClock
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
 from tests.storage import in_unit, seed_purchase
 from tests.support import require_id
@@ -97,17 +97,15 @@ def test_the_catalog_works_offline(
 
 @pytest.mark.usefixtures("no_network")
 def test_a_whole_run_of_a_coded_receipt_works_offline(plu_path: Path) -> None:
-    harness = build_harness(
-        ScriptedLlm(coded_extraction([C1, L3], store_name=LOBLAWS)),
-        catalog=PluCatalog(plu_path),
-    )
+    reader = ScriptedReader(coded_answer([C1, L3], store_name=LOBLAWS))
+    harness = build_harness(reader, catalog=PluCatalog(plu_path))
 
     outcome = harness.process_image()
 
     assert outcome.failure is None
     assert outcome.graph is not None
     assert outcome.graph.status is ReceiptStatus.COMPLETED
-    assert harness.llm.calls == 1
+    assert reader.calls == 1
 
 
 def _catalog_actions(tmp_path: Path, plu_path: Path) -> dict[str, Callable[[], object]]:

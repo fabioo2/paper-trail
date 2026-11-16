@@ -9,14 +9,11 @@ JSON with the models defined once here, below both:
   read, parsed in code (``parse_receipt_date``), because its format cannot be trusted.
 - ``DraftPayload``: a ``ReceiptDraft`` without loss (each amount keeps its own currency), for
   saving a draft that came from the model or from a person.
-- ``ProductEnrichment``: what the enrichment model says a product is (its answer minus its
-  confidence); the ``enrichment/v1`` prompt's answer, kept on disk but unused (ADR-0018).
 - ``CatalogEntryPayload``: a catalog's entry for a code (the ``catalog_lookup`` tool's
   ``entry``), and ``ProductFieldsPayload``: the fields ``describe_from_catalog`` writes.
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal, Self
@@ -34,7 +31,7 @@ from pydantic import (
 
 from paper_trail.domain.enums import Category, FieldSource, LineKind, Unit
 from paper_trail.domain.errors import DomainValidationError
-from paper_trail.domain.models import LineItem, Product, ReceiptDraft
+from paper_trail.domain.models import LineItem, ReceiptDraft
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import ArithmeticIssue, IssueCode
 from paper_trail.domain.rules.dates import parse_receipt_date
@@ -86,7 +83,7 @@ Last4 = Annotated[str, Field(pattern=r"^[0-9]{4}$")]
 
 
 class ExtractedLine(BaseModel):
-    """One printed line as read. Only DISCOUNT lines are negative."""
+    """One printed line as read. Only DISCOUNT lines, and a DEPOSIT returned, are negative."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -283,40 +280,6 @@ class DraftPayload(BaseModel):
             ocr_text=self.ocr_text,
             image_path=self.image_path,
             product_names=dict(self.product_names),
-        )
-
-
-class ProductEnrichment(BaseModel):
-    """What a product is, as the enrichment model reads it from its receipt line (PLAN 6): a
-    full name, the brand, the size (a decimal string and its unit, both or neither), one
-    category of the fixed list, and a few lowercase search tags."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    canonical_name: NonBlank
-    brand: str | None
-    size_value: QuantityText | None
-    size_unit: Unit | None
-    category: Category
-    tags: list[Tag] = Field(max_length=MAX_TAGS)
-
-    @model_validator(mode="after")
-    def _size_has_a_unit(self) -> Self:
-        if (self.size_value is None) != (self.size_unit is None):
-            msg = "size_value and size_unit are given together or not at all"
-            raise ValueError(msg)
-        return self
-
-    def applied_to(self, product: Product, category: Category) -> Product:
-        """``product`` with these fields, in ``category`` (which memory may have chosen)."""
-        return replace(
-            product,
-            canonical_name=self.canonical_name,
-            brand=self.brand,
-            size_value=None if self.size_value is None else Decimal(self.size_value),
-            size_unit=self.size_unit,
-            category=category,
-            tags=tuple(self.tags),
         )
 
 

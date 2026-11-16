@@ -48,18 +48,18 @@ from paper_trail.domain.enums import (
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import CodeIdentity, Product, ProductCode
 from paper_trail.domain.rules.item_codes import parse_item_code
+from paper_trail.ports.search import HitKind
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.agent_harness import build_harness
 from tests.extractions import (
     C1,
     C2,
-    COSTCO_OCR,
     L1,
     L3,
     LOBLAWS,
     U1,
     WALMART,
-    coded_extraction,
+    coded_answer,
 )
 from tests.factories import (
     CREATED_AT,
@@ -73,7 +73,7 @@ from tests.factories import (
     product,
 )
 from tests.fakes.clock import FakeClock
-from tests.fakes.llm import ScriptedLlm
+from tests.fakes.reader import ScriptedReader
 from tests.fakes.unit_of_work import FakeDatabase, fake_uow_factory
 from tests.storage import in_unit, seed_purchase
 from tests.support import require_id
@@ -505,7 +505,7 @@ def test_pc_tc_111_a_new_code_and_name_create_a_named_product(
         },
     )
     assert named == CodeNamed(KIWI, CodeSource.MANUAL, None, created, None, 0, changed=True)
-    assert (list(database.state.products.values()), database.state.vectors) == ([created], {})
+    assert list(database.state.products.values()) == [created]
     assert [(row.product_id, row.source) for row in _codes(factory)] == [(1, CodeSource.MANUAL)]
 
 
@@ -716,16 +716,35 @@ def test_pc_tc_151_a_store_code_never_touches_another_store(
 def test_pc_tc_152_a_barcode_or_plu_is_global_a_store_code_is_its_stores(
     code: str, name: str, line: str, same: bool
 ) -> None:
-    harness = build_harness(ScriptedLlm(coded_extraction([line], store_name=WALMART)))
+    harness = build_harness(ScriptedReader(coded_answer([line], store_name=WALMART)))
     named = AddCatalogCode(harness.uow_factory, harness.clock)(
         CodeNaming("loblaws", code, name=name)
     )
 
-    outcome = harness.process_text(COSTCO_OCR, "walmart.txt")
+    outcome = harness.process_image("walmart")
 
     (linked,) = harness.receipt(outcome.receipt_id).items
     source = MatchSource.CATALOG if same else MatchSource.NEW
     assert (linked.match_source, linked.product_id == named.after.id) == (source, same)
+
+
+def test_ce_tc_036_naming_a_receipts_product_embeds_nothing_and_fts_finds_the_new_name() -> None:
+    """CE-TC-036 (V1, D5): a product a receipt created, named with ``catalog add``, is stored
+    and found by text search under its new name; there is no vector index to write to."""
+    harness = build_harness(ScriptedReader(coded_answer([C1], store_name=STORE_NAME)))
+    receipt_id = harness.process_image("costco").receipt_id
+    created = require_id(harness.line(receipt_id, 0).product_id)
+
+    named = AddCatalogCode(harness.uow_factory, harness.clock)(
+        CodeNaming("costco", "1362394", name="Chocolate Pistachio Bars")
+    )
+
+    assert named.after.id == created
+    assert harness.product(created).canonical_name == "Chocolate Pistachio Bars"
+    with harness.uow_factory(read_only=True) as uow:
+        assert not hasattr(uow, "vectors")
+        hits = uow.text_search.search("chocolate pistachio bars", limit=10)
+    assert [(hit.kind, hit.id) for hit in hits] == [(HitKind.PRODUCT, created)]
 
 
 @pytest.mark.parametrize(("name", "brand"), [(f"Gift {TEST_PAN}", None), ("Gift", TEST_PAN)])

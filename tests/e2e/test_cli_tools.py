@@ -6,14 +6,14 @@ The MCP side is the in-test server (the production app over a harness registry) 
 Pinned (docs/tests/agent-core-B.md):
 - ``tools list [--role R] [--transport inprocess|mcp]``: one line per (role, tool) in
   ``AgentRole`` order, then by tool name: whitespace-separated role, tool name, description. A
-  role without tools prints one line ``<role> (none)``. Needs no database and no LLM host. The
+  role without tools prints one line ``<role> (none)``. Needs no database and no Claude key. The
   output is identical for both transports.
 - ``tools call --role R TOOL 'JSON' [--transport T]`` prints the tool's result as JSON on stdout
   and exits 0. Exit codes: 5 denied (``denied: role=<role> tool=<tool>`` on stderr, and the
   ``tool.denied`` log line on stderr in-process); 2 usage errors (an unknown role, payload that
   is not a JSON object, an unknown tool, input the tool refuses, naming the field); 1 the main
   database is not migrated (in-process, with the ``db upgrade`` hint), a tool's domain error
-  such as an unknown image, or the MCP server is unreachable (naming ``host:port``).
+  such as an unknown receipt, or the MCP server is unreachable (naming ``host:port``).
 - ``--transport`` defaults to ``settings.tools.transport``; ``mcp`` uses ``settings.mcp.url``.
 """
 
@@ -28,10 +28,9 @@ from paper_trail.domain.enums import AgentRole
 from paper_trail.domain.models import JsonValue
 from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import Harness, build_harness
-from tests.e2e.agent_cli import configure_cli, invoke
+from tests.e2e.agent_cli import closed_loopback_url, configure_cli, invoke
 from tests.extractions import inconsistent_extraction, without_confidence
-from tests.fakes.llm import ScriptedLlm
-from tests.fakes.ollama_server import closed_loopback_url
+from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import serve_mcp
 from tests.support import CopyMigrated
 
@@ -48,7 +47,7 @@ def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 @pytest.fixture
 def harness() -> Harness:
-    return build_harness(ScriptedLlm())
+    return build_harness(ScriptedReader())
 
 
 @pytest.fixture
@@ -121,18 +120,20 @@ def test_ac_b_04_tools_list_for_one_role(harness: Harness, role: AgentRole) -> N
 @pytest.mark.parametrize(
     ("role", "tools"),
     [
-        ("matching", ["catalog_lookup", "product_lookup", "product_similarity_search"]),
+        ("extraction", []),
+        ("matching", ["catalog_lookup", "product_lookup"]),
         ("enrichment", ["catalog_lookup", "product_lookup"]),
         ("supervisor", ["describe_from_catalog", "open_review", "save_matches", "save_receipt"]),
     ],
 )
 def test_the_catalog_tools_are_listed_for_their_roles(role: str, tools: list[str]) -> None:
-    """PC-TC-44: ``save_enrichment`` is gone; ``catalog_lookup`` and ``describe_from_catalog``
-    join their roles (the MCP listing equals this one, test above)."""
+    """PC-TC-44 and CE-TC-034 (wiring): ``ocr_read`` and ``product_similarity_search`` are
+    gone (extraction has no tools: Claude reads the photo itself); ``catalog_lookup`` and
+    ``describe_from_catalog`` keep their roles (the MCP listing equals this one, test above)."""
     result = invoke("tools", "list", "--role", role)
 
     assert result.exit_code == 0, result.output
-    assert [name for _, name, _ in _rows(result.stdout)] == tools
+    assert [name for _, name, _ in _rows(result.stdout) if name is not None] == tools
 
 
 @pytest.mark.usefixtures("mcp_url")
@@ -311,11 +312,16 @@ def test_usage_errors_exit_2(arguments: list[str], message: str) -> None:
 @pytest.mark.usefixtures("migrated")
 def test_a_domain_error_of_the_tool_exits_1() -> None:
     result = invoke(
-        "tools", "call", "--role", "extraction", "ocr_read", '{"image_path": "no/such.jpg"}'
+        "tools",
+        "call",
+        "--role",
+        "supervisor",
+        "save_matches",
+        '{"receipt_id": 999, "decisions": []}',
     )
 
     assert result.exit_code == EXIT_UNAVAILABLE
-    assert "no/such.jpg" in result.stderr
+    assert "999" in result.stderr
 
 
 @pytest.mark.usefixtures("data_dir")

@@ -18,7 +18,7 @@ from paper_trail.ports.repositories import (
     ProductRepository,
     ReceiptRepository,
 )
-from paper_trail.ports.search import TextSearchIndex, VectorIndex
+from paper_trail.ports.search import TextSearchIndex
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.fakes.queues import FakeJobQueue, FakeReviewQueue
 from tests.fakes.repositories import (
@@ -28,7 +28,7 @@ from tests.fakes.repositories import (
     FakeProductRepository,
     FakeReceiptRepository,
 )
-from tests.fakes.search import FakeTextSearchIndex, FakeVectorIndex
+from tests.fakes.search import FakeTextSearchIndex
 from tests.fakes.state import FakeState
 
 
@@ -57,7 +57,6 @@ class FakeUnitOfWork:
         self.jobs: JobQueue = FakeJobQueue(working, clock)
         self.reviews: ReviewQueue = FakeReviewQueue(working, clock)
         self.text_search: TextSearchIndex = FakeTextSearchIndex(working)
-        self.vectors: VectorIndex = FakeVectorIndex(working)
 
     def __enter__(self) -> Self:
         return self
