@@ -207,10 +207,11 @@ def test_every_database_is_asked_in_order_then_claude_guesses(
     )
 
 
-def test_a_hit_fills_name_brand_size_and_the_guess_only_category_and_tags(
+def test_a_hit_fills_name_brand_size_and_the_guess_rewords_the_name_and_adds_category_and_tags(
     factory: UnitOfWorkFactory, clock: FakeClock
 ) -> None:
-    """The databases after the hit are not asked; the product is confirmed (name ``off``)."""
+    """The databases after the hit are not asked; the product is confirmed (name ``off``) under
+    the guess's wording of the database's name."""
     lookups = _open_facts(off={GTIN: HIT})
     guesser = ScriptedReader(GUESS)
     product_id = _printed(factory)
@@ -223,8 +224,9 @@ def test_a_hit_fills_name_brand_size_and_the_guess_only_category_and_tags(
         "canonical_name": OFF, "brand": OFF, "size": OFF, "category": LLM, "tags": LLM,
     }  # fmt: skip
     stored = _product(factory, product_id)
+    assert '"known_name": "Acme Organic Eggs"' in guesser.requests[0].text
     assert (stored.canonical_name, stored.brand, stored.size_value, stored.size_unit) == (
-        "Acme Organic Eggs",
+        "Organic eggs, 24 count",
         "Acme",
         Decimal(500),
         Unit.G,
@@ -281,7 +283,7 @@ def test_the_guess_is_told_the_line_and_an_open_facts_hit_and_nothing_else(
 
     [request] = guesser.requests
     assert (request.model, request.tag, request.image) == (MODEL, GUESS_TAG, None)
-    assert request.text == guess_text(target, hit)
+    assert request.text == guess_text(target, hit, "Eggs")
     body = request.text.removeprefix("<product_data>\n").removesuffix("\n</product_data>")
     assert request.text.count("</product_data>") == 1
     assert json.loads(body) == {
@@ -289,6 +291,7 @@ def test_the_guess_is_told_the_line_and_an_open_facts_hit_and_nothing_else(
         "store": "COSTCO WHOLESALE #1234",
         "department": "DAIRY",
         "code": GTIN,
+        "known_name": "Eggs",
         "database_hit": {"name": "Eggs", "brand": None, "quantity": None, "categories": ["Eggs"]},
     }
 
@@ -384,6 +387,32 @@ def test_a_plu_entry_fills_first_and_its_own_product_is_never_a_source(
     assert _product(factory, coded).field_sources["canonical_name"] is OFF
     assert _product(factory, plu).field_sources == {"canonical_name": PLU, "category": PLU}
     assert lookups[0].asked == [GTIN]
+
+
+def test_a_plu_name_is_reworded_by_the_guess_and_keeps_its_plu_stamp(
+    factory: UnitOfWorkFactory, clock: FakeClock
+) -> None:
+    """The PLU table's registry wording is tidied; the guess fills only the open fields."""
+    plu = _printed(factory, "TST APPLE")
+    guesser = ScriptedReader(GUESS)
+    enricher = ProductEnricher(
+        factory,
+        FakeCatalog({"3101": TEST_APPLE}),
+        _open_facts(),
+        reader=guesser,
+        model=MODEL,
+        clock=clock,
+        throttle=Throttle(monotonic=lambda: 0.0, sleep=lambda _: None),
+    )
+
+    enricher.enrich_all([_target(plu, gtin=None, code="3101", store_key="loblaws")])
+
+    stored = _product(factory, plu)
+    assert f'"known_name": "{TEST_APPLE.name}"' in guesser.requests[0].text
+    assert (stored.canonical_name, stored.tags) == ("Organic eggs, 24 count", ("organic", "eggs"))
+    assert stored.field_sources == {
+        "canonical_name": PLU, "category": PLU, "brand": LLM, "size": LLM, "tags": LLM,
+    }  # fmt: skip
 
 
 def test_a_person_writing_during_the_lookup_wins_and_no_write_lock_is_held(

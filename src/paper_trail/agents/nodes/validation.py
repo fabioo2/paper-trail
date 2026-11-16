@@ -27,12 +27,11 @@ def validate_node(deps: AgentDeps) -> Node:
             return {"valid": False, "issues": []}
         reading = extraction_reading(state)
         date_text = reading.purchased_on
-        purchased_on = (
-            None if date_text is None else parse_receipt_date(date_text, deps.clock.now().date())
-        )
+        today = deps.clock.now().date()
+        purchased_on = None if date_text is None else parse_receipt_date(date_text, today)
         found = [
             *check_reading(reading).issues,
-            *check_completeness(reading.store_name, date_text, purchased_on),
+            *check_completeness(reading.store_name, date_text, purchased_on, today),
         ]
         issues: list[dict[str, Any]] = [
             IssuePayload.of(issue).model_dump(mode="json") for issue in found
