@@ -52,7 +52,7 @@ from paper_trail.application.payloads import (
 from paper_trail.domain.enums import Category, CodeScheme, FieldSource, Unit
 from paper_trail.domain.errors import DomainValidationError
 from paper_trail.domain.models import CONFIRMING_SOURCES, Product, is_confirmed
-from paper_trail.domain.rules.item_codes import parse_code_field
+from paper_trail.domain.rules.item_codes import parse_code_field, printed_name
 from paper_trail.ports.catalog import ProductCatalog
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.enrichment import (
@@ -192,7 +192,7 @@ def guess_text(target: EnrichTarget, hit: LookupHit | None) -> str:
     """The guess's user turn: the target as JSON between data tags, angle brackets escaped so
     no value can close the tags."""
     data = {
-        "printed_text": target.printed_text,
+        "printed_text": printed_name(target.printed_text),
         "store": target.store_name,
         "department": target.department,
         "code": target.code,
