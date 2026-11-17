@@ -276,6 +276,20 @@ class ProductSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ProductPurchase:
+    """One ITEM line naming a product: its receipt's date and store, and the line's price
+    observation (an undated receipt has none: its line's own prices, no discount)."""
+
+    receipt_id: int
+    purchased_on: date | None
+    store_name: str
+    quantity: Decimal
+    unit_price: Money
+    discount: Money
+    paid: Money
+
+
+@dataclass(frozen=True, slots=True)
 class CodeIdentity:
     """What a code is stored under: ``store_key`` is ``""`` unless the scheme is STORE."""
 

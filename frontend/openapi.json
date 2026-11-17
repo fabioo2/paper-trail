@@ -610,6 +610,55 @@
         "title": "ProductOut",
         "type": "object"
       },
+      "ProductPurchaseOut": {
+        "description": "One purchase of a product: ``unit_price`` is the regular price of one unit,\n``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it.",
+        "properties": {
+          "discount": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "paid": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "purchased_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchased On"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "integer"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          },
+          "unit_price": {
+            "$ref": "#/components/schemas/MoneyOut"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "purchased_on",
+          "store_name",
+          "quantity",
+          "unit_price",
+          "discount",
+          "paid"
+        ],
+        "title": "ProductPurchaseOut",
+        "type": "object"
+      },
       "ProductSummaryOut": {
         "description": "A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the\nnewest of them.",
         "properties": {
@@ -1816,6 +1865,73 @@
           }
         },
         "summary": "Confirm a product",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/api/products/{product_id}/purchases": {
+      "get": {
+        "description": "Every receipt line that bought the product, newest first (undated last), paid after\nits discount; an unknown id is a 404 problem.",
+        "operationId": "listProductPurchases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProductPurchaseOut"
+                  },
+                  "title": "Response Listproductpurchases",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "List a product's purchases",
         "tags": [
           "products"
         ]

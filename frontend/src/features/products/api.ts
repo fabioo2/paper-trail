@@ -6,6 +6,7 @@ import type { components } from "@/api/schema";
 type Schemas = components["schemas"];
 export type ProductOut = Schemas["ProductOut"];
 export type ProductSummaryOut = Schemas["ProductSummaryOut"];
+export type ProductPurchaseOut = Schemas["ProductPurchaseOut"];
 export type ProductUpdateIn = Schemas["ProductUpdateIn"];
 export type Category = Schemas["Category"];
 export type CategoryOut = Schemas["CategoryOut"];
@@ -14,6 +15,7 @@ export const productKeys = {
   all: ["products"] as const,
   list: () => [...productKeys.all, "list"] as const,
   detail: (id: number) => [...productKeys.all, "detail", id] as const,
+  purchases: (id: number) => [...productKeys.all, "purchases", id] as const,
 };
 
 /** Every product bought at least once, by name (`listProducts`). */
@@ -37,6 +39,19 @@ export function useProduct(id: number) {
   });
 }
 
+/** The product's purchases, newest first (`listProductPurchases`). */
+export function useProductPurchases(id: number) {
+  return useQuery({
+    queryKey: productKeys.purchases(id),
+    queryFn: () =>
+      unwrap(
+        apiClient.GET("/api/products/{product_id}/purchases", {
+          params: { path: { product_id: id } },
+        }),
+      ),
+  });
+}
+
 /** Every category with its label (`listCategories`); static, so never refetched. */
 export function useCategories() {
   return useQuery({
@@ -50,6 +65,7 @@ export function useCategories() {
 export function useUpdateProduct(id: number) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: productKeys.detail(id),
     mutationFn: (body: ProductUpdateIn) =>
       unwrap(
         apiClient.PATCH("/api/products/{product_id}", {
@@ -66,6 +82,7 @@ export function useUpdateProduct(id: number) {
 export function useConfirmProduct(id: number) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: productKeys.detail(id),
     mutationFn: () =>
       unwrap(
         apiClient.POST("/api/products/{product_id}/confirm", {

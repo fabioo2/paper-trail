@@ -1,12 +1,12 @@
 """Products over HTTP: the list, one product with where each field came from
-(claude-extraction plan D4; CE-TC-251), and a person's edit or confirmation."""
+(claude-extraction plan D4; CE-TC-251) and its purchases, and a person's edit or confirmation."""
 
 import pytest
 from fastapi.testclient import TestClient
 
 from paper_trail.bootstrap import Container
 from paper_trail.domain.enums import FieldSource, MatchSource
-from tests.factories import PURCHASED_ON, STORE_NAME, item_line, product
+from tests.factories import PURCHASED_ON, STORE_NAME, discount_line, item_line, product
 from tests.storage import in_unit, seed_purchase
 from tests.support import require_id
 
@@ -83,6 +83,41 @@ def test_the_list_shows_each_bought_product_with_its_last_purchase(
             },
         }
     ]
+
+
+def test_a_products_purchases_list_each_receipt_line_newest_first(
+    migrated_container: Container, migrated_client: TestClient
+) -> None:
+    product_id = _stored(migrated_container)
+    receipt = seed_purchase(
+        migrated_container.uow_factory,
+        [
+            item_line(0, "KS ORG EGGS", 1699, product_id=product_id, match_source=MatchSource.NEW),
+            discount_line(1, "TPD", -400, 0),
+        ],
+    )
+
+    response = migrated_client.get(f"/api/products/{product_id}/purchases")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {
+            "receipt_id": receipt.id,
+            "purchased_on": PURCHASED_ON.isoformat(),
+            "store_name": STORE_NAME,
+            "quantity": "1",
+            "unit_price": {"amount_cents": 1699, "currency": "CAD"},
+            "discount": {"amount_cents": -400, "currency": "CAD"},
+            "paid": {"amount_cents": 1299, "currency": "CAD"},
+        }
+    ]
+
+
+def test_an_unknown_products_purchases_are_a_404_problem(migrated_client: TestClient) -> None:
+    response = migrated_client.get("/api/products/424242/purchases")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
 
 
 def test_an_edit_stamps_the_sent_fields_person_and_keeps_the_others(

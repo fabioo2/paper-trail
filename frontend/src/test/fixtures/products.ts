@@ -8,6 +8,7 @@ import { cad } from "@/test/fixtures/receipts";
 type Schemas = components["schemas"];
 export type ProductOut = Schemas["ProductOut"];
 export type ProductSummaryOut = Schemas["ProductSummaryOut"];
+export type ProductPurchaseOut = Schemas["ProductPurchaseOut"];
 export type CategoryOut = Schemas["CategoryOut"];
 
 export const categories: CategoryOut[] = [
@@ -42,6 +43,21 @@ export function productSummary(
       store_name: "COSTCO WHOLESALE #1234",
       paid: cad(899),
     },
+    ...overrides,
+  };
+}
+
+export function productPurchase(
+  overrides: Partial<ProductPurchaseOut> = {},
+): ProductPurchaseOut {
+  return {
+    receipt_id: 1,
+    purchased_on: "2026-11-01",
+    store_name: "COSTCO WHOLESALE #1234",
+    quantity: "1",
+    unit_price: cad(899),
+    discount: cad(0),
+    paid: cad(899),
     ...overrides,
   };
 }

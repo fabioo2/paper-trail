@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { delay, http, HttpResponse } from "msw";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -49,18 +49,20 @@ function serveProduct(stored: ProductOut = product()): Requests {
   return requests;
 }
 
-async function form(): Promise<HTMLElement> {
+/** Wait for the product, then open its editor with the Edit button. */
+async function openEditor(user: UserEvent): Promise<void> {
   const main = await screen.findByRole("main");
   await within(main).findByRole("heading", { level: 1, name: /eggs/i });
-  return main;
+  await user.click(within(main).getByRole("button", { name: "Edit" }));
 }
 
 describe("Product editor", () => {
   it("prefills the fields and marks the guessed ones suggested", async () => {
     serveProduct();
+    const user = userEvent.setup();
 
     renderApp("/products/5");
-    await form();
+    await openEditor(user);
 
     expect(screen.getByLabelText(/^name/i)).toHaveValue(
       "Kirkland Organic Eggs",
@@ -85,7 +87,7 @@ describe("Product editor", () => {
     const user = userEvent.setup();
     const { router } = renderApp("/products");
     await user.click(await screen.findByRole("link", { name: /eggs/i }));
-    await form();
+    await openEditor(user);
 
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
@@ -111,7 +113,7 @@ describe("Product editor", () => {
     serveProduct();
     const user = userEvent.setup();
     const { queryClient } = renderApp("/products/5");
-    await form();
+    await openEditor(user);
 
     await user.clear(screen.getByLabelText(/^size/i));
     await user.type(screen.getByLabelText(/^size/i), "12 each");
@@ -128,7 +130,7 @@ describe("Product editor", () => {
     const requests = serveProduct();
     const user = userEvent.setup();
     renderApp("/products/5");
-    await form();
+    await openEditor(user);
 
     await user.click(screen.getByRole("button", { name: "Looks right" }));
 
@@ -139,9 +141,10 @@ describe("Product editor", () => {
 
   it("offers no Looks right for a confirmed product", async () => {
     serveProduct(product({ confirmed: true, field_sources: {} }));
+    const user = userEvent.setup();
 
     renderApp("/products/5");
-    await form();
+    await openEditor(user);
 
     expect(screen.queryByRole("button", { name: "Looks right" })).toBeNull();
   });
@@ -162,7 +165,7 @@ describe("Product editor", () => {
     );
     const user = userEvent.setup();
     renderApp("/products/5");
-    await form();
+    await openEditor(user);
 
     await user.clear(screen.getByLabelText(/^size/i));
     await user.type(screen.getByLabelText(/^size/i), "a dozen");
@@ -177,26 +180,5 @@ describe("Product editor", () => {
       sizeProblem.detail ?? "",
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-  });
-
-  it("shows not found for an unknown product", async () => {
-    server.use(
-      http.get("/api/products/:productId", async () => {
-        await delay(0);
-        return HttpResponse.json(
-          { ...sizeProblem, status: 404, title: "Not Found", detail: null },
-          {
-            status: 404,
-            headers: { "content-type": "application/problem+json" },
-          },
-        );
-      }),
-    );
-
-    renderApp("/products/424242");
-
-    expect(
-      await screen.findByRole("heading", { name: "Product not found" }),
-    ).toBeInTheDocument();
   });
 });

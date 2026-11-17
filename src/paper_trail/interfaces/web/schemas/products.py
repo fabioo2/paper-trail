@@ -12,6 +12,7 @@ from paper_trail.domain.enums import Category, FieldSource, Unit
 from paper_trail.domain.models import (
     LastPurchase,
     Product,
+    ProductPurchase,
     ProductSummary,
     is_confirmed,
     require_id,
@@ -76,6 +77,31 @@ class ProductSummaryOut(ProductOut):
             **ProductOut.from_domain(summary.product).model_dump(),
             times_bought=summary.times_bought,
             last_purchase=LastPurchaseOut.from_domain(summary.last_purchase),
+        )
+
+
+class ProductPurchaseOut(BaseModel):
+    """One purchase of a product: ``unit_price`` is the regular price of one unit,
+    ``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it."""
+
+    receipt_id: int
+    purchased_on: date | None
+    store_name: str
+    quantity: str  # the exact decimal, e.g. "0.452"
+    unit_price: MoneyOut
+    discount: MoneyOut
+    paid: MoneyOut
+
+    @classmethod
+    def from_domain(cls, purchase: ProductPurchase) -> "ProductPurchaseOut":
+        return cls(
+            receipt_id=purchase.receipt_id,
+            purchased_on=purchase.purchased_on,
+            store_name=purchase.store_name,
+            quantity=str(purchase.quantity),
+            unit_price=MoneyOut.from_domain(purchase.unit_price),
+            discount=MoneyOut.from_domain(purchase.discount),
+            paid=MoneyOut.from_domain(purchase.paid),
         )
 
 

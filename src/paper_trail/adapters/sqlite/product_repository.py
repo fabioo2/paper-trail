@@ -23,6 +23,7 @@ from paper_trail.domain.models import (
     LastPurchase,
     Product,
     ProductAlias,
+    ProductPurchase,
     ProductSummary,
     require_id,
 )
@@ -54,12 +55,6 @@ class SqliteProductRepository:
         return tuple(product_from_row(row) for row in rows)
 
     def summaries(self) -> tuple[ProductSummary, ...]:
-        newest_first = (
-            receipts.c.purchased_on.is_(None),
-            receipts.c.purchased_on.desc(),
-            receipts.c.id.desc(),
-            line_items.c.position.desc(),
-        )
         lines = (
             select(
                 line_items.c.product_id,
@@ -71,7 +66,7 @@ class SqliteProductRepository:
                 ),
                 func.count().over(partition_by=line_items.c.product_id).label("times_bought"),
                 func.row_number()
-                .over(partition_by=line_items.c.product_id, order_by=newest_first)
+                .over(partition_by=line_items.c.product_id, order_by=_NEWEST_FIRST)
                 .label("newest"),
             )
             .join(receipts, receipts.c.id == line_items.c.receipt_id)
@@ -104,6 +99,30 @@ class SqliteProductRepository:
             )
             for row in rows
         )
+
+    def purchases(self, product_id: int) -> tuple[ProductPurchase, ...]:
+        rows = self._connection.execute(
+            select(
+                receipts.c.id.label("receipt_id"),
+                receipts.c.purchased_on,
+                receipts.c.store_name,
+                receipts.c.currency,
+                line_items.c.quantity,
+                line_items.c.line_total_cents,
+                func.coalesce(
+                    price_observations.c.unit_price_cents, line_items.c.unit_price_cents
+                ).label("unit_price_cents"),
+                func.coalesce(price_observations.c.discount_cents, 0).label("discount_cents"),
+                func.coalesce(price_observations.c.paid_cents, line_items.c.line_total_cents).label(
+                    "paid_cents"
+                ),
+            )
+            .join(receipts, receipts.c.id == line_items.c.receipt_id)
+            .outerjoin(price_observations, price_observations.c.line_item_id == line_items.c.id)
+            .where(line_items.c.kind == LineKind.ITEM, line_items.c.product_id == product_id)
+            .order_by(*_NEWEST_FIRST)
+        ).mappings()
+        return tuple(_purchase_from_row(row) for row in rows)
 
     def update(self, product: Product) -> Product:
         """The ``products_fts`` triggers follow the new name, brand and tags."""
@@ -175,6 +194,30 @@ class SqliteProductRepository:
             .mappings()
             .one_or_none()
         )
+
+
+_NEWEST_FIRST = (
+    receipts.c.purchased_on.is_(None),
+    receipts.c.purchased_on.desc(),
+    receipts.c.id.desc(),
+    line_items.c.position.desc(),
+)
+
+
+def _purchase_from_row(row: RowMapping) -> ProductPurchase:
+    currency: str = row["currency"]
+    line_total = Money(row["line_total_cents"], currency)
+    return ProductPurchase(
+        receipt_id=row["receipt_id"],
+        purchased_on=row["purchased_on"],
+        store_name=row["store_name"],
+        quantity=row["quantity"],
+        unit_price=line_total.divided_by(row["quantity"])
+        if row["unit_price_cents"] is None
+        else Money(row["unit_price_cents"], currency),
+        discount=Money(row["discount_cents"], currency),
+        paid=Money(row["paid_cents"], currency),
+    )
 
 
 def _outranks(existing: AliasSource, incoming: AliasSource) -> bool:

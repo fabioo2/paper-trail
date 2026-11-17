@@ -32,7 +32,7 @@ from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
 from paper_trail.application.prices import BackfillPrices
 from paper_trail.application.process_receipt import UploadReceipt
-from paper_trail.application.products import GetProduct, ListProducts
+from paper_trail.application.products import GetProduct, ListProductPurchases, ListProducts
 from paper_trail.application.receipts import (
     AnswerReview,
     GetPendingReview,
@@ -66,6 +66,7 @@ class Container:
     correct_line_item: CorrectLineItem
     get_product: GetProduct
     list_products: ListProducts
+    list_product_purchases: ListProductPurchases
     edit_product: EditProduct
     confirm_product: ConfirmProduct
     backfill_prices: BackfillPrices
@@ -115,6 +116,7 @@ def build_container(settings: Settings) -> Container:
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
         list_products=ListProducts(uow_factory),
+        list_product_purchases=ListProductPurchases(uow_factory),
         edit_product=EditProduct(uow_factory),
         confirm_product=ConfirmProduct(uow_factory),
         backfill_prices=BackfillPrices(uow_factory),
