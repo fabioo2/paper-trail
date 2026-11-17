@@ -16,7 +16,6 @@ import {
   useCategories,
   useProductList,
 } from "@/features/products/api";
-import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 
 const SKELETON_ROWS = 6;
@@ -166,20 +165,15 @@ function ProductRow({
           <p className="truncate text-sm text-muted-foreground">{details}</p>
         ) : null}
         <p className="truncate text-sm text-muted-foreground">
-          {last.purchased_on === null
-            ? "Date unknown"
-            : formatDate(last.purchased_on)}{" "}
-          · {last.store_name}
+          Bought {product.times_bought}× · last {formatMoney(last.paid)} at{" "}
+          {last.store_name}
         </p>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        <span className="font-medium tabular-nums">
-          {formatMoney(last.paid)}
+      {category ? (
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {category}
         </span>
-        {category ? (
-          <span className="text-xs text-muted-foreground">{category}</span>
-        ) : null}
-      </div>
+      ) : null}
     </Link>
   );
 }

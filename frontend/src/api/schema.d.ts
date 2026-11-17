@@ -131,6 +131,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/products/{product_id}/purchases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a product's purchases
+         * @description Every receipt line that bought the product, newest first (undated last), paid after
+         *     its discount; an unknown id is a 404 problem.
+         */
+        get: operations["listProductPurchases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/receipts": {
         parameters: {
             query?: never;
@@ -454,6 +475,24 @@ export interface components {
             size_value: string | null;
             /** Tags */
             tags: string[];
+        };
+        /**
+         * ProductPurchaseOut
+         * @description One purchase of a product: ``unit_price`` is the regular price of one unit,
+         *     ``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it.
+         */
+        ProductPurchaseOut: {
+            discount: components["schemas"]["MoneyOut"];
+            paid: components["schemas"]["MoneyOut"];
+            /** Purchased On */
+            purchased_on: string | null;
+            /** Quantity */
+            quantity: string;
+            /** Receipt Id */
+            receipt_id: number;
+            /** Store Name */
+            store_name: string;
+            unit_price: components["schemas"]["MoneyOut"];
         };
         /**
          * ProductSummaryOut
@@ -996,6 +1035,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProductOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    listProductPurchases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                product_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductPurchaseOut"][];
                 };
             };
             /** @description Not Found */

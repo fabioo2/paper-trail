@@ -1,23 +1,33 @@
 """The products list on a real database file: ``ListProducts`` over
-``ProductRepository.summaries`` (one query, no per-product reads).
+``ProductRepository.summaries`` (one query, no per-product reads), and one product's purchases
+(``ListProductPurchases`` over ``ProductRepository.purchases``).
 
 Pinned: only products with an ITEM line are listed (a DISCOUNT line naming the product is no
 purchase), by name ignoring case; ``times_bought`` agrees with the stored ITEM lines; the last
 purchase is the newest dated line (the higher receipt id on the same day), paid after its
-linked discount, and an undated line (its line total) only when no line is dated.
+linked discount, and an undated line (its line total) only when no line is dated. A product's
+purchases are its ITEM lines in that same order, as many as ``times_bought``.
 """
 
 from collections.abc import Iterator
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine, event
 
 from paper_trail.adapters.sqlite.engine import create_engine
-from paper_trail.application.products import ListProducts
+from paper_trail.application.products import ListProductPurchases, ListProducts
 from paper_trail.domain.enums import MatchSource
-from paper_trail.domain.models import LastPurchase, Product, ProductSummary
+from paper_trail.domain.errors import NotFoundError
+from paper_trail.domain.models import (
+    LastPurchase,
+    Product,
+    ProductPurchase,
+    ProductSummary,
+    Receipt,
+)
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 from tests.factories import cad, discount_line, item_line, product
 from tests.fakes.clock import FakeClock
@@ -54,12 +64,12 @@ def _bought(  # noqa: PLR0913 - a test builder: one ITEM line and its optional d
     *,
     line_total: int,
     discount: int = 0,
-) -> None:
+) -> Receipt:
     pid = require_id(item.id)
     lines = [item_line(0, "LINE", line_total, product_id=pid, match_source=MatchSource.CATALOG)]
     if discount:
         lines.append(discount_line(1, "TPD", -discount, 0, product_id=pid))
-    seed_purchase(factory, lines, store_name=store_name, purchased_on=purchased_on)
+    return seed_purchase(factory, lines, store_name=store_name, purchased_on=purchased_on)
 
 
 def test_lists_bought_products_with_their_newest_purchase(
@@ -99,3 +109,77 @@ def test_a_discount_line_alone_is_no_purchase(factory: UnitOfWorkFactory) -> Non
     )
 
     assert ListProducts(factory)() == ()
+
+
+def test_a_products_purchases_are_its_item_lines_newest_first(factory: UnitOfWorkFactory) -> None:
+    nov_3 = date(2026, 11, 3)
+    eggs = _add(factory, "Eggs")
+    juice = _add(factory, "Apple juice")
+    first = _bought(factory, eggs, COSTCO, date(2026, 11, 1), line_total=899)
+    pair = seed_purchase(
+        factory,
+        [
+            item_line(
+                0,
+                "EGGS",
+                1218,
+                quantity=Decimal(2),
+                unit_price=cad(609),
+                product_id=require_id(eggs.id),
+                match_source=MatchSource.CATALOG,
+            )
+        ],
+        store_name=COSTCO,
+        purchased_on=nov_3,
+    )
+    _bought(factory, juice, COSTCO, nov_3, line_total=450)
+    sale = _bought(factory, eggs, LOBLAWS, nov_3, line_total=1699, discount=400)
+    undated = _bought(factory, eggs, LOBLAWS, None, line_total=1)
+
+    purchases = ListProductPurchases(factory)(require_id(eggs.id))
+
+    assert purchases == (
+        ProductPurchase(
+            require_id(sale.id), nov_3, LOBLAWS, Decimal(1), cad(1699), cad(-400), cad(1299)
+        ),
+        ProductPurchase(
+            require_id(pair.id), nov_3, COSTCO, Decimal(2), cad(609), cad(0), cad(1218)
+        ),
+        ProductPurchase(
+            require_id(first.id), date(2026, 11, 1), COSTCO, Decimal(1), cad(899), cad(0), cad(899)
+        ),
+        ProductPurchase(require_id(undated.id), None, LOBLAWS, Decimal(1), cad(1), cad(0), cad(1)),
+    )
+    summary = next(s for s in ListProducts(factory)() if s.product == eggs)
+    assert summary.times_bought == len(purchases)
+
+
+def test_purchases_of_a_product_never_bought_and_of_an_unknown_one(
+    factory: UnitOfWorkFactory,
+) -> None:
+    unbought = _add(factory, "Zucchini")
+
+    assert ListProductPurchases(factory)(require_id(unbought.id)) == ()
+    with pytest.raises(NotFoundError, match="product 424242 does not exist"):
+        ListProductPurchases(factory)(424242)
+
+
+def test_two_lines_of_one_receipt_are_listed_by_position_descending(
+    factory: UnitOfWorkFactory,
+) -> None:
+    eggs = _add(factory, "Eggs")
+    pid = require_id(eggs.id)
+    receipt = seed_purchase(
+        factory,
+        [
+            item_line(0, "EGGS", 899, product_id=pid, match_source=MatchSource.CATALOG),
+            item_line(1, "EGGS", 999, product_id=pid, match_source=MatchSource.CATALOG),
+        ],
+    )
+
+    purchases = ListProductPurchases(factory)(pid)
+
+    assert [(p.receipt_id, p.paid) for p in purchases] == [
+        (receipt.id, cad(999)),
+        (receipt.id, cad(899)),
+    ]

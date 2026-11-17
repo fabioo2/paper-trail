@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
-import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import { productSummary } from "@/test/fixtures/products";
 import { cad } from "@/test/fixtures/receipts";
@@ -25,6 +24,7 @@ const milk = productSummary({
   tags: ["lactose-free"],
   field_sources: { canonical_name: "person" },
   confirmed: true,
+  times_bought: 1,
   last_purchase: {
     purchased_on: null,
     store_name: "Farm Boy",
@@ -79,7 +79,7 @@ describe("Products tab", () => {
     );
   });
 
-  it("lists each product with brand, size, category, last purchase and a suggested badge", async () => {
+  it("lists each product with brand, size, category, how often and where it was last bought, and a suggested badge", async () => {
     serveProducts();
 
     renderApp("/products");
@@ -90,15 +90,13 @@ describe("Products tab", () => {
     for (const part of [
       "Kirkland Organic Eggs",
       "Kirkland Signature · 24 each",
-      `${formatDate("2026-11-01")} · COSTCO WHOLESALE #1234`,
-      formatMoney(cad(899)),
+      `Bought 2× · last ${formatMoney(cad(899))} at COSTCO WHOLESALE #1234`,
       "Dairy & eggs",
     ])
       expect(textOf(eggsRow)).toContain(part);
     for (const part of [
       "Natrel · 4 l",
-      "Date unknown · Farm Boy",
-      formatMoney(cad(649)),
+      `Bought 1× · last ${formatMoney(cad(649))} at Farm Boy`,
       "Pantry",
     ])
       expect(textOf(milkRow)).toContain(part);

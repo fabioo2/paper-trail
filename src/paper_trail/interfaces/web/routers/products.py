@@ -1,5 +1,5 @@
-"""Products: the products bought, one product with where each of its fields came from, and a
-person's edit or confirmation of one."""
+"""Products: the products bought, one product with where each of its fields came from and its
+purchases, and a person's edit or confirmation of one."""
 
 from http import HTTPStatus
 
@@ -9,6 +9,7 @@ from paper_trail.interfaces.web.dependencies import ContainerDep
 from paper_trail.interfaces.web.errors import problem_responses
 from paper_trail.interfaces.web.schemas.products import (
     ProductOut,
+    ProductPurchaseOut,
     ProductSummaryOut,
     ProductUpdateIn,
 )
@@ -36,6 +37,21 @@ def list_products(container: ContainerDep) -> list[ProductSummaryOut]:
 def get_product(container: ContainerDep, product_id: int) -> ProductOut:
     """One product with its field sources; an unknown id is a 404 problem."""
     return ProductOut.from_domain(container.get_product(product_id))
+
+
+@router.get(
+    "/{product_id}/purchases",
+    operation_id="listProductPurchases",
+    summary="List a product's purchases",
+    responses=problem_responses(HTTPStatus.NOT_FOUND),
+)
+def list_product_purchases(container: ContainerDep, product_id: int) -> list[ProductPurchaseOut]:
+    """Every receipt line that bought the product, newest first (undated last), paid after
+    its discount; an unknown id is a 404 problem."""
+    return [
+        ProductPurchaseOut.from_domain(purchase)
+        for purchase in container.list_product_purchases(product_id)
+    ]
 
 
 @router.patch(

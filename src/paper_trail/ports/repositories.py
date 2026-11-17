@@ -16,6 +16,7 @@ from paper_trail.domain.models import (
     ProductAlias,
     ProductCode,
     ProductLine,
+    ProductPurchase,
     ProductSummary,
     Receipt,
     ReceiptSummary,
@@ -89,6 +90,11 @@ class ProductRepository(Protocol):
         """Every product with at least one ITEM line, by name (ignoring case), then id; each
         with its ITEM line count and newest line: the latest receipt date (an undated receipt
         only when none is dated), then the highest receipt id and line position."""
+        ...
+
+    def purchases(self, product_id: int) -> tuple[ProductPurchase, ...]:
+        """The product's ITEM lines, newest first in the order ``summaries`` picks the newest
+        line, each paid after its linked discount; empty for an unknown id."""
         ...
 
     def update(self, product: Product) -> Product:
