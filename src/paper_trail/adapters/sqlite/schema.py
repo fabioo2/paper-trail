@@ -147,6 +147,7 @@ jobs = Table(
     Column("last_error", Text, nullable=True),
     Column("created_at", UtcDateTime, nullable=False),
     Column("updated_at", UtcDateTime, nullable=False),
+    Column("payload", JsonText, nullable=True),
 )
 
 review_items = Table(

@@ -177,6 +177,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/receipts/{receipt_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a receipt's photo
+         * @description The receipt's stored photo (every photo is stored as a JPEG); a receipt without one, or
+         *     an unknown receipt, is a 404 problem.
+         */
+        get: operations["getReceiptImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List open reviews
+         * @description The open reviews a person can answer now, newest first, whatever their receipt's
+         *     status; one whose answer is queued or running is left out.
+         */
+        get: operations["listReviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reviews/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a review
+         * @description One review with its issues, the reading it holds and its photo; an unknown id is a 404
+         *     problem.
+         */
+        get: operations["getReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reviews/{review_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer a review
+         * @description Accept the reading as read or save a corrected one; the worker resumes the receipt with
+         *     it. A reading that does not add up is a 422 problem of type /problems/inconsistent-receipt
+         *     listing each issue in ``errors``, unless ``force`` is set with a ``reason``. An unknown
+         *     review is a 404 problem; one already resolved, or already answered, a 409 problem.
+         */
+        post: operations["resolveReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -423,6 +509,16 @@ export interface components {
              */
             status: "ok" | "error";
         };
+        /** ReadingSummaryOut */
+        ReadingSummaryOut: {
+            /** Item Count */
+            item_count: number;
+            /** Purchased On */
+            purchased_on: string | null;
+            /** Store Name */
+            store_name: string;
+            total: components["schemas"]["MoneyOut"];
+        };
         /** ReceiptDetailOut */
         ReceiptDetailOut: {
             arithmetic: components["schemas"]["ArithmeticReportOut"];
@@ -487,6 +583,150 @@ export interface components {
             id: number;
             stage: components["schemas"]["ProcessingStage"];
             status: components["schemas"]["ReceiptStatus"];
+        };
+        /**
+         * ResolveReviewIn
+         * @description Either ``accept`` (the extraction as read) or a corrected ``draft``. One that does not
+         *     add up is refused unless ``force`` is set with a ``reason``.
+         */
+        ResolveReviewIn: {
+            /**
+             * Accept
+             * @default false
+             */
+            accept: boolean;
+            draft?: components["schemas"]["ReviewDraftBody"] | null;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * ReviewAnswerOut
+         * @description The receipt once the answer is queued: the worker saves it (poll GET
+         *     /api/receipts/{receipt_id}).
+         */
+        ReviewAnswerOut: {
+            /** Receipt Id */
+            receipt_id: number;
+            stage: components["schemas"]["ProcessingStage"];
+            status: components["schemas"]["ReceiptStatus"];
+        };
+        /**
+         * ReviewDraftBody
+         * @description A reading of the receipt, as the review shows it and as a person corrects it: amounts in
+         *     cents of ``currency``, lines in printed order.
+         */
+        ReviewDraftBody: {
+            /** Currency */
+            currency: string;
+            /** Lines */
+            lines: components["schemas"]["ReviewLineBody"][];
+            /** Payment Last4 */
+            payment_last4: string | null;
+            /** Purchased On */
+            purchased_on: string | null;
+            /** Store Name */
+            store_name: string;
+            /** Subtotal Cents */
+            subtotal_cents: number | null;
+            /** Tax Cents */
+            tax_cents: number | null;
+            /** Total Cents */
+            total_cents: number;
+        };
+        /**
+         * ReviewIssueOut
+         * @description Why the receipt waits for a person; ``position`` is the draft line it is about.
+         */
+        ReviewIssueOut: {
+            code: components["schemas"]["IssueCode"];
+            /** Message */
+            message: string;
+            /** Position */
+            position: number | null;
+        };
+        /**
+         * ReviewLineBody
+         * @description One line of a reading. ``applies_to`` is the index, in ``lines``, of the item a discount
+         *     belongs to.
+         */
+        ReviewLineBody: {
+            /** Applies To */
+            applies_to: number | null;
+            category: components["schemas"]["Category"] | null;
+            /** Description */
+            description: string;
+            kind: components["schemas"]["LineKind"];
+            /** Line Total Cents */
+            line_total_cents: number;
+            /** Quantity */
+            quantity: string;
+            /** Raw Text */
+            raw_text: string;
+            /** Unit Price Cents */
+            unit_price_cents: number | null;
+        };
+        /**
+         * ReviewOut
+         * @description One review: ``draft`` is the extraction to accept or correct (null when there is none
+         *     and the reading must be typed in); ``image_url`` serves the receipt's photo.
+         *     ``answer_queued``: an answer is queued or running in the worker (answering again is a
+         *     409).
+         */
+        ReviewOut: {
+            /** Answer Queued */
+            answer_queued: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            draft: components["schemas"]["ReviewDraftBody"] | null;
+            /** Id */
+            id: number;
+            /** Image Url */
+            image_url: string | null;
+            /** Issues */
+            issues: components["schemas"]["ReviewIssueOut"][];
+            reason: components["schemas"]["ReviewReason"];
+            /** Receipt Id */
+            receipt_id: number;
+            receipt_status: components["schemas"]["ReceiptStatus"];
+            status: components["schemas"]["ReviewStatus"];
+        };
+        /**
+         * ReviewReason
+         * @enum {string}
+         */
+        ReviewReason: "validation_failed" | "low_confidence" | "extraction_failed" | "unmatched_product";
+        /**
+         * ReviewStatus
+         * @enum {string}
+         */
+        ReviewStatus: "open" | "resolved" | "dismissed";
+        /**
+         * ReviewSummaryOut
+         * @description An open review as listed; ``reading`` is the extraction it holds, null when there is
+         *     none (the reading never parsed).
+         */
+        ReviewSummaryOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Issues */
+            issues: components["schemas"]["ReviewIssueOut"][];
+            reading: components["schemas"]["ReadingSummaryOut"] | null;
+            reason: components["schemas"]["ReviewReason"];
+            /** Receipt Id */
+            receipt_id: number;
         };
         /**
          * Unit
@@ -941,6 +1181,231 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getReceiptImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receipt_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored photo. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    listReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSummaryOut"][];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                review_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    resolveReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                review_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveReviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewAnswerOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

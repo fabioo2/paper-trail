@@ -34,7 +34,11 @@ from paper_trail.application.prices import BackfillPrices
 from paper_trail.application.process_receipt import UploadReceipt
 from paper_trail.application.products import GetProduct, ListProducts
 from paper_trail.application.receipts import (
+    AnswerReview,
+    GetPendingReview,
     GetReceipt,
+    GetReceiptImage,
+    ListPendingReviews,
     ListReceipts,
     RecordReceipt,
 )
@@ -56,6 +60,7 @@ class Container:
     check_readiness: CheckReadiness
     record_receipt: RecordReceipt
     get_receipt: GetReceipt
+    get_receipt_image: GetReceiptImage
     list_receipts: ListReceipts
     upload_receipt: UploadReceipt
     correct_line_item: CorrectLineItem
@@ -70,6 +75,16 @@ class Container:
     remove_catalog_code: RemoveCatalogCode
     lookup_catalog_code: LookupCatalogCode
     tolerances: Tolerances
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewServices:
+    """What the web app needs to show reviews and queue a person's answers; built over the
+    agents' checkpoints by ``paper_trail.bootstrap.agents.review_services``."""
+
+    list_reviews: ListPendingReviews
+    get_review: GetPendingReview
+    answer_review: AnswerReview
 
 
 def build_container(settings: Settings) -> Container:
@@ -94,6 +109,7 @@ def build_container(settings: Settings) -> Container:
         check_readiness=CheckReadiness([DatabaseHealthProbe(engine)]),
         record_receipt=RecordReceipt(uow_factory, clock, tolerances),
         get_receipt=GetReceipt(uow_factory, tolerances),
+        get_receipt_image=GetReceiptImage(uow_factory, image_store(settings)),
         list_receipts=ListReceipts(uow_factory),
         upload_receipt=UploadReceipt(image_store(settings), uow_factory, clock),
         correct_line_item=CorrectLineItem(uow_factory, clock),

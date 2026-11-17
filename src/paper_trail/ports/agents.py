@@ -48,16 +48,32 @@ class ReceiptGraphRunner(Protocol):
         """
         ...
 
-    def resume(self, receipt_id: int, draft: ReceiptDraft | None = None) -> GraphOutcome:
+    def resume(
+        self,
+        receipt_id: int,
+        draft: ReceiptDraft | None = None,
+        *,
+        attribute_discounts: bool = True,
+    ) -> GraphOutcome:
         """Continue the thread: at a review, ``draft`` is the person's answer (None accepts the
-        pending extraction); after a pause or a run that raised, from its last checkpoint
-        (``draft`` must be None, else ConflictError). NothingToResumeError when the receipt
-        has no thread or its thread has finished; OutdatedCheckpointError, before any write,
-        when it is not waiting for a review and its saved state is from an older version."""
+        pending extraction), its unlinked discounts linked by the discount rule unless
+        ``attribute_discounts`` is False (its links kept as given); after a pause or a run
+        that raised, from its last checkpoint (``draft`` must be None, else ConflictError).
+        NothingToResumeError when the receipt has no thread or its thread has finished;
+        OutdatedCheckpointError, before any write, when it is not waiting for a review and
+        its saved state is from an older version."""
         ...
 
     def reset(self, receipt_id: int) -> None:
         """Forget the receipt's thread."""
+        ...
+
+    def has_thread(self, receipt_id: int) -> bool:
+        """Whether the receipt has a graph thread (running, paused or finished)."""
+        ...
+
+    def waiting_for_review(self, receipt_id: int) -> bool:
+        """Whether the receipt's thread is paused for a person's answer."""
         ...
 
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:

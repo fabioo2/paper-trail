@@ -4,7 +4,8 @@ What is saved is the person's draft after a review, else the valid extraction as
 (``saved_draft``), approved either way (a person's draft even if forced through). The tool
 leaves the receipt PROCESSING/MATCHING: ``commit_matches`` completes it once its lines are
 linked. An extraction's discounts are saved where the reading put them (an order discount
-stays at receipt level); a person's draft goes through the discount rule as before. The
+stays at receipt level); a person's draft goes through the discount rule as before, unless its
+answer keeps the links it was given (the web app's editor). The
 extraction's printed product codes go into the state for ``match``
 (``reading_codes``); a person's draft has none.
 """
@@ -28,7 +29,8 @@ def persist_node(deps: AgentDeps) -> Node:
                 "receipt_id": state["receipt_id"],
                 "draft": DraftPayload.from_draft(saved_draft(deps, state)).model_dump(mode="json"),
                 "force": state.get("approved", False),
-                "attribute_discounts": state.get("draft") is not None,
+                "attribute_discounts": state.get("draft") is not None
+                and state.get("attribute_discounts", True),
             },
         )
         codes = (

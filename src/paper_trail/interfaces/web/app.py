@@ -6,10 +6,10 @@ from fastapi import FastAPI
 from fastapi.telemetry import TelemetryConfig
 
 from paper_trail import __version__
-from paper_trail.bootstrap import Container
+from paper_trail.bootstrap import Container, ReviewServices
 from paper_trail.interfaces.web.errors import install_error_handlers, problem_schemas
 from paper_trail.interfaces.web.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
-from paper_trail.interfaces.web.routers import health, meta, products, receipts
+from paper_trail.interfaces.web.routers import health, meta, products, receipts, reviews
 from paper_trail.interfaces.web.spa import SpaStaticFiles
 
 API_PREFIX = "/api"
@@ -38,8 +38,9 @@ class PaperTrailApi(FastAPI):
         return schema
 
 
-def create_app(container: Container) -> FastAPI:
-    """Build the API (and, when the built SPA is present, the SPA) for ``container``."""
+def create_app(container: Container, review_services: ReviewServices | None = None) -> FastAPI:
+    """Build the API (and, when the built SPA is present, the SPA) for ``container``. The
+    review endpoints answer 503 without ``review_services``."""
     app = PaperTrailApi(
         title="Paper Trail",
         version=__version__,
@@ -49,13 +50,14 @@ def create_app(container: Container) -> FastAPI:
         redoc_url=None,
     )
     app.state.container = container
+    app.state.reviews = review_services
     install_error_handlers(app)
     app.add_middleware(
         BodySizeLimitMiddleware,
         max_bytes=container.settings.upload.max_bytes + MULTIPART_OVERHEAD_BYTES,
     )
     app.add_middleware(RequestContextMiddleware)
-    for router in (health.router, receipts.router, products.router, meta.router):
+    for router in (health.router, receipts.router, reviews.router, products.router, meta.router):
         app.include_router(router, prefix=API_PREFIX)
     if container.settings.static_dir.is_dir():
         app.mount("/", SpaStaticFiles(directory=container.settings.static_dir), name="spa")

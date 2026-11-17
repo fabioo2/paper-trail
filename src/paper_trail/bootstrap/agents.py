@@ -37,10 +37,18 @@ from paper_trail.agents.runner import LangGraphReceiptRunner
 from paper_trail.application.budget import BudgetedReader
 from paper_trail.application.enrichment import EnrichCatalog, ProductEnricher
 from paper_trail.application.process_receipt import ProcessReceiptFile
-from paper_trail.application.receipts import GetReview, ListOpenReviews, ResolveReview
+from paper_trail.application.receipts import (
+    AnswerReview,
+    GetPendingReview,
+    GetReview,
+    ListOpenReviews,
+    ListPendingReviews,
+    ResolveReview,
+)
 from paper_trail.bootstrap import (
     RUNS_DIRNAME,
     Container,
+    ReviewServices,
     build_container,
     dispose,
     image_store,
@@ -283,6 +291,26 @@ def agent_container(
             resolve_review=ResolveReview(uow_factory, runner, container.record_receipt, clock),
             list_open_reviews=ListOpenReviews(uow_factory),
             get_review=GetReview(uow_factory),
+        )
+
+
+@contextmanager
+def review_services(container: Container) -> Iterator[ReviewServices]:
+    """The web app's reviews over the container's database and the graph's checkpoints in it.
+    The web process only reads the extraction each parked thread holds; the worker resumes the
+    graph with a person's answer, so the runner here gets the in-process tools and a Claude
+    reader that it never calls."""
+    with sqlite_checkpointer(container.settings.database_path) as checkpointer:
+        tools = InProcessToolGateway(tool_registry(container))
+        claude = _claude_reader(container.settings, container.clock, container.engine)
+        deps = _agent_deps(container, InMemoryTracer(container.clock), tools, claude.reader)
+        runner = LangGraphReceiptRunner(deps, checkpointer)
+        uow_factory = container.uow_factory
+        resolve = ResolveReview(uow_factory, runner, container.record_receipt, container.clock)
+        yield ReviewServices(
+            list_reviews=ListPendingReviews(uow_factory, runner),
+            get_review=GetPendingReview(uow_factory, runner),
+            answer_review=AnswerReview(uow_factory, resolve),
         )
 
 

@@ -69,7 +69,7 @@ EXPECTED_MEMBERS: dict[type[StrEnum], set[str]] = {
         "QUEUED", "READING", "EXTRACTING", "VALIDATING", "MATCHING",
         "ENRICHING", "SAVING", "DONE", "NEEDS_REVIEW", "FAILED",
     },
-    enums.JobKind: {"PROCESS_RECEIPT"},
+    enums.JobKind: {"PROCESS_RECEIPT", "RESOLVE_REVIEW"},
     enums.JobStatus: {"PENDING", "RUNNING", "SUCCEEDED", "FAILED"},
     enums.ReviewReason: {
         "VALIDATION_FAILED", "LOW_CONFIDENCE", "EXTRACTION_FAILED", "UNMATCHED_PRODUCT",

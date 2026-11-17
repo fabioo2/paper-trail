@@ -1,5 +1,5 @@
-"""Recorded receipts: the list (newest first, keyset-paged), one receipt in full, and the
-upload of a photo for the worker to process."""
+"""Recorded receipts: the list (newest first, keyset-paged), one receipt in full, its photo, and
+the upload of a photo for the worker to process."""
 
 from http import HTTPStatus
 from typing import Annotated
@@ -15,6 +15,8 @@ from paper_trail.interfaces.web.schemas.receipts import (
     ReceiptPageOut,
     ReceiptUploadOut,
 )
+
+PHOTO_MEDIA_TYPE = "image/jpeg"
 
 router = APIRouter(
     prefix="/receipts",
@@ -75,3 +77,22 @@ def get_receipt(container: ContainerDep, receipt_id: int) -> ReceiptDetailOut:
     """One receipt with its lines and an arithmetic report computed from the current data."""
     receipt, report = container.get_receipt(receipt_id)
     return ReceiptDetailOut.from_receipt(receipt, report)
+
+
+@router.get(
+    "/{receipt_id}/image",
+    operation_id="getReceiptImage",
+    summary="Get a receipt's photo",
+    response_class=Response,
+    responses={
+        HTTPStatus.OK.value: {
+            "content": {PHOTO_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}},
+            "description": "The stored photo.",
+        },
+        **problem_responses(HTTPStatus.NOT_FOUND),
+    },
+)
+def get_receipt_image(container: ContainerDep, receipt_id: int) -> Response:
+    """The receipt's stored photo (every photo is stored as a JPEG); a receipt without one, or
+    an unknown receipt, is a 404 problem."""
+    return Response(container.get_receipt_image(receipt_id), media_type=PHOTO_MEDIA_TYPE)

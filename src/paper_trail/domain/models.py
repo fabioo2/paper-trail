@@ -379,6 +379,7 @@ class Job:
     last_error: str | None
     created_at: datetime
     updated_at: datetime
+    payload: Mapping[str, JsonValue] | None = None  # what the job needs besides its receipt
 
 
 @dataclass(frozen=True, slots=True)

@@ -28,6 +28,8 @@ class ReceiptState(TypedDict, total=False):
     review_reason: str | None
     review_id: int | None
     draft: dict[str, Any] | None  # a person's answer to the review (DraftPayload JSON)
+    # Whether the discount rule links the person's unlinked discounts (absent: it does).
+    attribute_discounts: bool
     approved: bool  # a person approved what is saved
     status: str | None  # the receipt's status once saved
     saved: bool

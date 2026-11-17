@@ -84,8 +84,54 @@ def test_s1_ac_10_enqueue_creates_a_pending_job(
         5,
     )
     assert job.available_at == job.created_at == job.updated_at == fake_clock.now()
-    assert (job.locked_by, job.lease_expires_at, job.last_error) == (None, None, None)
+    assert (job.locked_by, job.lease_expires_at, job.last_error, job.payload) == (
+        None,
+        None,
+        None,
+        None,
+    )
     assert _get(uow_factory, job) == job
+
+
+def test_a_job_keeps_its_payload_through_claim_and_failure(uow_factory: UnitOfWorkFactory) -> None:
+    receipt_id = _receipt_id(uow_factory)
+    payload = {"review_id": 7, "draft": None, "force": True, "reason": "torn é"}
+    job = in_unit(
+        uow_factory,
+        lambda uow: uow.jobs.enqueue(
+            JobKind.RESOLVE_REVIEW, receipt_id, max_attempts=1, payload=payload
+        ),
+    )
+
+    claimed = _claim(uow_factory)
+    assert claimed is not None
+    failed = _fail(uow_factory, claimed, "boom", None)
+
+    assert (job.kind, job.payload, claimed.payload, failed.payload) == (
+        JobKind.RESOLVE_REVIEW,
+        payload,
+        payload,
+        payload,
+    )
+
+
+def test_only_a_pending_or_running_job_of_the_kind_is_active(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    job = _enqueue(uow_factory, max_attempts=1)
+    receipt_id = job.receipt_id
+
+    def active(kind: JobKind = JobKind.PROCESS_RECEIPT) -> bool:
+        return in_unit(uow_factory, lambda uow: uow.jobs.has_active(kind, receipt_id))
+
+    pending = active()
+    other_kind = active(JobKind.RESOLVE_REVIEW)
+    claimed = _claim(uow_factory)
+    assert claimed is not None
+    running = active()
+    _fail(uow_factory, claimed, "boom", None)
+
+    assert (pending, other_kind, running, active()) == (True, False, True, False)
 
 
 def test_s1_ac_10_get_unknown_job_is_none(uow_factory: UnitOfWorkFactory) -> None:
