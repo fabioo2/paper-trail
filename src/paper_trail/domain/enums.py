@@ -77,6 +77,7 @@ class ProcessingStage(StrEnum):
 
 class JobKind(StrEnum):
     PROCESS_RECEIPT = auto()
+    RESOLVE_REVIEW = auto()  # a person's answer to a review, given in the web app
 
 
 class JobStatus(StrEnum):

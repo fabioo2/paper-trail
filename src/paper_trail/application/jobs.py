@@ -1,14 +1,18 @@
-"""The worker's ``process_receipt`` jobs: receipts uploaded through the API (``UploadReceipt``)
-run through the graph the way ``paper-trail process`` runs a photo (ADR-0005)."""
+"""The worker's jobs: receipts uploaded through the API (``UploadReceipt``) run through the graph
+the way ``paper-trail process`` runs a photo (ADR-0005), and a person's answers to reviews given
+in the web app (``AnswerReview``) resume it the way ``paper-trail review resolve`` does."""
 
 from datetime import timedelta
 
 import structlog
 
+from paper_trail.application.payloads import ReviewAnswerPayload
 from paper_trail.application.process_receipt import ProcessingStoppedError, ProcessReceiptFile
-from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
+from paper_trail.application.receipts import ResolveReview
+from paper_trail.domain.enums import JobKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import Job, require_id
+from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.ports.trace import Tracer
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
@@ -26,9 +30,15 @@ class ProcessReceiptJobs:
     ``renew_lease`` keeps it claimed; a job whose worker died is claimed again once its lease
     runs out and continues the receipt's thread. The receipt's trace events are dropped after
     its job.
+
+    A ``resolve_review`` job resolves its review with the answer it carries
+    (``ResolveReview.apply``: given once, even when a worker died after giving it). When that
+    fails, the job is FAILED with the reason and ``ResolveReview.give_back`` settles the
+    review by the graph's checkpoint: answered again by a person while the graph has not taken
+    the answer, else closed with the receipt FAILED (``process --resume`` continues it).
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the use cases it runs and the job settings
         self,
         uow_factory: UnitOfWorkFactory,
         process: ProcessReceiptFile,
@@ -36,9 +46,11 @@ class ProcessReceiptJobs:
         *,
         worker_id: str,
         lease: timedelta,
+        resolve_review: ResolveReview,
     ) -> None:
         self._uow_factory = uow_factory
         self._process = process
+        self._resolve_review = resolve_review
         self._tracer = tracer
         self._worker_id = worker_id
         self._lease = lease
@@ -76,6 +88,8 @@ class ProcessReceiptJobs:
 
     def _run(self, job: Job) -> str | None:
         """Process the job's receipt; why it failed, or None."""
+        if job.kind is JobKind.RESOLVE_REVIEW:
+            return self._resolve(job)
         with self._uow_factory(read_only=True) as uow:
             receipt = uow.receipts.get(job.receipt_id)
         if receipt is None or receipt.status is not ReceiptStatus.PROCESSING:
@@ -94,6 +108,24 @@ class ProcessReceiptJobs:
                 uow.commit()
             return type(error).__name__
         return outcome.failure
+
+    def _resolve(self, job: Job) -> str | None:
+        """Resolve the job's review with its answer; why it failed, or None."""
+        answer = ReviewAnswerPayload.model_validate(job.payload)
+        try:
+            self._resolve_review.apply(
+                answer.review_id,
+                None if answer.draft is None else answer.draft.to_draft(),
+                force=answer.force,
+                reason=answer.reason,
+            )
+        except Exception as error:  # one job's failure must not stop the worker
+            log.error("job.crashed", error_type=type(error).__name__)
+            self._resolve_review.give_back(
+                answer.review_id, forced_reason=answer.reason if answer.force else None
+            )
+            return mask_pans(str(error)).text or type(error).__name__
+        return None
 
     def _settle(self, job_id: int, error: str | None) -> None:
         """Complete or fail the job; another worker holding it now is logged, not raised."""

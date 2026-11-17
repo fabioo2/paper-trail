@@ -56,7 +56,13 @@ class LangGraphReceiptRunner:
         }
         return self._run(receipt_id, initial, interrupt_after=interrupt_after)
 
-    def resume(self, receipt_id: int, draft: ReceiptDraft | None = None) -> GraphOutcome:
+    def resume(
+        self,
+        receipt_id: int,
+        draft: ReceiptDraft | None = None,
+        *,
+        attribute_discounts: bool = True,
+    ) -> GraphOutcome:
         """Continue the receipt's thread: answer the review it waits for (``draft``, or None to
         accept the extraction it holds), or, when it is not waiting (it paused at a breakpoint
         or its last run raised), run again from the last checkpoint, the failed node from its
@@ -66,7 +72,12 @@ class LangGraphReceiptRunner:
         outdated = bool(snapshot.values) and _state(snapshot).get("state_version") != STATE_VERSION
         if _paused_for_review(snapshot):
             answer = (
-                ACCEPT if draft is None else DraftPayload.from_draft(draft).model_dump(mode="json")
+                ACCEPT
+                if draft is None
+                else {
+                    "draft": DraftPayload.from_draft(draft).model_dump(mode="json"),
+                    "attribute_discounts": attribute_discounts,
+                }
             )
             return self._run(receipt_id, Command(resume=answer), resumed_from=REVIEW_NODE)
         if draft is not None:
@@ -83,6 +94,14 @@ class LangGraphReceiptRunner:
 
     def reset(self, receipt_id: int) -> None:
         self._checkpointer.delete_thread(thread_id(receipt_id))
+
+    def has_thread(self, receipt_id: int) -> bool:
+        graph = build_receipt_graph(self._deps, self._checkpointer)
+        return bool(self._snapshot(graph, receipt_id).values)
+
+    def waiting_for_review(self, receipt_id: int) -> bool:
+        graph = build_receipt_graph(self._deps, self._checkpointer)
+        return _paused_for_review(self._snapshot(graph, receipt_id))
 
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:
         snapshot = self._snapshot(build_receipt_graph(self._deps, self._checkpointer), receipt_id)

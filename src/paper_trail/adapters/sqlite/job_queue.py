@@ -5,6 +5,7 @@ is a single atomic statement; together with the unit of work's BEGIN IMMEDIATE n
 can ever take the same job.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, and_, func, insert, or_, select, update
@@ -13,7 +14,7 @@ from paper_trail.adapters.sqlite.mappers import job_from_row
 from paper_trail.adapters.sqlite.schema import jobs
 from paper_trail.domain.enums import JobKind, JobStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
-from paper_trail.domain.models import Job
+from paper_trail.domain.models import Job, JsonValue
 from paper_trail.ports.clock import Clock
 
 
@@ -24,7 +25,14 @@ class SqliteJobQueue:
         self._connection = connection
         self._clock = clock
 
-    def enqueue(self, kind: JobKind, receipt_id: int, *, max_attempts: int) -> Job:
+    def enqueue(
+        self,
+        kind: JobKind,
+        receipt_id: int,
+        *,
+        max_attempts: int,
+        payload: Mapping[str, JsonValue] | None = None,
+    ) -> Job:
         now = self._clock.now()
         row = (
             self._connection.execute(
@@ -38,6 +46,7 @@ class SqliteJobQueue:
                     available_at=now,
                     created_at=now,
                     updated_at=now,
+                    payload=payload,
                 )
                 .returning(jobs)
             )
@@ -102,6 +111,18 @@ class SqliteJobQueue:
     def release(self, job_id: int, worker_id: str, *, available_at: datetime) -> None:
         self._owned(job_id, worker_id)
         self._finish(job_id, JobStatus.PENDING, available_at=available_at)
+
+    def has_active(self, kind: JobKind, receipt_id: int) -> bool:
+        active = (
+            select(jobs.c.id)
+            .where(
+                jobs.c.kind == kind,
+                jobs.c.receipt_id == receipt_id,
+                jobs.c.status.in_((JobStatus.PENDING, JobStatus.RUNNING)),
+            )
+            .limit(1)
+        )
+        return self._connection.execute(active).first() is not None
 
     def pending_count(self) -> int:
         count: int = self._connection.execute(

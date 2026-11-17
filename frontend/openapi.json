@@ -800,6 +800,41 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "ReadingSummaryOut": {
+        "properties": {
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "purchased_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchased On"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/components/schemas/MoneyOut"
+          }
+        },
+        "required": [
+          "store_name",
+          "purchased_on",
+          "total",
+          "item_count"
+        ],
+        "title": "ReadingSummaryOut",
+        "type": "object"
+      },
       "ReceiptDetailOut": {
         "properties": {
           "arithmetic": {
@@ -1026,6 +1061,390 @@
           "stage"
         ],
         "title": "ReceiptUploadOut",
+        "type": "object"
+      },
+      "ResolveReviewIn": {
+        "additionalProperties": false,
+        "description": "Either ``accept`` (the extraction as read) or a corrected ``draft``. One that does not\nadd up is refused unless ``force`` is set with a ``reason``.",
+        "properties": {
+          "accept": {
+            "default": false,
+            "title": "Accept",
+            "type": "boolean"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDraftBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "ResolveReviewIn",
+        "type": "object"
+      },
+      "ReviewAnswerOut": {
+        "description": "The receipt once the answer is queued: the worker saves it (poll GET\n/api/receipts/{receipt_id}).",
+        "properties": {
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "integer"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingStage"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReceiptStatus"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "status",
+          "stage"
+        ],
+        "title": "ReviewAnswerOut",
+        "type": "object"
+      },
+      "ReviewDraftBody": {
+        "additionalProperties": false,
+        "description": "A reading of the receipt, as the review shows it and as a person corrects it: amounts in\ncents of ``currency``, lines in printed order.",
+        "properties": {
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewLineBody"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "payment_last4": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Last4"
+          },
+          "purchased_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchased On"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          },
+          "subtotal_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtotal Cents"
+          },
+          "tax_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Cents"
+          },
+          "total_cents": {
+            "title": "Total Cents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "store_name",
+          "purchased_on",
+          "currency",
+          "subtotal_cents",
+          "tax_cents",
+          "total_cents",
+          "payment_last4",
+          "lines"
+        ],
+        "title": "ReviewDraftBody",
+        "type": "object"
+      },
+      "ReviewIssueOut": {
+        "description": "Why the receipt waits for a person; ``position`` is the draft line it is about.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/IssueCode"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "position"
+        ],
+        "title": "ReviewIssueOut",
+        "type": "object"
+      },
+      "ReviewLineBody": {
+        "additionalProperties": false,
+        "description": "One line of a reading. ``applies_to`` is the index, in ``lines``, of the item a discount\nbelongs to.",
+        "properties": {
+          "applies_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applies To"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LineKind"
+          },
+          "line_total_cents": {
+            "title": "Line Total Cents",
+            "type": "integer"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "raw_text": {
+            "title": "Raw Text",
+            "type": "string"
+          },
+          "unit_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Price Cents"
+          }
+        },
+        "required": [
+          "kind",
+          "raw_text",
+          "description",
+          "quantity",
+          "unit_price_cents",
+          "line_total_cents",
+          "category",
+          "applies_to"
+        ],
+        "title": "ReviewLineBody",
+        "type": "object"
+      },
+      "ReviewOut": {
+        "description": "One review: ``draft`` is the extraction to accept or correct (null when there is none\nand the reading must be typed in); ``image_url`` serves the receipt's photo.\n``answer_queued``: an answer is queued or running in the worker (answering again is a\n409).",
+        "properties": {
+          "answer_queued": {
+            "title": "Answer Queued",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDraftBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewIssueOut"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "integer"
+          },
+          "receipt_status": {
+            "$ref": "#/components/schemas/ReceiptStatus"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewStatus"
+          }
+        },
+        "required": [
+          "id",
+          "receipt_id",
+          "reason",
+          "status",
+          "receipt_status",
+          "answer_queued",
+          "issues",
+          "created_at",
+          "image_url",
+          "draft"
+        ],
+        "title": "ReviewOut",
+        "type": "object"
+      },
+      "ReviewReason": {
+        "enum": [
+          "validation_failed",
+          "low_confidence",
+          "extraction_failed",
+          "unmatched_product"
+        ],
+        "title": "ReviewReason",
+        "type": "string"
+      },
+      "ReviewStatus": {
+        "enum": [
+          "open",
+          "resolved",
+          "dismissed"
+        ],
+        "title": "ReviewStatus",
+        "type": "string"
+      },
+      "ReviewSummaryOut": {
+        "description": "An open review as listed; ``reading`` is the extraction it holds, null when there is\nnone (the reading never parsed).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewIssueOut"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadingSummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "receipt_id",
+          "reason",
+          "issues",
+          "created_at",
+          "reading"
+        ],
+        "title": "ReviewSummaryOut",
         "type": "object"
       },
       "Unit": {
@@ -1650,6 +2069,292 @@
         "summary": "Get a receipt",
         "tags": [
           "receipts"
+        ]
+      }
+    },
+    "/api/receipts/{receipt_id}/image": {
+      "get": {
+        "description": "The receipt's stored photo (every photo is stored as a JPEG); a receipt without one, or\nan unknown receipt, is a 404 problem.",
+        "operationId": "getReceiptImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "receipt_id",
+            "required": true,
+            "schema": {
+              "title": "Receipt Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The stored photo."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get a receipt's photo",
+        "tags": [
+          "receipts"
+        ]
+      }
+    },
+    "/api/reviews": {
+      "get": {
+        "description": "The open reviews a person can answer now, newest first, whatever their receipt's\nstatus; one whose answer is queued or running is left out.",
+        "operationId": "listReviews",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewSummaryOut"
+                  },
+                  "title": "Response Listreviews",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List open reviews",
+        "tags": [
+          "reviews"
+        ]
+      }
+    },
+    "/api/reviews/{review_id}": {
+      "get": {
+        "description": "One review with its issues, the reading it holds and its photo; an unknown id is a 404\nproblem.",
+        "operationId": "getReview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get a review",
+        "tags": [
+          "reviews"
+        ]
+      }
+    },
+    "/api/reviews/{review_id}/resolve": {
+      "post": {
+        "description": "Accept the reading as read or save a corrected one; the worker resumes the receipt with\nit. A reading that does not add up is a 422 problem of type /problems/inconsistent-receipt\nlisting each issue in ``errors``, unless ``force`` is set with a ``reason``. An unknown\nreview is a 404 problem; one already resolved, or already answered, a 409 problem.",
+        "operationId": "resolveReview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveReviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewAnswerOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Answer a review",
+        "tags": [
+          "reviews"
         ]
       }
     }

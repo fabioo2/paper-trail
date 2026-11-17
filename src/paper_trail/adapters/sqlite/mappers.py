@@ -283,6 +283,7 @@ def job_from_row(row: RowMapping) -> Job:
         last_error=row["last_error"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        payload=row["payload"],
     )
 
 

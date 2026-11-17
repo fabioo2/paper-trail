@@ -20,7 +20,7 @@ import json
 import os
 import socket
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
@@ -33,6 +33,7 @@ import paper_trail
 from paper_trail.bootstrap import (
     Container,
     build_container,
+    database_is_current,
     database_revision,
     dispose,
     upgrade_database,
@@ -158,15 +159,21 @@ def serve() -> None:
     """Serve the HTTP API and the web app."""
     import uvicorn
 
+    from paper_trail.bootstrap.agents import review_services
     from paper_trail.interfaces.web.app import create_app
 
     settings = load_settings()
     configure_logging(settings)
     if not settings.static_dir.is_dir():
         log.warning("web.api_only", static_dir=str(settings.static_dir))
-    with running_container(settings) as container:
+    with running_container(settings) as container, ExitStack() as stack:
+        reviews = None
+        if database_is_current(container):
+            reviews = stack.enter_context(review_services(container))
+        else:
+            log.warning("web.reviews_unavailable", reason="the database is not migrated")
         uvicorn.run(
-            create_app(container),
+            create_app(container, reviews),
             host=settings.host,
             port=settings.http_port,
             proxy_headers=False,
@@ -206,6 +213,7 @@ def worker(
             agents.tracer,
             worker_id=f"{socket.gethostname()}-{os.getpid()}",
             lease=JOB_LEASE,
+            resolve_review=agents.resolve_review,
         )
         runner = WorkerRunner(
             handlers=(jobs,),

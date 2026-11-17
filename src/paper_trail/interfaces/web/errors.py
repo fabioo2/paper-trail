@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.json_schema import models_json_schema
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from paper_trail.application.receipts import InconsistentDraftError
 from paper_trail.domain.errors import (
     ConflictError,
     DomainValidationError,
@@ -32,6 +33,9 @@ _PROBLEM_TYPES: Mapping[int, str] = {
     500: "/problems/internal",
     503: "/problems/not-ready",
 }
+# A reading that does not add up: a 422 whose ``errors`` are its issues (``type`` the issue code),
+# which a person may keep anyway with ``force`` and a reason.
+INCONSISTENT_RECEIPT_TYPE = "/problems/inconsistent-receipt"
 
 
 class FieldError(BaseModel):
@@ -52,16 +56,17 @@ class ProblemDetail(BaseModel):
     errors: list[FieldError] | None = None
 
 
-def problem_response(
+def problem_response(  # noqa: PLR0913 - the problem's members, keyword-only
     status: int,
     *,
     detail: str | None = None,
     instance: str | None = None,
     errors: list[FieldError] | None = None,
     headers: Mapping[str, str] | None = None,
+    problem_type: str | None = None,
 ) -> JSONResponse:
     problem = ProblemDetail(
-        type=_PROBLEM_TYPES.get(status, "about:blank"),
+        type=problem_type or _PROBLEM_TYPES.get(status, "about:blank"),
         title=HTTPStatus(status).phrase,
         status=status,
         detail=detail,
@@ -121,6 +126,24 @@ def install_error_handlers(app: FastAPI) -> None:
     }
     for error_class, status in domain_errors.items():
         app.add_exception_handler(error_class, _domain_error_handler(status))
+
+    @app.exception_handler(InconsistentDraftError)
+    async def inconsistent_draft(request: Request, exc: InconsistentDraftError) -> Response:
+        errors = [
+            FieldError(
+                loc=["body"] if issue.position is None else ["body", "lines", issue.position],
+                msg=issue.message,
+                type=issue.code.value,
+            )
+            for issue in exc.report.issues
+        ]
+        return problem_response(
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+            instance=request.url.path,
+            errors=errors,
+            problem_type=INCONSISTENT_RECEIPT_TYPE,
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> Response:

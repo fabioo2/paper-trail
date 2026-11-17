@@ -16,8 +16,15 @@ class JobQueue(Protocol):
     ConflictError for anyone else and NotFoundError for an unknown id.
     """
 
-    def enqueue(self, kind: JobKind, receipt_id: int, *, max_attempts: int) -> Job:
-        """A new PENDING job, available now."""
+    def enqueue(
+        self,
+        kind: JobKind,
+        receipt_id: int,
+        *,
+        max_attempts: int,
+        payload: Mapping[str, JsonValue] | None = None,
+    ) -> Job:
+        """A new PENDING job, available now, carrying ``payload``."""
         ...
 
     def claim(self, worker_id: str, lease: timedelta) -> Job | None:
@@ -41,6 +48,10 @@ class JobQueue(Protocol):
 
     def release(self, job_id: int, worker_id: str, *, available_at: datetime) -> None:
         """Owner only: back to PENDING at ``available_at`` without using an attempt."""
+        ...
+
+    def has_active(self, kind: JobKind, receipt_id: int) -> bool:
+        """Whether a job of ``kind`` for the receipt is PENDING or RUNNING."""
         ...
 
     def pending_count(self) -> int:

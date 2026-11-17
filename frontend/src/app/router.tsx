@@ -12,6 +12,7 @@ import { ProductDetailPage } from "@/routes/product-detail-page";
 import { ProductsPage } from "@/routes/products-page";
 import { ReceiptDetailPage } from "@/routes/receipt-detail-page";
 import { ReceiptsPage } from "@/routes/receipts-page";
+import { ReviewDetailPage } from "@/routes/review-detail-page";
 import { ReviewPage } from "@/routes/review-page";
 import { RootLayout } from "@/routes/root-layout";
 import { ScanPage } from "@/routes/scan-page";
@@ -70,6 +71,11 @@ const pageRoutes = [
     getParentRoute: () => rootRoute,
     path: "/review",
     component: ReviewPage,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/review/$reviewId",
+    component: ReviewDetailPage,
   }),
 ] as const;
 

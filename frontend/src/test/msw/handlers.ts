@@ -14,12 +14,13 @@ export const healthyResponse: HealthOut = {
 };
 
 /**
- * Default handlers: a healthy, same-origin backend with no receipts or products yet.
+ * Default handlers: a healthy, same-origin backend with no receipts, products or reviews yet.
  * Tests override them with `server.use(...)`.
  */
 export const handlers = [
   http.get("/api/health", () => HttpResponse.json(healthyResponse)),
   http.get("/api/receipts", () => HttpResponse.json(receiptPage([]))),
   http.get("/api/products", () => HttpResponse.json([])),
+  http.get("/api/reviews", () => HttpResponse.json([])),
   http.get("/api/categories", () => HttpResponse.json(categories)),
 ];

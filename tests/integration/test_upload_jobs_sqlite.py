@@ -81,7 +81,12 @@ def _queue(
         harness=harness,
         upload=UploadReceipt(harness.images, harness.uow_factory, harness.clock),
         run_job=ProcessReceiptJobs(
-            harness.uow_factory, harness.process, harness.tracer, worker_id=WORKER, lease=LEASE
+            harness.uow_factory,
+            harness.process,
+            harness.tracer,
+            worker_id=WORKER,
+            lease=LEASE,
+            resolve_review=harness.resolve,
         ),
     )
 

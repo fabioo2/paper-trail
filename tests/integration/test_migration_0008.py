@@ -26,6 +26,7 @@ from paper_trail.adapters.sqlite.migrations import alembic_config, current_revis
 from paper_trail.domain.models import is_confirmed
 from tests.fakes.clock import FakeClock
 from tests.storage import sqlite_uow_factory
+from tests.support import SCHEMA_HEAD
 
 NOW = "2026-11-15T12:00:00.000000+00:00"
 SEEDED = {
@@ -96,7 +97,7 @@ def test_upgrade_folds_off_llm_into_llm_and_adds_the_lookup_table(
 
     command.upgrade(alembic_config(database), "head")
 
-    assert current_revision(engine) == "0008"
+    assert current_revision(engine) == SCHEMA_HEAD
     assert {"product_lookups", "lookup_requests"} <= _tables(database)
     assert _products(engine) == _renamed({"off_llm": "llm"})
     with sqlite_uow_factory(engine, FakeClock())(read_only=True) as uow:

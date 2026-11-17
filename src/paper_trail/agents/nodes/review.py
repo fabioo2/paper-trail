@@ -1,8 +1,9 @@
 """``review``: wait for a person (LangGraph ``interrupt``); resumed by ``ResolveReview``.
 
-The review item was opened by the supervisor. The answer is the person's draft (DraftPayload
-JSON), or ``ACCEPT`` to accept the extraction the graph holds (LangGraph cannot resume with
-None); either way it is approved.
+The review item was opened by the supervisor. The answer is the person's draft,
+``{"draft": <DraftPayload JSON>, "attribute_discounts": bool}`` (whether the discount rule links
+its unlinked discounts, or the links it was given are kept), or ``ACCEPT`` to accept the
+extraction the graph holds (LangGraph cannot resume with None); either way it is approved.
 """
 
 from langgraph.types import interrupt
@@ -18,6 +19,12 @@ def review_node() -> Node:
         answer = interrupt(
             {"review_id": state.get("review_id"), "reason": state.get("review_reason")}
         )
-        return {"draft": None if answer == ACCEPT else answer, "approved": True}
+        if answer == ACCEPT:
+            return {"draft": None, "approved": True}
+        return {
+            "draft": answer["draft"],
+            "attribute_discounts": answer["attribute_discounts"],
+            "approved": True,
+        }
 
     return review

@@ -283,6 +283,19 @@ class DraftPayload(BaseModel):
         )
 
 
+class ReviewAnswerPayload(BaseModel):
+    """A person's answer to a review, queued for the worker (a ``resolve_review`` job's
+    payload): the corrected draft, masked, or None to accept the extraction the graph holds;
+    ``force`` with ``reason`` keeps a draft that does not add up."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: StrictInt
+    draft: DraftPayload | None
+    force: bool
+    reason: str | None
+
+
 # The keys of ``Product.field_sources`` (``FIELD_SOURCE_KEYS``): ``size`` covers both size fields.
 type FieldSourceKey = Literal["canonical_name", "brand", "size", "category", "tags"]
 
