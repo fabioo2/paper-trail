@@ -7,6 +7,8 @@ import {
 
 import { ApiError, apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
+import { summaryKeys } from "@/features/home/api";
+import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
 export type ReceiptSummaryOut = Schemas["ReceiptSummaryOut"];
@@ -86,8 +88,8 @@ export function useUploadReceipt() {
 
 /**
  * Queue a FAILED receipt for the worker again (`retryReceipt`). On success the cached receipt
- * takes the answer's status at once; either way the receipt and the list are refetched: on a
- * 409 the receipt may already be processing.
+ * takes the answer's status at once; either way the receipt, the list, Home's summary (its
+ * processing count) and searches are refetched: on a 409 the receipt may already be processing.
  */
 export function useRetryReceipt(id: number) {
   const queryClient = useQueryClient();
@@ -109,6 +111,8 @@ export function useRetryReceipt(id: number) {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: receiptKeys.detail(id) }),
         queryClient.invalidateQueries({ queryKey: receiptKeys.list() }),
+        queryClient.invalidateQueries({ queryKey: summaryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: searchKeys.all }),
       ]),
   });
 }
