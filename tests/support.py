@@ -23,7 +23,9 @@ INDEX_HTML = (
 HASHED_ASSET = "assets/index-3f9a1c2b.js"
 
 # The newest Alembic revision; bump it with every migration (agent core A adds 0003_agent_core).
-SCHEMA_HEAD = "0009"
+SCHEMA_HEAD = "0010"
+# TestClient's Host header: allowed by the test settings only (hardening H1-09).
+TEST_CLIENT_HOST = "testserver"
 
 MakeSettings = Callable[..., Settings]
 CopyMigrated = Callable[[Path], Path]

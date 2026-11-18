@@ -29,8 +29,15 @@ class JobQueue(Protocol):
 
     def claim(self, worker_id: str, lease: timedelta) -> Job | None:
         """Atomically take the job with the earliest available_at (then lowest id) among
-        PENDING jobs with available_at <= now and RUNNING jobs whose lease expired before now.
-        It becomes RUNNING, locked by ``worker_id`` until now + ``lease``. None if idle."""
+        PENDING jobs with available_at <= now and RUNNING jobs whose lease expired before now
+        with an attempt left after the one their dead worker used up. It becomes RUNNING,
+        locked by ``worker_id`` until now + ``lease``; taking back an expired one counts that
+        attempt. None if idle."""
+        ...
+
+    def fail_abandoned(self, error: str) -> list[Job]:
+        """RUNNING jobs whose lease expired before now and whose dead worker used up their last
+        attempt: FAILED with ``error``, that attempt counted. Returns them."""
         ...
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:

@@ -2,7 +2,9 @@
 (discounts-and-paid-prices plan, R7; TC-85, TC-86).
 
 Pinned: ``applies_to_position: StrictInt | None = None``; ``from_line`` / ``to_line`` carry it
-both ways; a payload written before the field existed (no key) reads as None.
+both ways; a payload written before the field existed (no key) reads as None. The same for
+an ITEM line's ``unit`` through checkpoints and through the review body a person sends back
+(hardening H3-05).
 """
 
 import json
@@ -12,7 +14,9 @@ import pytest
 from pydantic import ValidationError
 
 from paper_trail.application.payloads import DraftLinePayload
-from tests.factories import discount_line
+from paper_trail.domain.enums import Unit
+from paper_trail.interfaces.web.schemas.reviews import ReviewLineBody
+from tests.factories import discount_line, line_item
 
 # P8 PAYLOAD_LINKS: a DISCOUNT line at position 6 unlinked, linked to 0, linked to 5.
 PAYLOAD_LINKS = [None, 0, 5]
@@ -48,3 +52,23 @@ def test_tc_86_a_link_that_is_not_an_integer_is_refused(value: object) -> None:
         DraftLinePayload.model_validate_json(json.dumps(_payload_json(applies_to_position=value)))
 
     assert [error["loc"] for error in raised.value.errors()] == [("applies_to_position",)]
+
+
+@pytest.mark.parametrize("unit", [Unit.EACH, Unit.KG, Unit.LB, None])
+def test_h3_05_a_lines_unit_survives_checkpoints_and_the_review_body(unit: Unit | None) -> None:
+    line = line_item(unit=unit)
+
+    assert DraftLinePayload.from_line(line).to_line() == line
+    assert ReviewLineBody.from_line(line).to_line(line.position, "CAD") == line
+
+
+def test_h3_05_payloads_and_review_bodies_written_without_a_unit_read_as_unknown() -> None:
+    written_before = DraftLinePayload.from_line(line_item()).model_dump(mode="json")
+    del written_before["unit"]
+    body = ReviewLineBody.from_line(line_item(unit=Unit.KG)).model_dump(mode="json")
+    del body["unit"]
+
+    assert DraftLinePayload.model_validate(written_before).to_line().unit is None
+    assert ReviewLineBody.model_validate(body).to_line(0, "CAD").unit is None
+    with pytest.raises(ValidationError):
+        ReviewLineBody.model_validate(body | {"unit": "g"})

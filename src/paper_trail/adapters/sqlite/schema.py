@@ -21,6 +21,7 @@ from paper_trail.domain.enums import (
     CodeScheme,
     CodeSource,
     CorrectionKind,
+    FailureReason,
     JobKind,
     JobStatus,
     LineKind,
@@ -53,6 +54,7 @@ receipts = Table(
     Column("created_at", UtcDateTime, nullable=False),
     Column("updated_at", UtcDateTime, nullable=False),
     Column("image_sha256", Text, nullable=True),
+    Column("failure_reason", StrEnumType(FailureReason), nullable=True),
 )
 
 products = Table(
@@ -98,6 +100,7 @@ line_items = Table(
     Column("category", StrEnumType(Category), nullable=True),
     Column("match_source", StrEnumType(MatchSource), nullable=True),
     Column("applies_to_position", Integer, nullable=True),
+    Column("unit", StrEnumType(Unit), nullable=True),
 )
 
 product_aliases = Table(

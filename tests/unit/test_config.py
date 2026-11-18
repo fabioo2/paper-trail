@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from paper_trail.config import Settings, WorkerSettings
+from paper_trail.config import Settings, WebSettings, WorkerSettings
 
 
 def test_s0_ac_13_defaults_match_the_documented_table() -> None:
@@ -23,7 +23,7 @@ def test_s0_ac_13_defaults_match_the_documented_table() -> None:
     assert settings.worker == WorkerSettings()
     assert settings.worker.poll_interval_s == 1.0
     assert settings.worker.heartbeat_interval_s == 10.0
-    assert settings.worker.shutdown_grace_s == 8.0
+    assert settings.worker.shutdown_grace_s == 90.0
 
 
 def test_s0_ac_13_database_path_defaults_to_data_dir() -> None:
@@ -121,3 +121,34 @@ def test_s0_ac_13_poll_interval_bounds_are_inclusive(
     monkeypatch.setenv("PAPER_TRAIL_WORKER__POLL_INTERVAL_S", value)
 
     assert Settings().worker.poll_interval_s == float(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "hosts"),
+    [
+        ("192.168.0.187", ("192.168.0.187",)),
+        (" 192.168.0.187 , Fabio-Server ,, ", ("192.168.0.187", "fabio-server")),
+        ("", ()),
+        (None, ()),
+    ],
+    ids=["one", "trimmed-lowercased-empty-dropped", "empty", "unset"],
+)
+def test_h1_04_web_allowed_hosts_is_a_comma_list(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, hosts: tuple[str, ...]
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("PAPER_TRAIL_WEB__ALLOWED_HOSTS", value)
+
+    assert Settings().web == WebSettings(allowed_hosts=hosts)
+
+
+@pytest.mark.parametrize(
+    "entry", ["http://192.168.0.187", "fabio-server:8420", "*", "*.example", "host/path"]
+)
+def test_h1_04_a_host_with_a_scheme_port_path_or_wildcard_fails_naming_the_variable(
+    monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    monkeypatch.setenv("PAPER_TRAIL_WEB__ALLOWED_HOSTS", f"localhost,{entry}")
+
+    with pytest.raises(ValidationError, match="PAPER_TRAIL_WEB__ALLOWED_HOSTS"):
+        Settings()

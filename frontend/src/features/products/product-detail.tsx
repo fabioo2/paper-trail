@@ -19,6 +19,11 @@ import {
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
 import { GuessDot } from "@/features/products/field-source";
+import {
+  paidPer,
+  unitPriceSummary,
+  unitSuffix,
+} from "@/features/products/prices";
 import { ProductEditor } from "@/features/products/product-editor";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
@@ -113,10 +118,6 @@ function ProductView({ product }: { product: ProductOut }) {
   );
 }
 
-function paidPerUnit(purchase: ProductPurchaseOut): number {
-  return purchase.paid.amount_cents / Number(purchase.quantity);
-}
-
 function ProductPurchases({ productId }: { productId: number }) {
   const purchases = useProductPurchases(productId);
 
@@ -137,10 +138,7 @@ function ProductPurchases({ productId }: { productId: number }) {
   }
 
   const rows = purchases.data;
-  const first = rows[0];
-  const perUnit = rows
-    .filter((purchase) => purchase.paid.currency === first?.paid.currency)
-    .map(paidPerUnit);
+  const summary = unitPriceSummary(rows);
   return (
     <section
       aria-labelledby="purchases-heading"
@@ -149,21 +147,11 @@ function ProductPurchases({ productId }: { productId: number }) {
       <h2 id="purchases-heading" className="font-semibold">
         Purchases ({rows.length})
       </h2>
-      {first && perUnit.length >= 2 ? (
+      {summary && summary.count >= 2 ? (
         <p className="text-sm text-muted-foreground">
-          Lowest{" "}
-          {formatMoney({
-            ...first.paid,
-            amount_cents: Math.round(Math.min(...perUnit)),
-          })}{" "}
-          · average{" "}
-          {formatMoney({
-            ...first.paid,
-            amount_cents: Math.round(
-              perUnit.reduce((sum, cents) => sum + cents, 0) / perUnit.length,
-            ),
-          })}{" "}
-          per unit
+          {unitSuffix(summary.unit)
+            ? `Lowest ${formatMoney(summary.lowest)}${unitSuffix(summary.unit)} · average ${formatMoney(summary.average)}${unitSuffix(summary.unit)}`
+            : `Lowest ${formatMoney(summary.lowest)} · average ${formatMoney(summary.average)} per unit`}
         </p>
       ) : null}
       {rows.length === 0 ? (
@@ -185,8 +173,16 @@ function ProductPurchases({ productId }: { productId: number }) {
 }
 
 function PurchaseRow({ purchase }: { purchase: ProductPurchaseOut }) {
+  const suffix = unitSuffix(purchase.unit);
   const notes = [
-    Number(purchase.quantity) === 1 ? null : `× ${purchase.quantity}`,
+    suffix
+      ? `${purchase.quantity} ${purchase.unit ?? ""} · ${formatMoney({
+          ...purchase.paid,
+          amount_cents: Math.round(paidPer(purchase, purchase.unit)),
+        })}${suffix}`
+      : Number(purchase.quantity) === 1
+        ? null
+        : `× ${purchase.quantity}`,
     purchase.discount.amount_cents === 0
       ? null
       : `save ${formatMoney({ ...purchase.discount, amount_cents: -purchase.discount.amount_cents })}`,

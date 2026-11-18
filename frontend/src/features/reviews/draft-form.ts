@@ -21,6 +21,8 @@ export interface ItemRow {
   readRegularCents: number | null;
   /** The printed text of the item's discount line as read; null for the item's own. */
   discountRawText: string | null;
+  /** What the item is sold by, kept as read; null for a new row (unknown). */
+  unit: Exclude<ReviewLineBody["unit"], undefined>;
 }
 
 /** A deposit, fee or order discount: a signed amount on its own line. */
@@ -96,6 +98,7 @@ export function emptyItem(): ItemRow {
     readQuantity: "",
     readRegularCents: null,
     discountRawText: null,
+    unit: null,
   };
 }
 
@@ -139,6 +142,7 @@ export function fieldsOf(draft: ReviewDraftBody | null): DraftFields {
         readQuantity: line.quantity,
         readRegularCents: line.line_total_cents,
         discountRawText: discountTexts.get(index) ?? null,
+        unit: line.unit ?? null,
       });
     } else if (!isItemDiscount(draft.lines, line)) {
       adjustments.push({
@@ -217,6 +221,7 @@ export function draftOf(
       line_total_cents: regular,
       category: row.category,
       applies_to: null,
+      unit: row.unit,
     });
     if (discount !== 0) {
       lines.push({
@@ -228,6 +233,7 @@ export function draftOf(
         line_total_cents: -discount,
         category: null,
         applies_to: position,
+        unit: null,
       });
     }
   });
@@ -242,6 +248,7 @@ export function draftOf(
       line_total_cents: cents ?? 0,
       category: null,
       applies_to: null,
+      unit: null,
     });
   });
   if (Object.keys(errors).length > 0) return { errors };

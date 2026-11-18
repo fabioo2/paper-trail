@@ -205,6 +205,7 @@ class DraftLinePayload(BaseModel):
     line_total: MoneyPayload
     category: Category | None
     applies_to_position: StrictInt | None = None
+    unit: Unit | None = None
 
     @classmethod
     def from_line(cls, line: LineItem) -> Self:
@@ -218,6 +219,7 @@ class DraftLinePayload(BaseModel):
             line_total=MoneyPayload.of(line.line_total),
             category=line.category,
             applies_to_position=line.applies_to_position,
+            unit=line.unit,
         )
 
     def to_line(self) -> LineItem:
@@ -231,6 +233,7 @@ class DraftLinePayload(BaseModel):
             line_total=self.line_total.to_money(),
             category=self.category,
             applies_to_position=self.applies_to_position,
+            unit=self.unit,
         )
 
 

@@ -6,7 +6,15 @@ from decimal import Decimal
 
 import pytest
 
-from paper_trail.domain.enums import Category, LineKind, MatchSource, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import (
+    Category,
+    FailureReason,
+    LineKind,
+    MatchSource,
+    ProcessingStage,
+    ReceiptStatus,
+    Unit,
+)
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import ItemLink, LineItem, ProductLine, Receipt, ReceiptSummary
 from paper_trail.domain.money import Money
@@ -364,6 +372,51 @@ def test_s1_ac_10_update_status_sets_status_stage_and_updated_at(
         stage=ProcessingStage.FAILED,
         updated_at=fake_clock.now(),
     )
+
+
+def test_h2_02_a_failure_reason_is_stored_and_cleared_with_the_status(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    saved = _add(uow_factory, receipt(status=ReceiptStatus.PROCESSING))
+    receipt_id = require_id(saved.id)
+
+    def update(status: ReceiptStatus, reason: FailureReason | None = None) -> FailureReason | None:
+        in_unit(
+            uow_factory,
+            lambda uow: uow.receipts.update_status(
+                receipt_id, status, ProcessingStage.DONE, failure_reason=reason
+            ),
+        )
+        stored = _get(uow_factory, receipt_id)
+        assert stored is not None
+        return stored.failure_reason
+
+    assert saved.failure_reason is None
+    assert update(ReceiptStatus.FAILED, FailureReason.BUDGET_REACHED) is (
+        FailureReason.BUDGET_REACHED
+    )
+    assert update(ReceiptStatus.PROCESSING) is None
+
+
+def test_h3_04_each_lines_unit_round_trips(uow_factory: UnitOfWorkFactory) -> None:
+    items = tuple(
+        line_item(position=position, unit=unit)
+        for position, unit in enumerate([Unit.KG, Unit.LB, Unit.EACH, None])
+    )
+    saved = _add(uow_factory, receipt(items=items))
+    receipt_id = require_id(saved.id)
+    product_id = require_id(in_unit(uow_factory, lambda uow: uow.products.add(product())).id)
+    linked = in_unit(
+        uow_factory,
+        lambda uow: uow.receipts.link_items(
+            receipt_id, [ItemLink(0, product_id, MatchSource.ALIAS)]
+        ),
+    )
+    stored = _get(uow_factory, receipt_id)
+
+    assert stored is not None
+    assert [item.unit for item in stored.items] == [Unit.KG, Unit.LB, Unit.EACH, None]
+    assert stored.items == linked.items
 
 
 def test_s1_ac_10_update_status_of_missing_receipt_raises(

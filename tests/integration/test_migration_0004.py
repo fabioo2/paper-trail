@@ -253,7 +253,7 @@ def test_tc_73_downgrade_drops_the_new_columns_and_keeps_every_row(
     database: Path, engine: Engine
 ) -> None:
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0004")
     with engine.begin() as connection:
         receipt_id = _receipt(connection)
         product_id = _product(connection)

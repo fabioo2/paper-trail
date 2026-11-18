@@ -126,3 +126,14 @@ def test_ce_tc_037_a_failed_read_is_recorded_only_when_billed(
         _budgeted(ScriptedReader(error), ledger).read(_request(), ReceiptAnswer)
 
     assert (raised.value, ledger.calls, ledger.reservations) == (error, recorded, {})
+
+
+def test_h4_12_reservations_left_open_by_killed_calls_fill_the_budget() -> None:
+    inner = ScriptedReader(answer())
+    ledger = FakeSpendLedger()
+    ledger.reservations = {1: (datetime(2026, 11, 1, tzinfo=UTC), CAP)}
+
+    with pytest.raises(BudgetReachedError, match=r"spent 5\.00 of 5\.00 USD"):
+        _budgeted(inner, ledger).read(_request(), ReceiptAnswer)
+
+    assert inner.calls == 0

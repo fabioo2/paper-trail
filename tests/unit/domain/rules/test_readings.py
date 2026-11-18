@@ -428,7 +428,9 @@ def _line(  # noqa: PLR0913 - one keyword per field of a stored line
     unit_price: int | None = None,
     category: Category | None = None,
     applies_to: int | None = None,
+    unit: Unit = Unit.EACH,
 ) -> LineItem:
+    """An ITEM line carries its reading's unit (hardening H3-05); other lines have none."""
     return LineItem(
         position=position,
         kind=kind,
@@ -439,6 +441,7 @@ def _line(  # noqa: PLR0913 - one keyword per field of a stored line
         line_total=cad(total),
         category=category,
         applies_to_position=applies_to,
+        unit=unit if kind is LineKind.ITEM else None,
     )
 
 
@@ -503,6 +506,7 @@ def test_ce_tc_078_the_metro_receipt_maps_to_items_and_linked_discounts() -> Non
             quantity="0.365",
             unit_price=660,
             category=produce,
+            unit=Unit.KG,
         ),
         _line(5, DISCOUNT, tomatoes, -161, description=tomatoes.title(), applies_to=4),
         _line(6, ITEM, shampoo, 1399, description=shampoo.title(), unit_price=1399, category=care),

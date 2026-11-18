@@ -32,7 +32,7 @@ from sqlalchemy import Engine
 from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.adapters.sqlite.migrations import upgrade_to_head
 from paper_trail.bootstrap import Container, build_container, dispose
-from paper_trail.config import DATABASE_FILENAME, Settings
+from paper_trail.config import DATABASE_FILENAME, Settings, WebSettings
 from paper_trail.interfaces.web.app import create_app
 from paper_trail.ports.clock import Clock
 from tests.storage import ScratchDatabase, scratch_databases
@@ -40,6 +40,7 @@ from tests.support import (
     HASHED_ASSET,
     INDEX_HTML,
     REPO_ROOT,
+    TEST_CLIENT_HOST,
     CopyMigrated,
     InsertRoute,
     JsonLogs,
@@ -167,6 +168,7 @@ def make_settings(tmp_path: Path, static_dir: Path) -> MakeSettings:
             "data_dir": tmp_path / "data",
             "static_dir": static_dir,
             "log_format": "json",
+            "web": WebSettings(allowed_hosts=(TEST_CLIENT_HOST,)),
         }
         values.update(overrides)
         return Settings(**values)

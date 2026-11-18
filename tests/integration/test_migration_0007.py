@@ -285,7 +285,7 @@ def test_ce_tc_047_downgrade_gives_back_0006_with_an_empty_vector_table(
 ) -> None:
     seeded = _seed_0006(database, engine)
     config = alembic_config(database)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0007")
     expected = _added_receipt(engine)
 
     command.downgrade(config, "0006")
@@ -309,7 +309,7 @@ def test_ce_tc_047_up_down_up_equals_one_up(
     seeded = _seed_0006(database, engine)
     config = alembic_config(database)
     once = tmp_path_factory.mktemp("once") / "paper_trail.db"
-    command.upgrade(alembic_config(once), "head")
+    command.upgrade(alembic_config(once), "0007")
     reference = create_engine(once)
     try:
         with reference.connect() as connection:
@@ -317,9 +317,9 @@ def test_ce_tc_047_up_down_up_equals_one_up(
     finally:
         reference.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0007")
     command.downgrade(config, "0006")
-    command.upgrade(config, "head")
+    command.upgrade(config, "0007")
 
     with engine.connect() as connection:
         assert (_schema(connection), _all_rows(connection)) == (schema_head, _upgraded(seeded))
@@ -347,7 +347,7 @@ def test_ce_tc_048_a_failure_after_the_trigger_drop_leaves_0006_and_retries(
     monkeypatch.setattr(alembic.op, "execute", failing)
 
     with pytest.raises(InjectedFaultError):
-        command.upgrade(config, "head")
+        command.upgrade(config, "0007")
 
     monkeypatch.undo()
     reopened = create_engine(database)
@@ -357,9 +357,9 @@ def test_ce_tc_048_a_failure_after_the_trigger_drop_leaves_0006_and_retries(
         assert current_revision(reopened) == "0006"
         assert after == (before, seeded, 3)
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "0007")
 
-        assert current_revision(reopened) == SCHEMA_HEAD
+        assert current_revision(reopened) == "0007"
         with reopened.connect() as connection:
             assert _all_rows(connection) == _upgraded(seeded)
     finally:
@@ -396,6 +396,18 @@ def test_ce_tc_050_the_app_engine_at_head_works_without_sqlite_vec(
         )
 
 
+def _without_later_columns(rows: Rows) -> Rows:
+    """``rows`` as 0007 has them: without the columns 0010 added."""
+    later = {"receipts": "failure_reason", "line_items": "unit"}
+    return {
+        table: [
+            {name: value for name, value in row.items() if name != later.get(table)}
+            for row in table_rows
+        ]
+        for table, table_rows in rows.items()
+    }
+
+
 def test_ce_tc_051_old_receipts_and_match_sources_load_and_stay_unchanged(
     database: Path, engine: Engine
 ) -> None:
@@ -417,7 +429,7 @@ def test_ce_tc_051_old_receipts_and_match_sources_load_and_stay_unchanged(
     ]
     assert (waiting.status, waiting.stage) == (ReceiptStatus.FAILED, ProcessingStage.FAILED)
     with engine.connect() as connection:
-        rows = _all_rows(connection)
+        rows = _without_later_columns(_all_rows(connection))
     expected = _upgraded(seeded)
     assert rows["receipts"][: len(expected["receipts"])] == expected["receipts"]
     assert {table: rows[table] for table in TABLES if table not in {"receipts", "line_items"}} == {

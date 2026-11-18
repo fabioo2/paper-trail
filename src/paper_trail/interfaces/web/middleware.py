@@ -1,9 +1,10 @@
 """Per-request correlation id, access log and last-resort error boundary (PLAN 1.4); the
-request body size limit."""
+request body size limit; the Host and Origin checks (ADR-0020)."""
 
 import logging
 import re
 import time
+from collections.abc import Iterable
 from http import HTTPStatus
 from uuid import uuid4
 
@@ -19,6 +20,9 @@ from paper_trail.interfaces.web.errors import (
 )
 
 REQUEST_ID_HEADER = "X-Request-ID"
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_PORT = re.compile(r":[0-9]*$")
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
 _QUIET_PATHS = frozenset({"/api/health", "/api/health/ready"})
 
@@ -113,3 +117,62 @@ class BodySizeLimitMiddleware:
             return message
 
         await self.app(scope, limited_receive, send)
+
+
+class HostOriginMiddleware:
+    """The app has no login, so these two checks are its boundary (ADR-0020).
+
+    A request whose ``Host`` (without its port) is not one of ``allowed_hosts`` is refused with
+    a 400 problem: a page on another site cannot reach the app by DNS rebinding. A request with
+    a method that changes data and an ``Origin`` header that is not the request's own origin
+    (its scheme, ``Host`` and port) is refused with a 403 problem: another site's page cannot
+    post to it. A request without ``Origin`` (curl, the CLI) and a safe method are served.
+    """
+
+    def __init__(self, app: ASGIApp, *, allowed_hosts: Iterable[str]) -> None:
+        self.app = app
+        self.allowed_hosts = frozenset(host.lower() for host in allowed_hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        host = headers.get("host", "")
+        if _hostname(host) not in self.allowed_hosts:
+            response = problem_response(
+                HTTPStatus.BAD_REQUEST,
+                detail="This host name is not served here.",
+                instance=scope["path"],
+            )
+            await response(scope, receive, send)
+            return
+        origin = headers.get("origin")
+        own_origin = f"{scope['scheme']}://{host}".lower()
+        if (
+            scope["method"] not in _SAFE_METHODS
+            and origin is not None
+            and _origin(origin) != _origin(own_origin)
+        ):
+            response = problem_response(
+                HTTPStatus.FORBIDDEN,
+                detail="Requests from another site are not accepted.",
+                instance=scope["path"],
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+def _hostname(host: str) -> str:
+    """``host`` without its port, lowercased."""
+    return host.rsplit(":", 1)[0].lower() if _PORT.search(host) else host.lower()
+
+
+def _origin(origin: str) -> str:
+    """``scheme://host`` with the scheme's default port dropped, lowercased."""
+    origin = origin.lower()
+    for scheme, port in _DEFAULT_PORTS.items():
+        if origin.startswith(f"{scheme}://") and origin.endswith(f":{port}"):
+            return origin.removesuffix(f":{port}")
+    return origin

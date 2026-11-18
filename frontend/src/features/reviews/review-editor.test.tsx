@@ -337,6 +337,7 @@ describe("Review editor", () => {
               line_total_cents: 350,
               category: null,
               applies_to: null,
+              unit: null,
             },
           ],
         },

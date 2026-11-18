@@ -443,8 +443,9 @@ class ResolveReview:
         return review
 
 
-# The worker resumes the graph once with the answer; a failed run is answered again.
-REVIEW_ANSWER_JOB_ATTEMPTS = 1
+# The worker resumes the graph once with the answer; a failed run is answered again. The second
+# attempt is only for a worker that died mid-run (``ProcessReceiptJobs``).
+REVIEW_ANSWER_JOB_ATTEMPTS = 2
 
 
 class AnswerReview:

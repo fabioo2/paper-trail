@@ -35,7 +35,7 @@ from paper_trail.adapters.sqlite.mappers import (
 )
 from paper_trail.adapters.sqlite.schema import line_items, receipts
 from paper_trail.adapters.sqlite.text_search import fts_query
-from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import FailureReason, LineKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import (
     ItemLink,
@@ -158,8 +158,17 @@ class SqliteReceiptRepository:
             lines[receipt_id].append(description)
         return tuple(ReceiptMatch(summary, tuple(lines[summary.id])) for summary in found)
 
-    def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
-        self._update(receipt_id, {"status": status, "stage": stage})
+    def update_status(
+        self,
+        receipt_id: int,
+        status: ReceiptStatus,
+        stage: ProcessingStage,
+        *,
+        failure_reason: FailureReason | None = None,
+    ) -> None:
+        self._update(
+            receipt_id, {"status": status, "stage": stage, "failure_reason": failure_reason}
+        )
 
     def replace_contents(self, receipt: Receipt) -> Receipt:
         if receipt.id is None:

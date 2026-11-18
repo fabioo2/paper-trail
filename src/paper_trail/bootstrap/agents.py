@@ -7,7 +7,6 @@ import this module, so LangGraph, the MCP SDK and the Anthropic SDK load only fo
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -170,8 +169,7 @@ def _claude_reader(settings: Settings, clock: Clock, ledger_engine: Engine) -> _
     api = AnthropicReader(settings.claude)
     # A reservation older than a whole read could take (three attempts and their backoff) was
     # left by a dead process.
-    abandon_after = timedelta(seconds=settings.claude.timeout_s * 3 + 120)
-    ledger = SqliteSpendLedger(ledger_engine, clock=clock, abandon_after=abandon_after)
+    ledger = SqliteSpendLedger(ledger_engine)
     return _ClaudeReader(
         api, BudgetedReader(api, ledger, clock, settings.claude.monthly_budget_usd)
     )

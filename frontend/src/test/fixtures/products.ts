@@ -69,6 +69,7 @@ export function productPurchase(
     purchased_on: "2026-11-01",
     store_name: "COSTCO WHOLESALE #1234",
     quantity: "1",
+    unit: null,
     unit_price: cad(899),
     discount: cad(0),
     paid: cad(899),

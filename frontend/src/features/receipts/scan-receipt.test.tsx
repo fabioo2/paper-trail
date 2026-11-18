@@ -12,11 +12,13 @@ import {
 } from "vitest";
 
 import {
+  type FailureReason,
   RECEIPT_POLL_INTERVAL_MS,
   type ReceiptStatus,
 } from "@/features/receipts/api";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
+import { FAILURE_MESSAGES } from "@/features/receipts/failure-reasons";
 import {
   cad,
   receiptDetail,
@@ -88,6 +90,26 @@ function accepted(id = 7): Response {
     { id, status: "processing", stage: "queued" },
     { status: 202 },
   );
+}
+
+function failedDetail(reason: FailureReason): ReceiptDetailOut {
+  return receiptDetail({
+    status: "failed",
+    stage: "failed",
+    failure_reason: reason,
+  });
+}
+
+/** POST /api/receipts/{id}/retry answers with `respond`; returns the paths retried. */
+function serveRetry(respond: () => Response): string[] {
+  const retries: string[] = [];
+  server.use(
+    http.post("/api/receipts/:receiptId/retry", ({ request }) => {
+      retries.push(new URL(request.url).pathname);
+      return respond();
+    }),
+  );
+  return retries;
 }
 
 /** GET /api/receipts/{id} walks through `states`, repeating the last; returns the polled paths. */
@@ -331,14 +353,78 @@ describe("Scan page", () => {
     },
   );
 
-  it("Try again after a failed read goes back to the picker", async () => {
+  it.each<{ reason: FailureReason; button: RegExp }>([
+    { reason: "claude_unavailable", button: /scan another receipt/i },
+    { reason: "unreadable_photo", button: /retake the photo/i },
+  ])(
+    "after a $reason failure, $button goes back to the picker",
+    async ({ reason, button }) => {
+      serveUpload(accepted);
+      serveProgress(failedDetail(reason));
+
+      await pickAndSend(user);
+      await user.click(await screen.findByRole("button", { name: button }));
+
+      expect(await screen.findByLabelText(/take a photo/i)).toBeInTheDocument();
+    },
+  );
+
+  it.each(Object.entries(FAILURE_MESSAGES) as [FailureReason, string][])(
+    "a %s failure says why and offers Try again",
+    async (reason, message) => {
+      serveUpload(accepted);
+      serveProgress(failedDetail(reason));
+
+      await pickAndSend(user);
+
+      const card = (await heading()).closest("section");
+      if (!card) throw new Error("expected the status card");
+      expect(textOf(card)).toContain(`Couldn't read this receipt${message}`);
+      expect(
+        within(card).getByRole("button", { name: "Try again" }),
+      ).toBeEnabled();
+      expect(
+        within(card).queryByRole("button", { name: "Retake the photo" }) !==
+          null,
+      ).toBe(reason === "unreadable_photo");
+    },
+  );
+
+  it("Try again retries the failed receipt once and follows it again", async () => {
     serveUpload(accepted);
-    serveProgress(receiptDetail({ status: "failed", stage: "failed" }));
+    const polls = serveProgress(
+      failedDetail("budget_reached"),
+      processing,
+      receiptDetail(),
+    );
+    const retries = serveRetry(() => accepted());
 
     await pickAndSend(user);
-    await user.click(await screen.findByRole("button", { name: /try again/i }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await user.dblClick(retry);
 
-    expect(await screen.findByLabelText(/take a photo/i)).toBeInTheDocument();
+    expect(textOf(await heading())).toMatch(/reading your receipt/i);
+    await advance(RECEIPT_POLL_INTERVAL_MS * 2);
+    expect(textOf(await heading())).toMatch(/saved/i);
+    expect(retries).toEqual(["/api/receipts/7/retry"]);
+    expect(polls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a photo of a failed receipt sent again offers Try again", async () => {
+    serveUpload(() =>
+      HttpResponse.json(
+        { id: 7, status: "failed", stage: "failed" },
+        { status: 200 },
+      ),
+    );
+    serveProgress(failedDetail("stopped_unexpectedly"));
+
+    await pickAndSend(user);
+
+    expect(textOf(await heading())).toMatch(/couldn['’]t read/i);
+    expect(
+      await screen.findByRole("button", { name: "Try again" }),
+    ).toBeEnabled();
   });
 
   it("a photo sent before links to its existing receipt without polling", async () => {

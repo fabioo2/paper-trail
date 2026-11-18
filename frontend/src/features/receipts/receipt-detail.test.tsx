@@ -1,9 +1,11 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 
 import { formatFullDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
+import { FAILURE_MESSAGES } from "@/features/receipts/failure-reasons";
 import {
   cad,
   lineItem,
@@ -297,7 +299,157 @@ describe("Receipt detail page", () => {
       await within(main).findByRole("heading", { name: /not found/i }),
     ).toBeInTheDocument();
   });
+
+  it("shows neither a failure nor Try again for a receipt that did not fail", async () => {
+    serveDetail(receiptDetail({ status: "processing", stage: "reading" }));
+
+    renderApp("/receipts/7");
+    const main = await page();
+
+    expect(
+      within(main).queryByRole("button", { name: "Try again" }),
+    ).toBeNull();
+    expect(textOf(main)).not.toMatch(/couldn['’]t read/i);
+  });
+
+  it.each(Object.entries(FAILURE_MESSAGES))(
+    "a %s failure says why, with Try again",
+    async (reason, message) => {
+      serveDetail(
+        receiptDetail({
+          status: "failed",
+          stage: "failed",
+          failure_reason: reason as ReceiptDetailOut["failure_reason"],
+        }),
+      );
+
+      renderApp("/receipts/7");
+      const main = await page();
+
+      const failure = within(main)
+        .getByRole("heading", { level: 2, name: /couldn['’]t read/i })
+        .closest("section");
+      if (!failure) throw new Error("expected the failure section");
+      expect(textOf(failure)).toBe(
+        `Couldn't read this receipt${message}Try again`,
+      );
+    },
+  );
+
+  it("Try again tapped twice retries once and shows the receipt processing", async () => {
+    const requests = serveDetail(
+      receiptDetail({
+        status: "failed",
+        stage: "failed",
+        failure_reason: "unknown",
+      }),
+    );
+    const retries: string[] = [];
+    server.use(
+      http.post("/api/receipts/:receiptId/retry", ({ request }) => {
+        retries.push(new URL(request.url).pathname);
+        return HttpResponse.json(
+          { id: 7, status: "processing", stage: "queued" },
+          { status: 202 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/receipts/7");
+    const main = await page();
+    serveDetail(receiptDetail({ status: "processing", stage: "queued" }));
+
+    await user.dblClick(
+      within(main).getByRole("button", { name: "Try again" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        within(main).queryByRole("button", { name: "Try again" }),
+      ).toBeNull();
+    });
+    expect(textOf(main)).toMatch(/reading/i);
+    expect(retries).toEqual(["/api/receipts/7/retry"]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each<{ name: string; respond: () => Response; toast: RegExp }>([
+    {
+      name: "a 409",
+      respond: () => retryProblem(409, "Conflict"),
+      toast: /already being read again/i,
+    },
+    {
+      name: "a 500",
+      respond: () => retryProblem(500, "Internal Server Error"),
+      toast: /went wrong on the server/i,
+    },
+    {
+      name: "a network failure",
+      respond: () => HttpResponse.error(),
+      toast: /connection/i,
+    },
+  ])(
+    "$name on Try again is explained and the button works again",
+    async ({ respond, toast }) => {
+      serveDetail(
+        receiptDetail({
+          status: "failed",
+          stage: "failed",
+          failure_reason: "unknown",
+        }),
+      );
+      let retries = 0;
+      server.use(
+        http.post("/api/receipts/:receiptId/retry", () => {
+          retries += 1;
+          return respond();
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp("/receipts/7");
+      const main = await page();
+      const refetched = serveDetail(
+        receiptDetail({
+          status: "failed",
+          stage: "failed",
+          failure_reason: "unknown",
+        }),
+      );
+
+      await user.click(within(main).getByRole("button", { name: "Try again" }));
+
+      expect(await screen.findByText("Couldn't try again")).toBeInTheDocument();
+      expect(screen.getByText(toast)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(refetched.length).toBeGreaterThan(0);
+      });
+      const button = within(main).getByRole("button", { name: "Try again" });
+      await waitFor(() => {
+        expect(button).toBeEnabled();
+      });
+      await user.click(button);
+      await waitFor(() => {
+        expect(retries).toBe(2);
+      });
+    },
+  );
 });
+
+function retryProblem(status: number, title: string): Response {
+  const body: ProblemDetail = {
+    type: "about:blank",
+    title,
+    status,
+    detail: null,
+    instance: "/api/receipts/7/retry",
+    errors: null,
+  };
+  return HttpResponse.json(body, {
+    status,
+    headers: { "content-type": "application/problem+json" },
+  });
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

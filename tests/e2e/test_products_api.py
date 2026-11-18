@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from paper_trail.bootstrap import Container
-from paper_trail.domain.enums import FieldSource, MatchSource
+from paper_trail.domain.enums import FieldSource, MatchSource, Unit
 from tests.factories import PURCHASED_ON, STORE_NAME, discount_line, item_line, product
 from tests.storage import in_unit, seed_purchase
 from tests.support import require_id
@@ -94,7 +94,14 @@ def test_a_products_purchases_list_each_receipt_line_newest_first(
     receipt = seed_purchase(
         migrated_container.uow_factory,
         [
-            item_line(0, "KS ORG EGGS", 1699, product_id=product_id, match_source=MatchSource.NEW),
+            item_line(
+                0,
+                "KS ORG EGGS",
+                1699,
+                product_id=product_id,
+                match_source=MatchSource.NEW,
+                unit=Unit.EACH,
+            ),
             discount_line(1, "TPD", -400, 0),
         ],
     )
@@ -108,6 +115,7 @@ def test_a_products_purchases_list_each_receipt_line_newest_first(
             "purchased_on": PURCHASED_ON.isoformat(),
             "store_name": STORE_NAME,
             "quantity": "1",
+            "unit": "each",
             "unit_price": {"amount_cents": 1699, "currency": "CAD"},
             "discount": {"amount_cents": -400, "currency": "CAD"},
             "paid": {"amount_cents": 1299, "currency": "CAD"},

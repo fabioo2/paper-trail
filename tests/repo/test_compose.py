@@ -10,8 +10,11 @@ from typing import Any
 
 import pytest
 
+from paper_trail.config import WorkerSettings
+from paper_trail.interfaces.web.app import BUILT_IN_HOSTS
 from tests.repo.conftest import load_yaml, read_text
 
+MAX_CLAUDE_READ_S = 60  # a receipt read takes ~20-60 s
 RUNTIME_SERVICES = {"migrate", "web", "worker"}
 # One-off services of compose.yaml, started only on demand behind their own profile.
 ON_DEMAND_SERVICES = {"cli", "mcp"}  # agent core: `make process` / `make pt`; `make mcp-up`
@@ -270,12 +273,15 @@ def test_s0_ac_12_long_running_services_have_resource_limits(
     assert float(service["cpus"]) > 0
 
 
-def test_s0_ac_12_worker_stop_grace_exceeds_shutdown_grace(compose: dict[str, Any]) -> None:
-    """S0-AC-12 / S0-AC-25: compose waits longer than WORKER__SHUTDOWN_GRACE_S (8 s) + 1 s."""
+def test_h4_07_worker_stop_grace_exceeds_shutdown_grace(compose: dict[str, Any]) -> None:
+    """S0-AC-12 / S0-AC-25, hardening H4-07: the worker's shutdown grace covers one Claude read
+    (up to a minute) and compose waits longer than it, so the read can finish."""
     grace = _services(compose)["worker"]["stop_grace_period"]
+    shutdown_grace_s = WorkerSettings().shutdown_grace_s
 
     assert re.fullmatch(r"(\d+)s", grace)
-    assert int(grace[:-1]) > 9
+    assert shutdown_grace_s >= MAX_CLAUDE_READ_S
+    assert int(grace[:-1]) > shutdown_grace_s
 
 
 # --- S0-AC-37 --------------------------------------------------------------------------------
@@ -375,3 +381,13 @@ def test_s0_ac_34_gitleaks_scan_covers_history_tree_and_staged_changes() -> None
     assert "--exit-code 1" in script
     assert "detect" not in script
     assert "protect" not in script
+
+
+def test_h1_10_the_healthcheck_and_the_smoke_test_use_a_built_in_host() -> None:
+    """Hardening H1-10: neither depends on PAPER_TRAIL_WEB__ALLOWED_HOSTS being set."""
+    healthcheck = re.search(r"urlopen\('http://([^:/']+)", read_text("Dockerfile"))
+    smoke = re.search(r"SMOKE_BASE_URL:-http://([^:/}]+)", read_text("scripts/smoke.sh"))
+
+    assert healthcheck is not None
+    assert smoke is not None
+    assert {healthcheck.group(1), smoke.group(1)} <= set(BUILT_IN_HOSTS)

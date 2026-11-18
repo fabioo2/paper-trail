@@ -70,6 +70,7 @@ export function receiptDetail(
     tax: cad(52),
     payment_last4: "1111",
     has_image: false,
+    failure_reason: null,
     items: [
       lineItem(),
       lineItem({

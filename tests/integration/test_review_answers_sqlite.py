@@ -21,8 +21,9 @@ from datetime import timedelta
 
 import pytest
 
-from paper_trail.application.jobs import ProcessReceiptJobs
+from paper_trail.application.jobs import STOPPED_UNEXPECTEDLY, ProcessReceiptJobs
 from paper_trail.application.receipts import (
+    REVIEW_ANSWER_JOB_ATTEMPTS,
     AnswerReview,
     InconsistentDraftError,
     ListPendingReviews,
@@ -245,6 +246,27 @@ def test_a_worker_that_died_after_giving_the_answer_continues_the_run_without_gi
     receipt = parked.harness.receipt(parked.receipt_id)
     assert (receipt.store_name, receipt.total) == ("Costco", cad(1635))
     assert parked.jobs()[0].status is JobStatus.SUCCEEDED
+
+
+def test_h4_04_an_answer_whose_workers_keep_dying_fails_and_gives_its_review_back() -> None:
+    stop = StopOnce(WorkerKilledError())
+    parked = _park(stop)
+    parked.answer(parked.review_id, _corrected())
+    for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
+        stop.armed = True
+        with pytest.raises(WorkerKilledError):
+            parked.run_job()
+        parked.harness.clock.advance(LEASE + timedelta(seconds=1))
+
+    assert parked.run_job() is False
+
+    job = parked.jobs()[0]
+    assert (job.status, job.attempts, job.last_error) == (
+        JobStatus.FAILED,
+        REVIEW_ANSWER_JOB_ATTEMPTS,
+        STOPPED_UNEXPECTEDLY,
+    )
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
 
 
 def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked: Parked) -> None:

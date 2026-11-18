@@ -4,7 +4,8 @@ Two ``BudgetedReader`` over two engines on the same database stand for two proce
 admission is serialized and counts the calls still in flight (each reserved at its maximum
 cost), so when the spend is just under the cap only one of two overlapping calls starts: the
 month can overshoot the cap by at most one call. After the call its reservation becomes the
-real cost; a call that fails unbilled releases it.
+real cost; a call that fails unbilled releases it. A reservation its process never settled
+(the process died mid-call) keeps counting at its ceiling, however old (hardening H4-10).
 """
 
 import io
@@ -49,8 +50,8 @@ OPUS = "claude-opus-5-5"
 OPUS_READ_COST = Decimal("0.020")
 USAGE = ReadUsage(input_tokens=1500, output_tokens=700)
 WAIT_S = 10
-# CLAUDE__TIMEOUT_S (default 300) x 3 attempts (the SDK's 2 retries) + 120 s of backoff
-# margin (review R15, cold-review nit).
+# Longer than any call can take (CLAUDE__TIMEOUT_S x 3 attempts + backoff): a reservation this
+# old belongs to a process that died mid-call.
 ABANDONED_AFTER = timedelta(seconds=300 * 3 + 120)
 
 
@@ -95,8 +96,7 @@ def engines(database: Path) -> Iterator[tuple[Engine, Engine]]:
 
 
 def _ledger(engine: Engine) -> SqliteSpendLedger:
-    """The ledger at ``NOW``: whether a reservation is abandoned depends on its clock."""
-    return SqliteSpendLedger(engine, clock=FakeClock(NOW), abandon_after=ABANDONED_AFTER)
+    return SqliteSpendLedger(engine)
 
 
 def _budgeted(engine: Engine, inner: BlockingReader) -> BudgetedReader:
@@ -174,26 +174,24 @@ def test_r4_an_unbilled_failure_releases_its_reservation(
     assert (after.calls, _spent(second_engine)) == (1, Decimal("4.99") + OPUS_READ_COST)
 
 
-# --- R15: an abandoned reservation (its process died mid-call) stops counting -----------------
+# --- H4-10, H4-11: a reservation is charged at its ceiling until settled or released ---------
 
 
-def _reserve_at(engine: Engine, at: datetime, cost: str) -> None:
+def _reserve_at(engine: Engine, at: datetime, cost: str) -> int:
     reservation = _ledger(engine).reserve(
         at, OPUS, Decimal(cost), since=month_start(at), cap_usd=Decimal(1_000)
     )
     assert reservation is not None
+    return reservation
 
 
 @pytest.mark.parametrize(
-    ("age", "admitted"),
-    [
-        (ABANDONED_AFTER + timedelta(seconds=1), True),
-        (ABANDONED_AFTER - timedelta(seconds=1), False),
-    ],
+    "age",
+    [ABANDONED_AFTER + timedelta(seconds=1), ABANDONED_AFTER - timedelta(seconds=1)],
     ids=["abandoned", "still-in-flight"],
 )
-def test_r15_only_a_fresh_reservation_blocks_admission(
-    engines: tuple[Engine, Engine], age: timedelta, admitted: bool
+def test_h4_10_an_open_reservation_blocks_admission_however_old(
+    engines: tuple[Engine, Engine], age: timedelta
 ) -> None:
     first_engine, second_engine = engines
     _reserve_at(first_engine, NOW - age, "5.00")
@@ -201,25 +199,54 @@ def test_r15_only_a_fresh_reservation_blocks_admission(
     inner.release.set()
     reader = BudgetedReader(inner, _ledger(second_engine), FakeClock(NOW), CAP)
 
-    if admitted:
-        reader.read(_request(), ReceiptAnswer)
-    else:
-        with pytest.raises(BudgetReachedError):
-            reader.read(_request(), ReceiptAnswer)
-
-    assert inner.calls == (1 if admitted else 0)
-
-
-def test_r15_an_abandoned_reservation_is_not_counted_in_the_spend(
-    engines: tuple[Engine, Engine],
-) -> None:
-    first_engine, second_engine = engines
-    _seed(first_engine, "5.00")
-    _reserve_at(first_engine, NOW - ABANDONED_AFTER - timedelta(seconds=1), "3.00")
-    reader = BudgetedReader(BlockingReader(), _ledger(second_engine), FakeClock(NOW), CAP)
-
     with pytest.raises(BudgetReachedError, match=r"spent 5\.00 of 5\.00 USD"):
         reader.read(_request(), ReceiptAnswer)
+
+    assert inner.calls == 0
+
+
+def _open(engine: Engine, at: datetime) -> None:
+    _reserve_at(engine, at, "3.00")
+
+
+def _settled(engine: Engine, at: datetime) -> None:
+    reservation = _reserve_at(engine, at, "3.00")
+    _ledger(engine).settle(reservation, ClaudeCall(NOW, OPUS, 1500, 700, OPUS_READ_COST))
+
+
+def _released(engine: Engine, at: datetime) -> None:
+    _ledger(engine).release(_reserve_at(engine, at, "3.00"))
+
+
+@pytest.mark.parametrize(
+    ("leave", "at", "spent"),
+    [
+        (_open, NOW - ABANDONED_AFTER * 2, "3.00"),
+        (_open, NOW - timedelta(seconds=5), "3.00"),
+        (_settled, NOW - ABANDONED_AFTER * 2, str(OPUS_READ_COST)),
+        (_settled, NOW - timedelta(seconds=5), str(OPUS_READ_COST)),
+        (_released, NOW - ABANDONED_AFTER * 2, "0"),
+        (_open, datetime(2026, 10, 31, 23, tzinfo=UTC), "0"),
+    ],
+    ids=[
+        "abandoned-at-ceiling",
+        "in-flight-at-ceiling",
+        "settled-late-real-cost-once",
+        "settled-real-cost",
+        "released",
+        "abandoned-last-month",
+    ],
+)
+def test_h4_11_what_each_reservation_outcome_counts_this_month(
+    engines: tuple[Engine, Engine],
+    leave: Callable[[Engine, datetime], object],
+    at: datetime,
+    spent: str,
+) -> None:
+    first_engine, second_engine = engines
+    leave(first_engine, at)
+
+    assert _ledger(second_engine).spent_since(month_start(NOW)) == Decimal(spent)
 
 
 def test_settling_keeps_the_reservations_time(engines: tuple[Engine, Engine]) -> None:

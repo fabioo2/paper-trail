@@ -60,6 +60,17 @@ class ReceiptStatus(StrEnum):
     FAILED = auto()
 
 
+class FailureReason(StrEnum):
+    """Why a receipt is FAILED, in words a person can act on (no error text)."""
+
+    BUDGET_REACHED = auto()
+    CLAUDE_UNAVAILABLE = auto()
+    NO_API_KEY = auto()
+    UNREADABLE_PHOTO = auto()
+    STOPPED_UNEXPECTEDLY = auto()
+    UNKNOWN = auto()
+
+
 class ProcessingStage(StrEnum):
     """Where a receipt is in the pipeline; reported live from Stage 2 (SSE)."""
 

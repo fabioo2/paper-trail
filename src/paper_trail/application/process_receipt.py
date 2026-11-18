@@ -6,18 +6,26 @@ The receipt exists, PROCESSING, before the graph starts, so a run that a Claude 
 way (the API failed, refused, was cut off, or the monthly budget is reached) leaves the receipt
 FAILED with its checkpoint, to resume (``resume``). A stored photo can be read again on a new
 thread (``reprocess``). A photo uploaded through the API is stored and its receipt created the
-same way (``UploadReceipt``), and the worker runs the graph for it (``process_stored``).
+same way (``UploadReceipt``), and the worker runs the graph for it (``process_stored``); a person
+queues a FAILED one for the worker again (``RetryReceipt``). A FAILED receipt keeps why, as a
+``FailureReason`` (``failure_reason``), never the error's text.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import PurePosixPath
 
 import structlog
 
-from paper_trail.domain.enums import AgentRole, JobKind, ProcessingStage, ReceiptStatus
-from paper_trail.domain.errors import ConflictError, NotFoundError
+from paper_trail.domain.enums import (
+    AgentRole,
+    FailureReason,
+    JobKind,
+    ProcessingStage,
+    ReceiptStatus,
+)
+from paper_trail.domain.errors import ConflictError, NotFoundError, UnsupportedMediaError
 from paper_trail.domain.models import Receipt, require_id
 from paper_trail.domain.money import DEFAULT_CURRENCY
 from paper_trail.domain.rules.masking import mask_pans
@@ -30,14 +38,16 @@ from paper_trail.ports.agents import (
 )
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.images import ImageStore, StoredImage
-from paper_trail.ports.reader import ReaderError
+from paper_trail.ports.reader import BudgetReachedError, ReaderError, ReaderKeyError
 from paper_trail.ports.trace import Tracer
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
 log = structlog.get_logger(__name__)
 
-# The worker runs an uploaded receipt once; a failed run is resumed by hand (``process --resume``).
-UPLOAD_JOB_ATTEMPTS = 1
+# The worker runs an uploaded receipt once; a failed run is retried by a person (``RetryReceipt``,
+# ``process --resume``). The second attempt is only for a worker that died mid-run: the queue
+# takes its job back once, then fails it as stopped unexpectedly.
+UPLOAD_JOB_ATTEMPTS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +106,58 @@ class UploadReceipt:
             uow.commit()
         log.info("receipt.uploaded", receipt_id=receipt_id)
         return UploadOutcome(receipt=receipt, duplicate=False)
+
+
+class RetryReceipt:
+    """A person tries a FAILED receipt again: it is PROCESSING again (QUEUED) and one
+    ``process_receipt`` job is queued, in one transaction; the worker continues its thread
+    from its checkpoint or reads its stored photo again (``process_stored``). NotFoundError
+    for an unknown receipt; ConflictError, changing nothing, when it is not FAILED, a job for
+    it is waiting or running, or it has no stored photo to read."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self, receipt_id: int) -> Receipt:
+        with self._uow_factory() as uow:
+            receipt = uow.receipts.get(receipt_id)
+            if receipt is None:
+                msg = f"receipt {receipt_id} does not exist"
+                raise NotFoundError(msg)
+            if receipt.status is not ReceiptStatus.FAILED:
+                msg = f"receipt {receipt_id} is {receipt.status.value}, not failed"
+                raise ConflictError(msg)
+            if any(uow.jobs.has_active(kind, receipt_id) for kind in JobKind):
+                msg = f"receipt {receipt_id} is already being processed"
+                raise ConflictError(msg)
+            if receipt.image_path is None:
+                msg = f"receipt {receipt_id} has no stored photo to read again"
+                raise ConflictError(msg)
+            uow.jobs.enqueue(JobKind.PROCESS_RECEIPT, receipt_id, max_attempts=UPLOAD_JOB_ATTEMPTS)
+            uow.receipts.update_status(receipt_id, ReceiptStatus.PROCESSING, ProcessingStage.QUEUED)
+            uow.commit()
+        log.info("receipt.retried", receipt_id=receipt_id)
+        return replace(
+            receipt,
+            status=ReceiptStatus.PROCESSING,
+            stage=ProcessingStage.QUEUED,
+            failure_reason=None,
+        )
+
+
+def failure_reason(error: BaseException) -> FailureReason:
+    """Why a run that raised ``error`` failed, in words a person can act on."""
+    if isinstance(error, ProcessingStoppedError) and error.__cause__ is not None:
+        error = error.__cause__
+    if isinstance(error, BudgetReachedError):
+        return FailureReason.BUDGET_REACHED
+    if isinstance(error, ReaderKeyError):
+        return FailureReason.NO_API_KEY
+    if isinstance(error, ReaderError):
+        return FailureReason.CLAUDE_UNAVAILABLE
+    if isinstance(error, UnsupportedMediaError | OSError):
+        return FailureReason.UNREADABLE_PHOTO
+    return FailureReason.UNKNOWN
 
 
 def new_receipt(image: StoredImage, now: datetime) -> Receipt:
@@ -214,9 +276,13 @@ class ProcessReceiptFile:
             msg = f"receipt {receipt_id} has no stored photo to read"
             raise ConflictError(msg)
         try:
-            return self._run(receipt_id, lambda: self._runner.resume(receipt_id))
+            outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
         except NothingToResumeError:
             pass
+        else:
+            if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
+                self._completed(receipt_id)
+            return outcome
         return self._run(
             receipt_id,
             lambda: self._runner.start(
@@ -299,7 +365,9 @@ class ProcessReceiptFile:
         unsaved = restore is not None and self._unsaved(receipt_id)
         outcome = self._failed(receipt_id, error)
         if unsaved and restore is not None:
-            self._restore(receipt_id, *restore)
+            status, stage = restore
+            reason = failure_reason(error) if status is ReceiptStatus.FAILED else None
+            self._restore(receipt_id, status, stage, reason)
         return outcome
 
     def _unsaved(self, receipt_id: int) -> bool:
@@ -308,10 +376,16 @@ class ProcessReceiptFile:
             receipt = uow.receipts.get(receipt_id)
         return receipt is not None and receipt.stage is ProcessingStage.READING
 
-    def _restore(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
+    def _restore(
+        self,
+        receipt_id: int,
+        status: ReceiptStatus,
+        stage: ProcessingStage,
+        reason: FailureReason | None,
+    ) -> None:
         """The status and stage a receipt had before a run that failed before saving it."""
         with self._uow_factory() as uow:
-            uow.receipts.update_status(receipt_id, status, stage)
+            uow.receipts.update_status(receipt_id, status, stage, failure_reason=reason)
             uow.commit()
 
     def _find(self, sha256: str) -> Receipt | None:
@@ -328,10 +402,14 @@ class ProcessReceiptFile:
 
     def _completed(self, receipt_id: int) -> None:
         """A run that failed after its matches were saved (describing its new products) marked
-        the receipt FAILED; finishing that run completes the receipt again."""
+        the receipt FAILED (and a retry PROCESSING); finishing that run completes the receipt
+        again."""
         with self._uow_factory() as uow:
             receipt = uow.receipts.get(receipt_id)
-            if receipt is not None and receipt.status is ReceiptStatus.FAILED:
+            if receipt is not None and receipt.status in {
+                ReceiptStatus.FAILED,
+                ReceiptStatus.PROCESSING,
+            }:
                 uow.receipts.update_status(
                     receipt_id, ReceiptStatus.COMPLETED, ProcessingStage.DONE
                 )
@@ -341,7 +419,12 @@ class ProcessReceiptFile:
         # The message may quote what a model read: card numbers masked before it is kept.
         failure = mask_pans(str(error)).text or type(error).__name__
         with self._uow_factory() as uow:
-            uow.receipts.update_status(receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED)
+            uow.receipts.update_status(
+                receipt_id,
+                ReceiptStatus.FAILED,
+                ProcessingStage.FAILED,
+                failure_reason=failure_reason(error),
+            )
             uow.commit()
         with self._tracer.bind(receipt_id):
             self._tracer.emit(

@@ -39,6 +39,10 @@ class ReaderUnavailableError(ReaderError):
     The message names ``ANTHROPIC_API_KEY`` when the key is the problem, never the key."""
 
 
+class ReaderKeyError(ReaderUnavailableError):
+    """There is no key, or the API refused it."""
+
+
 class ReaderRefusedError(ReaderError):
     """The model declined to answer (stop reason ``refusal``)."""
 

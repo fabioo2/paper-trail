@@ -75,8 +75,9 @@ services:
       start_interval: 2s
     mem_limit: 1g
     cpus: 2.0
-    # Longer than PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S (8 s) + 1 s, so a step can finish.
-    stop_grace_period: 15s
+    # Longer than PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S (90 s, one Claude read), so a step can
+    # finish on a redeploy.
+    stop_grace_period: 100s
 
   # On demand only (`make process`, `make pt`): the agent CLI, with the receipts folder
   # read-only. The folder's path may contain spaces, so it is set only through the variable.

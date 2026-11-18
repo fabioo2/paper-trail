@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, SearchX, TriangleAlert } from "lucide-react";
+import { ArrowLeft, CircleX, SearchX, TriangleAlert } from "lucide-react";
 
 import { ApiError } from "@/api/client";
 import { EmptyState } from "@/components/empty-state";
@@ -9,6 +9,8 @@ import { CategoryDot } from "@/features/products/category-dot";
 import { type ReceiptDetailOut, useReceipt } from "@/features/receipts/api";
 import { formatFullDate } from "@/features/receipts/dates";
 import { formatMoney, type MoneyOut } from "@/features/receipts/money";
+import { failureMessage } from "@/features/receipts/failure-reasons";
+import { RetryButton } from "@/features/receipts/receipt-failure";
 import {
   type ReceiptRow,
   receiptRows,
@@ -80,6 +82,27 @@ function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
           · {lines} {lines === 1 ? "line" : "lines"}
         </p>
       </header>
+
+      {receipt.status === "failed" ? (
+        <section
+          aria-labelledby="failure-heading"
+          className="flex flex-col gap-3 rounded-xl border border-destructive bg-destructive/10 p-4"
+        >
+          <div>
+            <h2
+              id="failure-heading"
+              className="flex items-center gap-2 font-semibold"
+            >
+              <CircleX aria-hidden="true" className="size-4" />
+              Couldn&apos;t read this receipt
+            </h2>
+            <p className="mt-1 text-sm">
+              {failureMessage(receipt.failure_reason)}
+            </p>
+          </div>
+          <RetryButton receiptId={receipt.id} />
+        </section>
+      ) : null}
 
       <div className="flex gap-3">
         <Tile label="Total" value={money(receipt.total)} />

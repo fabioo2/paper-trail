@@ -55,6 +55,7 @@ def receipt_values(receipt: Receipt) -> Values:
         "created_at": receipt.created_at,
         "updated_at": receipt.updated_at,
         "image_sha256": receipt.image_sha256,
+        "failure_reason": receipt.failure_reason,
     }
 
 
@@ -78,6 +79,7 @@ def receipt_from_row(row: RowMapping, items: Sequence[RowMapping]) -> Receipt:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         image_sha256=row["image_sha256"],
+        failure_reason=row["failure_reason"],
     )
 
 
@@ -121,6 +123,7 @@ def line_item_values(item: LineItem, receipt_id: int) -> Values:
         "category": item.category,
         "match_source": item.match_source,
         "applies_to_position": item.applies_to_position,
+        "unit": item.unit,
     }
 
 
@@ -138,6 +141,7 @@ def line_item_from_row(row: RowMapping, currency: str) -> LineItem:
         category=row["category"],
         match_source=row["match_source"],
         applies_to_position=row["applies_to_position"],
+        unit=row["unit"],
     )
 
 

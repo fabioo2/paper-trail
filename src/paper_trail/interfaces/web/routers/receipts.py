@@ -1,5 +1,5 @@
 """Recorded receipts: the list (newest purchase first, keyset-paged), one receipt in full, its
-photo, and the upload of a photo for the worker to process."""
+photo, the upload of a photo for the worker to process, and trying a failed one again."""
 
 from http import HTTPStatus
 from typing import Annotated
@@ -66,6 +66,20 @@ def upload_receipt(
     if upload.duplicate:
         response.status_code = HTTPStatus.OK
     return ReceiptUploadOut.from_domain(upload.receipt)
+
+
+@router.post(
+    "/{receipt_id}/retry",
+    operation_id="retryReceipt",
+    summary="Try a failed receipt again",
+    status_code=HTTPStatus.ACCEPTED,
+    responses=problem_responses(HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT),
+)
+def retry_receipt(container: ContainerDep, receipt_id: int) -> ReceiptUploadOut:
+    """Queue a FAILED receipt for the worker again: it continues from where the run stopped, or
+    reads the stored photo again; poll GET /api/receipts/{id} for its status. A receipt that is
+    not FAILED, already queued, or has no stored photo is a 409 problem."""
+    return ReceiptUploadOut.from_domain(container.retry_receipt(receipt_id))
 
 
 @router.get(

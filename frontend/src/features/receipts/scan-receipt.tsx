@@ -26,11 +26,14 @@ import {
   isFinalStatus,
   type ReceiptDetailOut,
   receiptKeys,
+  type ReceiptUploadOut,
   useReceiptProgress,
   useUploadReceipt,
 } from "@/features/receipts/api";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
+import { failureMessage } from "@/features/receipts/failure-reasons";
+import { RetryButton } from "@/features/receipts/receipt-failure";
 import { cn } from "@/lib/utils";
 
 const READING_TIMEOUT_MS = 3 * 60_000;
@@ -79,10 +82,14 @@ export function ScanReceipt() {
       return (
         <SendPhoto
           photo={step.photo}
-          onSent={(receiptId, duplicate) => {
+          onSent={(receipt, duplicate) => {
+            // A duplicate of a receipt that failed is followed like a new one, to retry it.
             setStep({
-              kind: duplicate ? "duplicate" : "tracking",
-              receiptId,
+              kind:
+                duplicate && receipt.status !== "failed"
+                  ? "duplicate"
+                  : "tracking",
+              receiptId: receipt.id,
             });
           }}
           onDiscard={startOver}
@@ -170,7 +177,7 @@ function PhotoInput({
 
 interface SendPhotoProps {
   photo: Photo;
-  onSent: (receiptId: number, duplicate: boolean) => void;
+  onSent: (receipt: ReceiptUploadOut, duplicate: boolean) => void;
   onDiscard: () => void;
 }
 
@@ -185,7 +192,7 @@ function SendPhoto({ photo, onSent, onDiscard }: SendPhotoProps) {
     upload.mutate(photo.file, {
       onSuccess: ({ receipt, duplicate }) => {
         toast.dismiss(UPLOAD_ERROR_TOAST);
-        onSent(receipt.id, duplicate);
+        onSent(receipt, duplicate);
       },
       onError: (error) => {
         const { title, description } = uploadErrorMessage(error);
@@ -367,19 +374,28 @@ function ReceiptProgress({
           <ScanAnother onClick={onStartOver} />
         </StatusCard>
       );
-    default:
+    default: {
+      const retake = receipt.failure_reason === "unreadable_photo";
       return (
         <StatusCard
           icon={CircleX}
           iconClassName="text-destructive"
           title="Couldn't read this receipt"
-          description="Retake the photo with the whole receipt flat, in focus and well lit."
+          description={failureMessage(receipt.failure_reason)}
         >
-          <Button size="lg" className="h-12 w-full" onClick={onStartOver}>
-            Try again
-          </Button>
+          {retake ? (
+            <Button size="lg" className="h-12 w-full" onClick={onStartOver}>
+              Retake the photo
+            </Button>
+          ) : null}
+          <RetryButton
+            receiptId={receipt.id}
+            variant={retake ? "outline" : "default"}
+          />
+          {retake ? null : <ScanAnother onClick={onStartOver} />}
         </StatusCard>
       );
+    }
   }
 }
 

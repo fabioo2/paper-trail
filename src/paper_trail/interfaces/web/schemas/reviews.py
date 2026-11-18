@@ -20,7 +20,7 @@ from paper_trail.domain.enums import (
 from paper_trail.domain.models import LineItem, Receipt, ReceiptDraft, ReviewItem, require_id
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import IssueCode
-from paper_trail.interfaces.web.schemas.receipts import MoneyOut
+from paper_trail.interfaces.web.schemas.receipts import LineUnit, MoneyOut, line_unit
 
 
 class ReviewIssueOut(BaseModel):
@@ -45,6 +45,7 @@ class ReviewLineBody(BaseModel):
     line_total_cents: StrictInt
     category: Category | None
     applies_to: StrictInt | None
+    unit: LineUnit | None = None  # kept from the reading; None: unknown
 
     @classmethod
     def from_line(cls, line: LineItem) -> Self:
@@ -57,6 +58,7 @@ class ReviewLineBody(BaseModel):
             line_total_cents=line.line_total.amount_cents,
             category=line.category,
             applies_to=line.applies_to_position,
+            unit=line_unit(line.unit),
         )
 
     def to_line(self, position: int, currency: str) -> LineItem:
@@ -70,6 +72,7 @@ class ReviewLineBody(BaseModel):
             line_total=Money(self.line_total_cents, currency),
             category=self.category,
             applies_to_position=self.applies_to,
+            unit=self.unit,
         )
 
 

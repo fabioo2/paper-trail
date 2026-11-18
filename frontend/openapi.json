@@ -169,6 +169,19 @@
         "title": "ComponentOut",
         "type": "object"
       },
+      "FailureReason": {
+        "description": "Why a receipt is FAILED, in words a person can act on (no error text).",
+        "enum": [
+          "budget_reached",
+          "claude_unavailable",
+          "no_api_key",
+          "unreadable_photo",
+          "stopped_unexpectedly",
+          "unknown"
+        ],
+        "title": "FailureReason",
+        "type": "string"
+      },
       "FieldError": {
         "properties": {
           "loc": {
@@ -443,6 +456,14 @@
           "fee"
         ],
         "title": "LineKind",
+        "type": "string"
+      },
+      "LineUnit": {
+        "enum": [
+          "each",
+          "kg",
+          "lb"
+        ],
         "type": "string"
       },
       "MatchSource": {
@@ -772,7 +793,7 @@
         "type": "object"
       },
       "ProductPurchaseOut": {
-        "description": "One purchase of a product: ``unit_price`` is the regular price of one unit,\n``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it.",
+        "description": "One purchase of a product: ``unit_price`` is the regular price of one ``unit`` (null:\nunknown, compared as each), ``discount`` (<= 0) the line's linked discount and ``paid`` the\nline total after it.",
         "properties": {
           "discount": {
             "$ref": "#/components/schemas/MoneyOut"
@@ -804,6 +825,16 @@
             "title": "Store Name",
             "type": "string"
           },
+          "unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineUnit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "unit_price": {
             "$ref": "#/components/schemas/MoneyOut"
           }
@@ -813,6 +844,7 @@
           "purchased_on",
           "store_name",
           "quantity",
+          "unit",
           "unit_price",
           "discount",
           "paid"
@@ -1084,6 +1116,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "has_image": {
             "title": "Has Image",
             "type": "boolean"
@@ -1184,6 +1226,7 @@
           "tax",
           "payment_last4",
           "has_image",
+          "failure_reason",
           "items",
           "arithmetic"
         ],
@@ -1599,6 +1642,16 @@
           "raw_text": {
             "title": "Raw Text",
             "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineUnit"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "unit_price_cents": {
             "anyOf": [
@@ -2659,6 +2712,79 @@
           }
         },
         "summary": "Get a receipt's photo",
+        "tags": [
+          "receipts"
+        ]
+      }
+    },
+    "/api/receipts/{receipt_id}/retry": {
+      "post": {
+        "description": "Queue a FAILED receipt for the worker again: it continues from where the run stopped, or\nreads the stored photo again; poll GET /api/receipts/{id} for its status. A receipt that is\nnot FAILED, already queued, or has no stored photo is a 409 problem.",
+        "operationId": "retryReceipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "receipt_id",
+            "required": true,
+            "schema": {
+              "title": "Receipt Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptUploadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Try a failed receipt again",
         "tags": [
           "receipts"
         ]

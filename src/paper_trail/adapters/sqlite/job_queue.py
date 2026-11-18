@@ -8,13 +8,13 @@ can ever take the same job.
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 
-from sqlalchemy import Connection, and_, func, insert, or_, select, update
+from sqlalchemy import ColumnElement, Connection, and_, case, func, insert, or_, select, update
 
 from paper_trail.adapters.sqlite.mappers import job_from_row
 from paper_trail.adapters.sqlite.schema import jobs
 from paper_trail.domain.enums import JobKind, JobStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
-from paper_trail.domain.models import Job, JsonValue
+from paper_trail.domain.models import Job, JsonValue, require_id
 from paper_trail.ports.clock import Clock
 
 
@@ -62,7 +62,7 @@ class SqliteJobQueue:
             .where(
                 or_(
                     and_(jobs.c.status == JobStatus.PENDING, jobs.c.available_at <= now),
-                    and_(jobs.c.status == JobStatus.RUNNING, jobs.c.lease_expires_at < now),
+                    and_(_abandoned(now), jobs.c.attempts + 1 < jobs.c.max_attempts),
                 )
             )
             .order_by(jobs.c.available_at, jobs.c.id)
@@ -75,6 +75,10 @@ class SqliteJobQueue:
                 .where(jobs.c.id == next_job)
                 .values(
                     status=JobStatus.RUNNING,
+                    attempts=case(
+                        (jobs.c.status == JobStatus.RUNNING, jobs.c.attempts + 1),
+                        else_=jobs.c.attempts,
+                    ),
                     locked_by=worker_id,
                     lease_expires_at=now + lease,
                     updated_at=now,
@@ -85,6 +89,27 @@ class SqliteJobQueue:
             .one_or_none()
         )
         return None if row is None else job_from_row(row)
+
+    def fail_abandoned(self, error: str) -> list[Job]:
+        now = self._clock.now()
+        rows = (
+            self._connection.execute(
+                update(jobs)
+                .where(_abandoned(now), jobs.c.attempts + 1 >= jobs.c.max_attempts)
+                .values(
+                    status=JobStatus.FAILED,
+                    attempts=jobs.c.attempts + 1,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    last_error=error,
+                    updated_at=now,
+                )
+                .returning(jobs)
+            )
+            .mappings()
+            .all()
+        )
+        return sorted((job_from_row(row) for row in rows), key=lambda job: require_id(job.id))
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:
         self._owned(job_id, worker_id)
@@ -169,3 +194,8 @@ class SqliteJobQueue:
             .one()
         )
         return job_from_row(row)
+
+
+def _abandoned(now: datetime) -> ColumnElement[bool]:
+    """A RUNNING job whose worker's lease ran out: that worker died (or lost the job)."""
+    return and_(jobs.c.status == JobStatus.RUNNING, jobs.c.lease_expires_at < now)

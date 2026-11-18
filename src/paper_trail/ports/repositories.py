@@ -8,7 +8,13 @@ from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Protocol
 
-from paper_trail.domain.enums import CodeScheme, CorrectionKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.enums import (
+    CodeScheme,
+    CorrectionKind,
+    FailureReason,
+    ProcessingStage,
+    ReceiptStatus,
+)
 from paper_trail.domain.models import (
     Correction,
     ItemLink,
@@ -63,8 +69,16 @@ class ReceiptRepository(Protocol):
         the descriptions of its matching ITEM lines by position."""
         ...
 
-    def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
-        """Set status and stage and stamp updated_at. NotFoundError for an unknown id."""
+    def update_status(
+        self,
+        receipt_id: int,
+        status: ReceiptStatus,
+        stage: ProcessingStage,
+        *,
+        failure_reason: FailureReason | None = None,
+    ) -> None:
+        """Set status, stage and ``failure_reason`` (why a FAILED receipt failed; None
+        otherwise) and stamp updated_at. NotFoundError for an unknown id."""
         ...
 
     def replace_contents(self, receipt: Receipt) -> Receipt:

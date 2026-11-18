@@ -244,6 +244,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/receipts/{receipt_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Try a failed receipt again
+         * @description Queue a FAILED receipt for the worker again: it continues from where the run stopped, or
+         *     reads the stored photo again; poll GET /api/receipts/{id} for its status. A receipt that is
+         *     not FAILED, already queued, or has no stored photo is a 409 problem.
+         */
+        post: operations["retryReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reviews": {
         parameters: {
             query?: never;
@@ -402,6 +424,12 @@ export interface components {
             name: string;
             status: components["schemas"]["HealthStatus"];
         };
+        /**
+         * FailureReason
+         * @description Why a receipt is FAILED, in words a person can act on (no error text).
+         * @enum {string}
+         */
+        FailureReason: "budget_reached" | "claude_unavailable" | "no_api_key" | "unreadable_photo" | "stopped_unexpectedly" | "unknown";
         /** FieldError */
         FieldError: {
             /** Loc */
@@ -484,6 +512,8 @@ export interface components {
          * @enum {string}
          */
         LineKind: "item" | "discount" | "deposit" | "fee";
+        /** @enum {string} */
+        LineUnit: "each" | "kg" | "lb";
         /**
          * MatchSource
          * @description How a line was linked to its product, in matching order (PLAN 6).
@@ -599,8 +629,9 @@ export interface components {
         };
         /**
          * ProductPurchaseOut
-         * @description One purchase of a product: ``unit_price`` is the regular price of one unit,
-         *     ``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it.
+         * @description One purchase of a product: ``unit_price`` is the regular price of one ``unit`` (null:
+         *     unknown, compared as each), ``discount`` (<= 0) the line's linked discount and ``paid`` the
+         *     line total after it.
          */
         ProductPurchaseOut: {
             discount: components["schemas"]["MoneyOut"];
@@ -613,6 +644,7 @@ export interface components {
             receipt_id: number;
             /** Store Name */
             store_name: string;
+            unit: components["schemas"]["LineUnit"] | null;
             unit_price: components["schemas"]["MoneyOut"];
         };
         /**
@@ -702,6 +734,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            failure_reason: components["schemas"]["FailureReason"] | null;
             /** Has Image */
             has_image: boolean;
             /** Id */
@@ -873,6 +906,7 @@ export interface components {
             quantity: string;
             /** Raw Text */
             raw_text: string;
+            unit?: components["schemas"]["LineUnit"] | null;
             /** Unit Price Cents */
             unit_price_cents: number | null;
         };
@@ -1550,6 +1584,64 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    retryReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                receipt_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptUploadOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

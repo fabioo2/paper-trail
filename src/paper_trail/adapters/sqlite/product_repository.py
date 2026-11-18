@@ -3,7 +3,19 @@
 from collections.abc import Collection
 from dataclasses import replace
 
-from sqlalchemy import Connection, RowMapping, func, insert, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Connection,
+    Label,
+    RowMapping,
+    Subquery,
+    and_,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
 
 from paper_trail.adapters.sqlite.mappers import (
     alias_from_row,
@@ -63,15 +75,14 @@ class SqliteProductRepository:
         return tuple(product_from_row(row) for row in rows)
 
     def summaries(self) -> tuple[ProductSummary, ...]:
+        linked = _linked_discounts()
         lines = (
             select(
                 line_items.c.product_id,
                 receipts.c.purchased_on,
                 receipts.c.store_name,
                 receipts.c.currency,
-                func.coalesce(price_observations.c.paid_cents, line_items.c.line_total_cents).label(
-                    "paid_cents"
-                ),
+                _paid(linked),
                 func.count().over(partition_by=line_items.c.product_id).label("times_bought"),
                 func.row_number()
                 .over(partition_by=line_items.c.product_id, order_by=_NEWEST_FIRST)
@@ -79,6 +90,7 @@ class SqliteProductRepository:
             )
             .join(receipts, receipts.c.id == line_items.c.receipt_id)
             .outerjoin(price_observations, price_observations.c.line_item_id == line_items.c.id)
+            .outerjoin(linked, _linked_to_line(linked))
             .where(line_items.c.kind == LineKind.ITEM, line_items.c.product_id.is_not(None))
             .subquery()
         )
@@ -123,6 +135,7 @@ class SqliteProductRepository:
         return count
 
     def purchases(self, product_id: int) -> tuple[ProductPurchase, ...]:
+        linked = _linked_discounts()
         rows = self._connection.execute(
             select(
                 receipts.c.id.label("receipt_id"),
@@ -130,17 +143,19 @@ class SqliteProductRepository:
                 receipts.c.store_name,
                 receipts.c.currency,
                 line_items.c.quantity,
+                line_items.c.unit,
                 line_items.c.line_total_cents,
                 func.coalesce(
                     price_observations.c.unit_price_cents, line_items.c.unit_price_cents
                 ).label("unit_price_cents"),
-                func.coalesce(price_observations.c.discount_cents, 0).label("discount_cents"),
-                func.coalesce(price_observations.c.paid_cents, line_items.c.line_total_cents).label(
-                    "paid_cents"
-                ),
+                func.coalesce(
+                    price_observations.c.discount_cents, linked.c.discount_cents, 0
+                ).label("discount_cents"),
+                _paid(linked),
             )
             .join(receipts, receipts.c.id == line_items.c.receipt_id)
             .outerjoin(price_observations, price_observations.c.line_item_id == line_items.c.id)
+            .outerjoin(linked, _linked_to_line(linked))
             .where(line_items.c.kind == LineKind.ITEM, line_items.c.product_id == product_id)
             .order_by(*_NEWEST_FIRST)
         ).mappings()
@@ -226,6 +241,38 @@ _NEWEST_FIRST = (
 )
 
 
+def _linked_discounts() -> Subquery:
+    """Per receipt and item position, the total of the DISCOUNT lines linked to that item: what
+    a line without a price observation (an undated receipt) was discounted."""
+    return (
+        select(
+            line_items.c.receipt_id,
+            line_items.c.applies_to_position,
+            func.sum(line_items.c.line_total_cents).label("discount_cents"),
+        )
+        .where(
+            line_items.c.kind == LineKind.DISCOUNT, line_items.c.applies_to_position.is_not(None)
+        )
+        .group_by(line_items.c.receipt_id, line_items.c.applies_to_position)
+        .subquery()
+    )
+
+
+def _linked_to_line(linked: Subquery) -> ColumnElement[bool]:
+    return and_(
+        linked.c.receipt_id == line_items.c.receipt_id,
+        linked.c.applies_to_position == line_items.c.position,
+    )
+
+
+def _paid(linked: Subquery) -> Label[int]:
+    """The line's price observation's paid price, else its line total with its linked discount."""
+    return func.coalesce(
+        price_observations.c.paid_cents,
+        line_items.c.line_total_cents + func.coalesce(linked.c.discount_cents, 0),
+    ).label("paid_cents")
+
+
 def _purchase_from_row(row: RowMapping) -> ProductPurchase:
     currency: str = row["currency"]
     line_total = Money(row["line_total_cents"], currency)
@@ -239,6 +286,7 @@ def _purchase_from_row(row: RowMapping) -> ProductPurchase:
         else Money(row["unit_price_cents"], currency),
         discount=Money(row["discount_cents"], currency),
         paid=Money(row["paid_cents"], currency),
+        unit=row["unit"],
     )
 
 

@@ -138,6 +138,7 @@ def reading_draft(
                 unit_price=_unit_price(item),
                 line_total=item.regular_price,
                 category=department_category(store_key, item.department),
+                unit=item.unit,
             )
         )
         if item.discount.amount_cents > 0:
