@@ -8,16 +8,10 @@ reads it again when it does not. It is a FastAPI + React app that runs in Docker
 server; the database and your photos stay on that server, and each photo is sent to Anthropic
 to be read (see [Data and privacy](#data-and-privacy)).
 
-> Status: Claude extraction (claude-extraction plan, PR 1). Receipts can be imported from JSON,
-> or read from photos by the agents from the command line (Claude reads each item with its
-> discount and price paid, code checks the arithmetic, one retry on the retry model with the
-> failures listed, then review by a person), and browsed in the Receipts tab. Every agent calls
-> its tools through a per-role allowlist, in-process or over MCP. Each line is matched to a
-> product by its printed code, a person's correction or an exact alias, new products are
-> described from the PLU table, the open product databases for a barcode, or Claude's guess
-> (marked unconfirmed until a person confirms it), and a run can be paused and resumed from
-> its checkpoint. The upload flow and the web pages for it arrive in the following stages (see
-> [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/plans/agent-core.md`](docs/plans/agent-core.md)).
+The phone web app is the main way in: scan a receipt, fix the ones that need a person, browse
+receipts and products, and follow each product's price across stores. A CLI and an MCP server
+reach the same agents and tools for batch runs and experiments. What is planned next is in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Prerequisites
 
@@ -39,7 +33,8 @@ cp .env.example .env
 make build up
 ```
 
-Open `http://<server LAN address>:8420` on your phone (over the LAN, or WireGuard when away).
+Open `http://<server LAN address>:8420` on your phone (over the LAN, or WireGuard when away;
+see [Using the web app](#using-the-web-app)).
 `make ps` shows `web` and `worker` as `healthy` once the stack is up. Nothing listens on
 `0.0.0.0`: with the default `PAPER_TRAIL_BIND_ADDR=127.0.0.1` the app is reachable only from the
 server itself at `http://127.0.0.1:8420`.
@@ -50,7 +45,8 @@ The dev tooling containers (`make test`, `make shell`) mount the repository at `
 app's settings read `/app/.env` there too, so the key is readable inside them; the tests never
 call the API (they use fakes). Without a key the app starts and everything that needs no model
 works (browsing, imports, the catalog, prices, reviews); a receipt sent to the agents fails with
-a message naming `ANTHROPIC_API_KEY`, and can be resumed once the key is set.
+a message naming `ANTHROPIC_API_KEY`, and can be tried again (Try again on the phone) once the
+key is set.
 
 Claude calls cost money: about $0.001 per receipt on the extract model and about $0.04 for a
 retry on the retry model. `PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD` (default 5.00) caps the
@@ -67,35 +63,63 @@ Every attempt's tokens and cost are recorded in the main database (`claude_calls
 main database must therefore be migrated before any run (`make migrate`; a named run exits 1
 otherwise and never migrates it itself).
 
-### Upgrading from the local-model version
+## Using the web app
 
-Earlier versions read receipts on your own hardware, with OCR and local models. To upgrade, in
-this order:
+Open the app in your phone's browser; you can add it to the home screen as a shortcut. (Installing
+it as a full-screen app needs HTTPS, which this LAN setup doesn't provide.)
+The tab bar is Home · Receipts · **Scan** (the centre button) · Products · Review, with a search
+box in the header for products and receipts.
 
-1. **Resolve open reviews and failed runs before upgrading**, with the old version still
-   running: `review list` must be empty and no receipt may be `processing` or `failed`. A run
-   saved by the old version cannot be resumed by the new one (`process --resume` refuses it);
-   after the upgrade its only ways out are answering its review with a corrected file
-   (`review resolve ID --file F`) or reading the photo again (`process PHOTO --reprocess`).
-2. **Back up the database** (`/data/paper_trail.db`): migration 0007 drops the product vectors,
-   which cannot be recovered, and turns any receipt still `waiting_for_gpu` into `failed`.
-3. `make build migrate`, then `make up`.
+1. **Scan.** Take a photo of the receipt, or pick one (JPEG, PNG, WebP or HEIC), and send it. The
+   same photo twice opens the receipt it already made.
+2. **Reading.** Claude reads it in the background, usually in about 20 seconds; you can keep
+   using the app. Home shows a "Reading your receipt…" card until it is done.
+3. **Review.** A receipt whose numbers do not add up, or whose date is missing or implausible,
+   waits in the Review tab (the badge counts them): the photo beside the reading, with the
+   problems listed. Fix the fields and save, accept the reading as it is, or keep a reading that
+   does not add up by giving a reason. A receipt that adds up skips this step.
+4. **Receipts.** Listed by purchase date in month groups, with each month's total and number of
+   trips. A receipt shows each item once, with its discount folded in ("saved $X") and repeated
+   items as ×N; tap an item to open its product.
+5. **Products and prices.** Each product appears once, with a sparkline of its price per unit,
+   how the newest price compares with the average of earlier purchases (↓8%; within 2% is
+   "steady"; "first time" when there is nothing to compare) and the price per L, kg or 100 g when its
+   size is known. Chips filter by category, store or "To check". A product's page has a price
+   chart with one line per store (1M, 6M, All), the lowest, average and last price per store,
+   the cheapest store, and every purchase underneath, each linking to its receipt.
+6. **Products to check.** Details Claude guessed for a new product are marked AI until you
+   confirm them. Home ("Needs you") and the Review tab link to a queue that shows one product at
+   a time: ✓ or ✕ each guessed field, Skip, or "All correct, next". If a field you confirm
+   changed while you were looking, nothing is saved and you see the new values (rejecting or
+   editing a field saves without that check).
+7. **Failed receipts.** A receipt that could not be read says why (the monthly budget is used
+   up, Claude was unavailable, no API key, an unreadable photo, or the app stopped while reading
+   it) and has a **Try again** button, which continues from where it stopped or reads the photo
+   again.
 
-These variables are no longer read and can be removed from `.env` (they are ignored if left):
-`PAPER_TRAIL_OCR__*`, `PAPER_TRAIL_OLLAMA__*`, `PAPER_TRAIL_MATCHING__*`,
-`PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`, `PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`,
-`PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW`, `PAPER_TRAIL_GRAPH__MIN_CONFIDENCE`,
-`PAPER_TRAIL_PROMPTS__VISION_VERSION`, `PAPER_TRAIL_PROMPTS__MATCHING_VERSION`,
-`PAPER_TRAIL_PROMPTS__ENRICHMENT_VERSION`,
-`PAPER_TRAIL_PROMPTS__EXAMPLES`. Remove `PAPER_TRAIL_PROMPTS__EXTRACTION_VERSION` too if it is
-set (for example to `v2`): only `v3`, the default, exists now, and any other value stops
-`process` with exit 2. The separate model host and its compose stack are no longer needed.
+### The web API
 
-Migration 0008 (product lookups) adds the `product_lookups` table and turns the old `off_llm`
-field source into `llm`: a product named that way is no longer confirmed and shows in
-`catalog todo`. Back up first; its downgrade turns `llm` back into `off_llm` and `upc` into
-`off`. Then `catalog enrich` (a dry run) shows what lookups and guesses would fill for the
-products already stored, and `catalog enrich --apply` does it.
+The app talks to a JSON API under `/api`; the OpenAPI document is at `/api/openapi.json`, and
+the TypeScript client is generated from it (ADR-0007). Writes from a browser must come from the
+app's own origin (see [Data and privacy](#data-and-privacy)); curl and scripts send no `Origin`
+and are served.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/receipts` | Upload a photo (multipart field `file`): `202` with the queued receipt, `200` with the existing one for a photo already sent, `413` above `UPLOAD__MAX_BYTES`, `415` for anything but a photo |
+| `GET /api/receipts` | Receipts by purchase date, newest first (`limit`, `cursor`, `status`, `store`) |
+| `GET /api/receipts/{id}` · `/image` | A receipt with its lines and an arithmetic report · its stored photo |
+| `POST /api/receipts/{id}/retry` | Queue a `failed` receipt again (`409` if it is not failed or already queued) |
+| `GET /api/reviews` · `/{id}` · `POST /{id}/resolve` | Open reviews · one review · accept, correct or force (with a reason) an answer |
+| `GET /api/products` · `/to-check` · `/{id}` · `/{id}/purchases` | Products with recent prices · products to check · one product · its purchases |
+| `PATCH /api/products/{id}` | Edit a product (each field sent is stamped `person`) |
+| `POST /api/products/{id}/confirm` | Confirm its values; with `{fields, expected}`, only those fields, and `409` if a stored value differs from what you saw |
+| `GET /api/summary?month=YYYY-MM` | The month's spending by week and store, and what is waiting (reviews, products to check, receipts being read) |
+| `GET /api/search?q=` | Products and receipts matching every word (SQLite FTS5) |
+| `GET /api/categories` · `/api/health` · `/api/health/ready` | Category values · liveness · readiness |
+
+For example `curl -F file=@receipt.jpg http://192.168.1.10:8420/api/receipts`, then poll
+`GET /api/receipts/{id}` until `status` is `completed`, `needs_review` or `failed`.
 
 ## Architecture
 
@@ -151,8 +175,19 @@ flowchart LR
   (no CORS). **worker** runs the receipt pipeline. **migrate** applies database migrations once
   before either starts. All three run the same image as a non-root user with a read-only root
   filesystem.
+- The single-page app is React 19, Vite, TanStack Router and Query, and Tailwind; it is built
+  into the image and served by `web` (ADR-0014).
+- The queue is a `jobs` table in the same database (ADR-0005). An upload, a review answer or a
+  Try again queues a job; the web process never runs the graph. The worker takes one job at a
+  time under a lease it renews by heartbeat, and the graph saves a checkpoint after every node,
+  so a receipt continues from where it stopped. On `make down` or a redeploy the worker lets the
+  running step finish (`PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S`, 90 s, enough for one Claude read;
+  compose waits 100 s before killing it). If the worker dies mid-job, the job is taken again
+  once its lease expires and counts an attempt; a job that used up its attempts (2) is not run
+  again: it and its receipt are marked failed ("stopped unexpectedly"), and Try again picks it
+  up from its checkpoint.
 - One SQLite file holds everything (relational data, full-text index, agent checkpoints,
-  the Claude spend).
+  the job queue, the Claude spend).
 - The TypeScript API client is generated from the backend's OpenAPI document
   (`make api-client`), so the contract is defined once, in Python.
 
@@ -161,8 +196,8 @@ Design decisions are recorded as ADRs in [`docs/adr`](docs/adr/); the staged pla
 
 ## Importing receipts
 
-Until the camera flow exists, receipts are recorded from JSON files with the CLI (the same
-command will load the demo dataset):
+Besides photos, a receipt can be recorded from a JSON file with the CLI, for example one typed
+by hand when a photo cannot be read:
 
 ```sh
 docker compose run --rm -v "$PWD/tests/data/receipts:/import:ro" web \
@@ -211,10 +246,6 @@ Only `store_name`, `total_cents`, `items`, and each item's `raw_text` and `line_
 required. Defaults: `currency` `CAD`, `quantity` `"1"` (a decimal string), `kind` `item` (or
 `discount`, `deposit`, `fee`), `description` the raw text. `GET /api/categories` lists the
 category values.
-
-The API behind the Receipts tab: `GET /api/receipts` (newest first; `limit`, `cursor`, `status`,
-`store`), `GET /api/receipts/{id}` (lines, totals and an arithmetic report computed on read) and
-`GET /api/categories`. The OpenAPI document is served at `/api/openapi.json`.
 
 ## Processing receipts with the agents
 
@@ -324,20 +355,15 @@ summary to `/data/runs/<run>/summary.json`.
   receipt (`process --table`): store, items, the lines' sum against the subtotal, total, whether
   it adds up, the models, attempts and cost. It needs `ANTHROPIC_API_KEY` and costs money.
 
-### Upload from the phone
+### Photos sent from the phone
 
-A photo can also be sent to the running stack instead of the command line:
-`POST /api/receipts` with the photo as the multipart field `file` (JPEG, PNG, WebP or HEIC), for
-example `curl -F file=@receipt.jpg http://<server LAN address>:8420/api/receipts`. The photo is
-stored, its receipt is created `processing` and queued, and the answer is `202` with the
-receipt's `id`, `status` and `stage`; the `worker` then reads it with Claude, exactly as
-`process` does (same budget, retry and review). Poll `GET /api/receipts/{id}` until `status`
-is `completed`, `needs_review` or `failed`. The same photo again answers `200` with the receipt
-it already made and queues nothing; a file larger than `PAPER_TRAIL_UPLOAD__MAX_BYTES` (15 MB) is
-a `413` problem, and a file that is not an image, or has more pixels than
-`PAPER_TRAIL_UPLOAD__MAX_PIXELS`, is a `415` problem. When Claude cannot read it (no key, the API
-down, the budget reached) the receipt is `failed` with its checkpoint and is not retried on its
-own: `make pt ARGS="process --resume ID"` continues it. The worker runs one receipt at a time.
+A photo sent from the app (or `POST /api/receipts`) is stored, its receipt is created
+`processing` and queued, and the `worker` reads it exactly as `process` does (same budget, retry
+and review), one receipt at a time. When Claude cannot read it (no key, the API down, the budget
+reached) the receipt is `failed` with its checkpoint and a reason, and is not retried on its
+own: Try again in the app (`POST /api/receipts/{id}/retry`) or
+`make pt ARGS="process --resume ID"` continues it. How the worker recovers from a crash is under
+[Architecture](#architecture).
 
 ### Matching, corrections and resuming
 
@@ -510,14 +536,14 @@ the app copies nothing from the page.
   product, a repeated code keeps its first row, and rows with an invalid PLU or no commodity are
   skipped too. The file is replaced in one step (a failed import leaves the old one); exit 1 when
   nothing is importable. A running MCP server (`make mcp-up`) reads `plu.csv` once, so restart it
-  after an import (`make mcp-down mcp-up`); `process` and the other commands read it fresh each run,
-  and `web` and `worker` do not use it.
+  after an import (`make mcp-down mcp-up`); `process` and the other commands read it fresh each run.
+  The worker also reads it once, so restart it too (`make restart`); `web` does not use it.
 
 ### What gets saved: a product and its price history
 
 Every purchase line ends up linked to one product, and every product keeps one price
-observation per time it was bought, so the price history of anything is one query away. A real
-example, Costco's gold kiwis bought on two receipts (three lines):
+observation per time it was bought, so the price history of anything is one query away. An
+example (the prices are made up), gold kiwis bought at Costco on two receipts (three lines):
 
 ```json
 {
@@ -536,20 +562,20 @@ example, Costco's gold kiwis bought on two receipts (three lines):
     {
       "observed_on": "2026-09-24", "store_name": "Costco Wholesale", "receipt_id": 4,
       "line_item_id": 53, "raw_text": "3139415 GOLD KIWI", "match_source": "catalog",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
-      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
+      "quantity": "1", "unit_price_cents": 1499, "line_total_cents": 1499, "currency": "CAD",
+      "discount_cents": -300, "unit_discount_cents": -300, "paid_cents": 1199, "on_sale": true
     },
     {
       "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
       "line_item_id": 34, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
-      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
+      "quantity": "1", "unit_price_cents": 1499, "line_total_cents": 1499, "currency": "CAD",
+      "discount_cents": -300, "unit_discount_cents": -300, "paid_cents": 1199, "on_sale": true
     },
     {
       "observed_on": "2026-11-05", "store_name": "Costco Wholesale", "receipt_id": 2,
       "line_item_id": 36, "raw_text": "3139415 GOLD KIWI", "match_source": "new",
-      "quantity": "1", "unit_price_cents": 1599, "line_total_cents": 1599, "currency": "CAD",
-      "discount_cents": -400, "unit_discount_cents": -400, "paid_cents": 1199, "on_sale": true
+      "quantity": "1", "unit_price_cents": 1499, "line_total_cents": 1499, "currency": "CAD",
+      "discount_cents": -300, "unit_discount_cents": -300, "paid_cents": 1199, "on_sale": true
     }
   ]
 }
@@ -557,9 +583,9 @@ example, Costco's gold kiwis bought on two receipts (three lines):
 
 The other receipt's line was linked by the code the first one attached (`match_source`
 `catalog`), without a model call; nothing named the product but its printed text, so it keeps
-that name and no category until a person or a data source names it. Each of these lines was followed by a `-4.00` instant-savings line naming
+that name and no category until a person or a data source names it. Each of these lines was followed by a `-3.00` instant-savings line naming
 the kiwi's code (`0000399102 / 3139415`), stored as its own `discount` line and linked to the
-item above it with that code: the regular 15.99 is the price history; 11.99 is what was paid. A
+item above it with that code: the regular 14.99 is the price history; 11.99 is what was paid. A
 discount that cannot be tied to one item (`0000398549 / MULTIPLE`, or a line without a code)
 stays on the receipt, never guessed or prorated. A discount larger than the nearest free item
 with its code stays on the receipt too, unless a later discount with the same code takes that
@@ -587,11 +613,11 @@ erDiagram
     receipts ||--o{ corrections : "corrected by"
 ```
 
-- `receipts`: store, date, subtotal, tax, total (integer cents), status and the stored photo
-  (receipts read before Claude also keep their masked OCR text).
+- `receipts`: store, date, subtotal, tax, total (integer cents), status (with the reason when
+  it failed) and the stored photo (receipts read before Claude also keep their masked OCR text).
 - `line_items`: each line in order (an item, then its discount when it had one, then the
   adjustments): raw text, kind (`item`, `discount`, `deposit`,
-  `fee`), quantity, unit price, line total, and the product it was matched to, with how
+  `fee`), quantity and its unit (`each`, `kg`, `lb`, ...), unit price, line total, and the product it was matched to, with how
   (`memory`, `catalog`, `alias`, `new`; `vector` and `llm` only on lines matched before product
   codes); a `discount` line's `applies_to_position` names the
   item line it reduces.
@@ -611,8 +637,8 @@ erDiagram
 - `corrections` (a person's fixes, the long-term memory matching reads first), `review_items`
   and `jobs`.
 
-Until the item page arrives (a product with its price history chart, `GET /api/products/{id}`
-and `GET /api/products/{id}/prices`, PLAN stage 6), the history can be read with SQL:
+The product page in the app shows this history (`GET /api/products/{id}/purchases`); with SQL
+it reads:
 
 ```sql
 SELECT o.observed_on, r.store_name, o.quantity, o.unit_price_cents, o.line_total_cents,
@@ -654,70 +680,135 @@ make process RUN_NAME=e3-mcp ARGS="--transport mcp"
 
 ## Make targets
 
+`make` (or `make help`) lists them. Every target runs in Docker.
+
 | Target | What it does |
 |---|---|
-| `make help` | List every target (also the default) |
 | `make build` | Build the runtime image and the dev tooling images |
-| `make up` / `make down` | Start / stop the runtime stack (`down` keeps the data volume) |
-| `make logs` / `make ps` | Follow logs / show container health |
+| `make up` / `make down` | Start / stop the runtime stack (`migrate`, `web`, `worker`); `down` keeps the data volume |
+| `make restart` | Restart `web` and `worker` |
+| `make logs` / `make ps` | Follow the logs / show the containers and their health |
 | `make migrate` | Apply the migrations baked into the built image (`make build migrate` after adding one) |
 | `make revision m="..."` | Create a hand-written migration (`id=0002` sets the revision id) |
-| `make check` | Fast gate: lint, types, tests, frontend checks, API contract, secrets scan |
-| `make ci` | Full gate: `build`, `check`, `smoke`, `container-checks` (image size budget, hardening); leaves the stack running, like `make up` |
+| `make shell` / `make fe-shell` | A shell in the Python / frontend dev container |
+| `make lock` | Re-resolve Python dependencies into `uv.lock` |
 | `make lint` / `make format` | Ruff lint + format check + import-linter / auto-fix and format |
 | `make typecheck` | mypy `--strict` |
-| `make test` | All Python suites in parallel with branch coverage (fails under 90 %); the full gate |
+| `make test` | All Python suites in parallel with branch coverage (fails under 90 %) |
 | `make test-fast` | Unit, contract and integration suites in parallel, no coverage: the day-to-day loop |
-| `make fe-lint` / `make fe-typecheck` / `make fe-test` / `make fe-build` | ESLint + Prettier / `tsc` / Vitest / Vite build (each first runs `fe-deps`, which reinstalls `node_modules` if `package-lock.json` changed) |
-| `make fe-install` | Reinstall frontend dependencies unconditionally (`npm ci`) |
+| `make test-unit` / `make test-integration` | The unit and contract suites / the integration suite |
+| `make fe-lint` / `make fe-format` / `make fe-typecheck` / `make fe-test` / `make fe-build` | ESLint + Prettier check / Prettier write / `tsc` / Vitest with coverage / Vite build (each first runs `fe-deps`) |
+| `make fe-deps` / `make fe-install` | Reinstall frontend dependencies if `package-lock.json` changed / always (`npm ci`) |
 | `make fe-dev` | Vite dev server on `:5173`, proxying `/api` to `web` |
-| `make api-client` | Regenerate `frontend/openapi.json` and the TS schema |
-| `make api-check` | Fail if the committed API contract drifted from the backend |
-| `make smoke` | Start (or update) the stack with your `.env` and smoke-test it from inside the network; the stack is left running |
+| `make api-client` / `make api-check` | Regenerate `frontend/openapi.json` and the TS schema / fail if they drifted from the backend |
 | `make secrets` | Self-test the secret scan, then scan git history and the working tree (gitleaks) |
-| `make hooks` | Install the git pre-commit hook (runs `make pre-commit` in containers) |
-| `make outdated` | Report newer dependency and base-image versions (changes nothing) |
+| `make smoke` | Start the stack with your `.env` and smoke-test it from inside the network (leaves it running) |
+| `make container-checks` | Inspect the built image and a throwaway stack (size budget, user, hardening) |
+| `make pre-commit` / `make hooks` | Run the pre-commit hooks on every file and scan staged changes / point git at `.githooks` |
+| `make check` | Fast gate: lint, types, tests, frontend checks, API contract, secrets |
+| `make ci` | Full gate: `build`, `check`, `smoke`, `container-checks`; leaves the stack running |
 | `make process` | Process receipts with the agents: `RECEIPTS=<file or folder>`, `RUN_NAME=<run>`, `ARGS="<flags>"` |
+| `make smoke-claude` | Live smoke: Claude reads `RECEIPTS` into a new run and prints a table (needs `ANTHROPIC_API_KEY`; costs money; never part of `check` or CI) |
 | `make pt ARGS="..."` | Run any `paper-trail` command in the `cli` service, e.g. `ARGS="review list"` |
 | `make graph` | Print the agents' graph as Mermaid |
 | `make mcp-up` / `make mcp-down` | Start / stop and remove the MCP tool server (`127.0.0.1:8421`); the rest of the stack is untouched |
-| `make smoke-claude` | Live smoke: Claude reads `RECEIPTS` into a new run `smoke-claude-<UTC time>` and prints a table per receipt (needs `ANTHROPIC_API_KEY`; costs money; never part of `check` or CI) |
+| `make outdated` | Report newer Python, npm and base-image versions (changes nothing) |
+| `make clean` | Remove caches, coverage and build output (never the data volume) |
 
 ## Configuration
 
-All settings are environment variables with the `PAPER_TRAIL_` prefix, documented with their
-defaults in [`.env.example`](.env.example). Compose reads `.env` from the repository root. The
-most important ones:
+Every setting is an environment variable in `.env` (git-ignored), documented with its default in
+[`.env.example`](.env.example); all are optional. After changing one, `make up` recreates the containers it affects (`make
+restart` does not re-read `.env`).
 
-- `PAPER_TRAIL_BIND_ADDR` (default `127.0.0.1`): the host address the web port is published
-  on. Set it to the server's LAN address to use the app from your phone.
-- `PAPER_TRAIL_PORT` (default `8420`): the host port.
+Deployment (read by compose):
+
+- `PAPER_TRAIL_BIND_ADDR` (default `127.0.0.1`): the host address the web port is published on.
+  Set it to the server's LAN address to use the app from your phone. `PAPER_TRAIL_PORT` (default
+  `8420`) is the host port.
+- `PAPER_TRAIL_DATA_VOLUME` (default the `paper-trail-data` named volume): where the database and
+  images live; an absolute host folder works too, owned by UID 1000.
+- `PAPER_TRAIL_RECEIPTS_DIR` (default `./receipts`): the folder of photos `make process` reads.
+
+The app:
+
 - `PAPER_TRAIL_WEB__ALLOWED_HOSTS` (default: none): the host names or IPs you open the app by,
-  comma-separated (e.g. `192.168.1.10,my-server`), besides `localhost`, `127.0.0.1`, `::1` and `web`.
-  Any other `Host` is refused with 400, and a write sent from another site's page with 403
-  ([ADR-0020](docs/adr/0020-host-and-origin-checks.md)): the app has no login.
-- `PAPER_TRAIL_DATA_VOLUME` (default: the `paper-trail-data` named volume): where the database
-  and images live.
-- `ANTHROPIC_API_KEY` (no prefix; default: unset): the Claude API key. Without it a receipt
-  sent to the agents fails with a message naming this variable.
+  comma-separated, without scheme or port (e.g. `192.168.1.10,my-server`), besides `localhost`,
+  `127.0.0.1`, `::1` and `web`. Any other `Host` is refused with 400
+  ([ADR-0020](docs/adr/0020-host-and-origin-checks.md)), so add every name you use, the
+  WireGuard address included.
+- `ANTHROPIC_API_KEY` (no prefix): the Claude API key. Without it a receipt fails with a message
+  naming this variable.
 - `PAPER_TRAIL_CLAUDE__EXTRACT_MODEL` / `__RETRY_MODEL` (defaults `claude-haiku-5-5` /
-  `claude-opus-5-5`), `PAPER_TRAIL_CLAUDE__TIMEOUT_S` (default `300`, per attempt: the retry
-  model can take minutes for a long answer, and an attempt given up on is still billed by
-  Anthropic) and
-  `PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD` (default `5.00`, per UTC month, checked before each
+  `claude-opus-5-5`; a model without a known price is refused), `__TIMEOUT_S` (default `300`,
+  per request, at most `600`: the retry model can take minutes, and a request given up on is
+  still billed) and `__MONTHLY_BUDGET_USD` (default `5.00`, per UTC month, checked before each
   call; `0` stops every call).
-- `PAPER_TRAIL_RECEIPTS_DIR`: the folder of receipt photos `make process` reads.
-- `PAPER_TRAIL_TOOLS__TRANSPORT` (default `inprocess`): how the agents call their tools,
-  `inprocess` or `mcp`; `PAPER_TRAIL_MCP__URL` is the MCP server `tools --transport mcp` uses.
+- `PAPER_TRAIL_GRAPH__MAX_ATTEMPTS` (default `2`: the extract model, then one retry),
+  `__FEEDBACK` (default `true`: the retry is told what failed) and `__ENRICHMENT` (default
+  `true`: describe new products).
+- `PAPER_TRAIL_LOOKUP__OPEN_FACTS` (default `true`), `__UPCITEMDB` (default `false`) and
+  `__TIMEOUT_S` (default `10`): the product databases asked for a barcode (see
+  [Product lookups and guesses](#product-lookups-and-guesses)).
+- `PAPER_TRAIL_CATALOG__ENABLED` (default `true`: match coded lines by their code) and
+  `__PLU_PATH` (default `<data dir>/catalog/plu.csv`).
+- `PAPER_TRAIL_UPLOAD__MAX_BYTES` (default `15000000`) and `__MAX_PIXELS` (default `40000000`):
+  larger uploads are refused.
+- `PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S` (default `90`): how long a running step may take to
+  finish after the worker is asked to stop; keep the worker's `stop_grace_period` in
+  `compose.yaml` (100 s) above it. `__POLL_INTERVAL_S` (default `1`) and
+  `__HEARTBEAT_INTERVAL_S` (default `10`) rarely need changing.
+- `PAPER_TRAIL_TOOLS__TRANSPORT` (default `inprocess`, or `mcp`): how the agents call their
+  tools; `PAPER_TRAIL_MCP__URL` is the server `tools --transport mcp` uses, and
   `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above `PAPER_TRAIL_CLAUDE__TIMEOUT_S`.
-- `PAPER_TRAIL_LOOKUP__OPEN_FACTS` (default `true`), `PAPER_TRAIL_LOOKUP__UPCITEMDB` (default
-  `false`) and `PAPER_TRAIL_LOOKUP__TIMEOUT_S` (default `10`): the product databases asked for a
-  barcode (see [Product lookups and guesses](#product-lookups-and-guesses)).
+- `PAPER_TRAIL_LOG_LEVEL` (default `INFO`) and `PAPER_TRAIL_LOG_FORMAT` (`json`, or `console`).
+
+## Upgrading
+
+Back up the database (`/data/paper_trail.db`), then `git pull` and `make build up`: the `migrate`
+service applies any new migration before `web` and `worker` start.
+
+### From the local-model version
+
+Earlier versions read receipts on your own hardware, with OCR and local models. To upgrade, in
+this order:
+
+1. **Resolve open reviews and failed runs before upgrading**, with the old version still
+   running: `review list` must be empty and no receipt may be `processing` or `failed`. A run
+   saved by the old version cannot be resumed by the new one (`process --resume` refuses it);
+   after the upgrade its only ways out are answering its review with a corrected file
+   (`review resolve ID --file F`) or reading the photo again (`process PHOTO --reprocess`).
+2. **Back up the database** (`/data/paper_trail.db`): migration 0007 drops the product vectors,
+   which cannot be recovered, and turns any receipt still `waiting_for_gpu` into `failed`.
+3. `make build migrate`, then `make up`.
+
+These variables are no longer read and can be removed from `.env` (they are ignored if left):
+`PAPER_TRAIL_OCR__*`, `PAPER_TRAIL_OLLAMA__*`, `PAPER_TRAIL_MATCHING__*`,
+`PAPER_TRAIL_GRAPH__MAX_TEXT_ATTEMPTS`, `PAPER_TRAIL_GRAPH__MAX_VISION_ATTEMPTS`,
+`PAPER_TRAIL_GRAPH__VISION_FIRST_BELOW`, `PAPER_TRAIL_GRAPH__MIN_CONFIDENCE`,
+`PAPER_TRAIL_PROMPTS__VISION_VERSION`, `PAPER_TRAIL_PROMPTS__MATCHING_VERSION`,
+`PAPER_TRAIL_PROMPTS__ENRICHMENT_VERSION`,
+`PAPER_TRAIL_PROMPTS__EXAMPLES`. Remove `PAPER_TRAIL_PROMPTS__EXTRACTION_VERSION` too if it is
+set (for example to `v2`): only `v3`, the default, exists now, and any other value stops
+`process` with exit 2. The separate model host and its compose stack are no longer needed.
+
+Migration 0008 (product lookups) adds the `product_lookups` table and turns the old `off_llm`
+field source into `llm`: a product named that way is no longer confirmed and shows in
+`catalog todo`. Back up first; its downgrade turns `llm` back into `off_llm` and `upc` into
+`off`. Then `catalog enrich` (a dry run) shows what lookups and guesses would fill for the
+products already stored, and `catalog enrich --apply` does it.
 
 ## Data and privacy
 
 Only source code is published. Receipt images, the database, `.env` and evaluation receipts stay
 on your machines and are git-ignored. The app has no telemetry and loads nothing from CDNs.
+
+**There is no login.** The app is meant for your home network and WireGuard only; never publish
+its port to the internet. Anyone who can reach it can use it. What stops another website, opened
+in a browser on your network, from using it through that browser is two checks
+([ADR-0020](docs/adr/0020-host-and-origin-checks.md)): only the host names in
+`PAPER_TRAIL_WEB__ALLOWED_HOSTS` (and localhost) are served, and a write from a browser must come
+from the app's own page. The MCP server is published on loopback only.
 
 **The whole photo of every receipt you process is sent to Anthropic** to be read by Claude, and
 a new product's printed text, store, department and code to have it guessed. The only other

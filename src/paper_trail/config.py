@@ -43,7 +43,7 @@ class WorkerSettings(BaseModel):
 class WebSettings(BaseModel):
     """The web app (``PAPER_TRAIL_WEB__*``, ADR-0020). ``allowed_hosts``: the host names or IPs
     the app is reached by besides ``localhost``, ``127.0.0.1``, ``::1`` and ``web``, as a comma
-    list (e.g. ``192.168.0.187,fabio-server``); no scheme, port or wildcard. An IPv6 address may
+    list (e.g. ``192.168.1.10,my-server``); no scheme, port or wildcard. An IPv6 address may
     be written with or without brackets and is kept in its compressed form without them."""
 
     model_config = ConfigDict(frozen=True)

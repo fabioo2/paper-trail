@@ -96,12 +96,8 @@ A course progress report is due Sunday 2026-11-08 (evening). The rubric grades e
 3. Agent core = plan Stages 3, 4 and 5, plus the OCR adapter and card masking pulled forward from Stage 2. Driven from the CLI on real receipt files. Priority inside it: (a) supervisor + extraction + validation with feedback retries, code-checked totals, masking, review routing; (b) tool registry with per-role allowlists, then the MCP server; (c) matching with alias memory + checkpointer resume; (d) vision fallback and enrichment.
 4. Remaining Stage 2 (upload UI, live status, GPU-availability queue with the overnight GPU window, default 02:00-06:00), then Stages 6, 7, 8.
 
-### Where things stand (2026-11-08)
+### Where things stand (2026-11-18)
 
-Steps 1-3 are built: four real receipts go from photo to checked prices from the CLI. Before step 4 come the extraction accuracy work (built, `docs/plans/extraction-accuracy.md`) and two approved plans, in this order:
+Steps 1-3 are built, and of step 4 the upload flow (Stage 2) and the UI pass (Stage 6), with Claude reading receipts instead of the local models (ADR-0019). Receipts are scanned from the phone and processed by the worker; the web app has Home, Receipts, Scan, Products (with a price tracker per product and store) and Review, a queue for checking guessed product details, app-wide search, and Try again for failed receipts. The no-login API is guarded by Host and Origin checks (ADR-0020), and the worker recovers from crashes and restarts (ADR-0005 amendment). The README describes the app as it is.
 
-1. [`docs/plans/discounts-and-paid-prices.md`](plans/discounts-and-paid-prices.md): tie each discount to the item it reduces and store the regular and the paid price (migration 0004). **Start here.**
-2. A small reliability fix, to be planned: retry a timed-out model call automatically, and a longer vision request timeout, so a busy GPU does not stop an unattended batch.
-3. [`docs/plans/barcode-lookup.md`](plans/barcode-lookup.md): identify products by the code on the receipt, from data sources only (store catalog, PLU, Open Food Facts), with the model kept for reading, cross-store matching and grounded clean-up (migration 0005).
-
-Then step 4.
+Not built yet: the evaluation stage (7), nightly backups and the demo dataset (8), and linking the same product across stores without a shared barcode or PLU.
