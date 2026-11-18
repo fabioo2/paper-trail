@@ -90,7 +90,7 @@ describe("Products tab", () => {
     for (const part of [
       "Kirkland Organic Eggs",
       "Kirkland Signature · 24 each",
-      `Bought 2× · last ${formatMoney(cad(899))} at COSTCO WHOLESALE #1234`,
+      `Bought 2× · last ${formatMoney(cad(899))} at Costco`,
       "Dairy & eggs",
     ])
       expect(textOf(eggsRow)).toContain(part);
@@ -102,6 +102,14 @@ describe("Products tab", () => {
       expect(textOf(milkRow)).toContain(part);
     expect(within(eggsRow).getByText("Suggested")).toBeInTheDocument();
     expect(within(milkRow).queryByText("Suggested")).toBeNull();
+    expect(
+      [eggsRow, milkRow].map((row) =>
+        row.querySelector("[data-category]")?.getAttribute("style"),
+      ),
+    ).toEqual([
+      "background-color: var(--cat-dairy-eggs);",
+      "background-color: var(--cat-pantry);",
+    ]);
   });
 
   it.each([

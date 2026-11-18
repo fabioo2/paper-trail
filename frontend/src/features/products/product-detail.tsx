@@ -18,9 +18,11 @@ import {
   useProduct,
   useProductPurchases,
 } from "@/features/products/api";
+import { CategoryDot } from "@/features/products/category-dot";
 import { ProductEditor } from "@/features/products/product-editor";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
+import { displayStoreName } from "@/features/receipts/store-name";
 
 const SKELETON_ROWS = 3;
 
@@ -90,7 +92,10 @@ function ProductView({ product }: { product: ProductOut }) {
               ) : null}
             </div>
             {details ? (
-              <p className="text-sm text-muted-foreground">{details}</p>
+              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <CategoryDot category={product.category} />
+                {details}
+              </p>
             ) : null}
           </div>
           <Button
@@ -201,7 +206,7 @@ function PurchaseRow({ purchase }: { purchase: ProductPurchaseOut }) {
           {purchase.purchased_on === null
             ? "Date unknown"
             : formatDate(purchase.purchased_on)}{" "}
-          · {purchase.store_name}
+          · {displayStoreName(purchase.store_name)}
         </p>
         {notes.length > 0 ? (
           <p className="truncate text-sm text-muted-foreground">

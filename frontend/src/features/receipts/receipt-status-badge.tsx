@@ -4,21 +4,21 @@ import type { ReceiptStatus } from "@/features/receipts/api";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
 const PRESENTATION: Record<
-  ReceiptStatus,
+  Exclude<ReceiptStatus, "completed">,
   { label: string; variant: BadgeVariant; className?: string }
 > = {
-  processing: { label: "Processing", variant: "secondary" },
+  processing: { label: "Reading…", variant: "secondary" },
   needs_review: {
-    label: "Needs review",
+    label: "Needs a look",
     variant: "outline",
     className: "border-warning",
   },
-  completed: { label: "Completed", variant: "default" },
-  failed: { label: "Failed", variant: "destructive" },
+  failed: { label: "Couldn't read", variant: "destructive" },
 };
 
-/** The receipt's status as a coloured label, e.g. "Needs review". */
+/** A label for a receipt that isn't done yet, e.g. "Needs a look"; nothing once completed. */
 export function ReceiptStatusBadge({ status }: { status: ReceiptStatus }) {
+  if (status === "completed") return null;
   const { label, variant, className } = PRESENTATION[status];
   return (
     <Badge variant={variant} className={className}>

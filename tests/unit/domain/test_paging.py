@@ -1,14 +1,21 @@
 """Keyset paging: PageRequest and the opaque cursor (S1-AC-08)."""
 
 import base64
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from paper_trail.domain.errors import DomainValidationError
-from paper_trail.domain.paging import Page, PageRequest, decode_cursor, encode_cursor
+from paper_trail.domain.paging import (
+    Page,
+    PageRequest,
+    decode_cursor,
+    decode_dated_cursor,
+    encode_cursor,
+    encode_dated_cursor,
+)
 
 utc_datetimes = st.datetimes(
     min_value=datetime(2000, 1, 1),  # noqa: DTZ001 - hypothesis bounds are naive by contract
@@ -112,3 +119,47 @@ def test_s1_ac_08_cursor_times_must_be_aware() -> None:
     """A naive time has no instant, so it cannot be a cursor position."""
     with pytest.raises(ValueError, match="timezone-aware"):
         encode_cursor(datetime(2026, 11, 6, 14, 30), 1)  # noqa: DTZ001 - the point of the test
+
+
+@given(
+    day=st.none() | st.dates(),
+    moment=utc_datetimes,
+    identifier=st.integers(min_value=1, max_value=2**63 - 1),
+)
+def test_property_dated_cursor_round_trip(
+    day: date | None, moment: datetime, identifier: int
+) -> None:
+    """Every (purchase date or none, UTC time, positive id) survives the dated cursor."""
+    assert decode_dated_cursor(encode_dated_cursor(day, moment, identifier)) == (
+        day,
+        moment,
+        identifier,
+    )
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "",
+        "%%%",
+        encode_cursor(datetime(2026, 11, 6, tzinfo=UTC), 7),  # a created_at cursor
+        _b64("2026-11-05"),
+        _b64("2026-11-05|"),
+        _b64("2026-13-05|2026-11-06T14:30:00+00:00|7"),
+        _b64("2026-11-05|2026-11-06T14:30:00|7"),
+        _b64("2026-11-05|2026-11-06T14:30:00+00:00|seven"),
+        _b64("|yesterday|7"),
+    ],
+)
+def test_garbage_dated_cursors_raise_validation_error(cursor: str) -> None:
+    """Anything that is not a dated cursor we issued raises DomainValidationError."""
+    with pytest.raises(DomainValidationError):
+        decode_dated_cursor(cursor)
+
+
+def test_a_dated_cursor_is_not_a_created_at_cursor() -> None:
+    """The review queue's decoder refuses a receipt cursor."""
+    cursor = encode_dated_cursor(date(2026, 11, 5), datetime(2026, 11, 6, tzinfo=UTC), 7)
+
+    with pytest.raises(DomainValidationError):
+        decode_cursor(cursor)

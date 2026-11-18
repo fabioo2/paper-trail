@@ -4,7 +4,7 @@ import base64
 import binascii
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from paper_trail.domain.errors import DomainValidationError
 
@@ -34,20 +34,57 @@ class Page[T]:
 
 def encode_cursor(created_at: datetime, id_: int) -> str:
     """The cursor after the row ``(created_at, id_)``: URL-safe base64 of "<iso time>|<id>"."""
-    if created_at.utcoffset() is None:
-        msg = "cursor times must be timezone-aware"
-        raise ValueError(msg)
-    position = f"{created_at.astimezone(UTC).isoformat()}{_SEPARATOR}{id_}"
-    return base64.urlsafe_b64encode(position.encode()).decode("ascii")
+    return _encode(_position(created_at, id_))
 
 
 def decode_cursor(cursor: str) -> tuple[datetime, int]:
     """The ``(created_at, id)`` a cursor points after; DomainValidationError if not ours."""
+    return _parse_position(_decode(cursor))
+
+
+def encode_dated_cursor(purchased_on: date | None, created_at: datetime, id_: int) -> str:
+    """The cursor after the row ``(purchased_on, created_at, id_)`` of a list sorted by
+    purchase date first: URL-safe base64 of "<date, or nothing>|<iso time>|<id>"."""
+    day = "" if purchased_on is None else purchased_on.isoformat()
+    return _encode(f"{day}{_SEPARATOR}{_position(created_at, id_)}")
+
+
+def decode_dated_cursor(cursor: str) -> tuple[date | None, datetime, int]:
+    """The ``(purchased_on, created_at, id)`` a dated cursor points after; DomainValidationError
+    if not ours."""
+    day, separator, position = _decode(cursor).partition(_SEPARATOR)
     try:
-        position = base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True)
-        timestamp, separator, identifier = position.decode("utf-8").rpartition(_SEPARATOR)
-        created_at = datetime.fromisoformat(timestamp)
+        purchased_on = date.fromisoformat(day) if day else None
+    except ValueError:
+        raise _invalid_cursor() from None
+    if not separator:
+        raise _invalid_cursor()
+    return (purchased_on, *_parse_position(position))
+
+
+def _position(created_at: datetime, id_: int) -> str:
+    if created_at.utcoffset() is None:
+        msg = "cursor times must be timezone-aware"
+        raise ValueError(msg)
+    return f"{created_at.astimezone(UTC).isoformat()}{_SEPARATOR}{id_}"
+
+
+def _encode(position: str) -> str:
+    return base64.urlsafe_b64encode(position.encode()).decode("ascii")
+
+
+def _decode(cursor: str) -> str:
+    try:
+        return base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True).decode()
     except (UnicodeError, binascii.Error, ValueError):
+        raise _invalid_cursor() from None
+
+
+def _parse_position(position: str) -> tuple[datetime, int]:
+    timestamp, separator, identifier = position.rpartition(_SEPARATOR)
+    try:
+        created_at = datetime.fromisoformat(timestamp)
+    except ValueError:
         raise _invalid_cursor() from None
     if not separator or created_at.utcoffset() is None or not _ID.fullmatch(identifier):
         raise _invalid_cursor()

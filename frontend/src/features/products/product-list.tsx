@@ -16,7 +16,9 @@ import {
   useCategories,
   useProductList,
 } from "@/features/products/api";
+import { CategoryDot } from "@/features/products/category-dot";
 import { formatMoney } from "@/features/receipts/money";
+import { displayStoreName } from "@/features/receipts/store-name";
 
 const SKELETON_ROWS = 6;
 const LOAD_ERROR_TOAST = "products-load-error";
@@ -166,11 +168,12 @@ function ProductRow({
         ) : null}
         <p className="truncate text-sm text-muted-foreground">
           Bought {product.times_bought}× · last {formatMoney(last.paid)} at{" "}
-          {last.store_name}
+          {displayStoreName(last.store_name)}
         </p>
       </div>
       {category ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <CategoryDot category={product.category} />
           {category}
         </span>
       ) : null}

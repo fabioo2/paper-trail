@@ -49,7 +49,11 @@ def show_receipt(container: Container, receipt_id: int) -> None:
         receipt, report = container.get_receipt(receipt_id)
     except NotFoundError as error:
         fail(EXIT_UNAVAILABLE, str(error))
-    typer.echo(ReceiptDetailOut.from_receipt(receipt, report).model_dump_json(indent=2))
+    products = container.get_products(
+        item.product_id for item in receipt.items if item.product_id is not None
+    )
+    detail = ReceiptDetailOut.from_receipt(receipt, report, products)
+    typer.echo(detail.model_dump_json(indent=2))
 
 
 def read_draft(file: Path) -> ReceiptDraft:

@@ -4,7 +4,7 @@ Repositories never commit: they are reached through a ``UnitOfWork``, which owns
 transaction. Methods that stamp times use the injected clock.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Protocol
 
 from paper_trail.domain.enums import CodeScheme, CorrectionKind, ProcessingStage, ReceiptStatus
@@ -39,7 +39,8 @@ class ReceiptRepository(Protocol):
         status: ReceiptStatus | None = None,
         store_key: str | None = None,
     ) -> Page[ReceiptSummary]:
-        """Newest first (created_at desc, id desc). DomainValidationError on a bad cursor."""
+        """Newest purchase first (purchased_on desc with undated last, then created_at desc, id
+        desc). DomainValidationError on a bad cursor."""
         ...
 
     def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
@@ -81,6 +82,10 @@ class ProductRepository(Protocol):
     def add(self, product: Product) -> Product: ...
 
     def get(self, product_id: int) -> Product | None: ...
+
+    def get_many(self, product_ids: Collection[int]) -> dict[int, Product]:
+        """The stored products among ``product_ids``, by id; unknown ids are left out."""
+        ...
 
     def list(self) -> tuple[Product, ...]:
         """Every product, by id."""

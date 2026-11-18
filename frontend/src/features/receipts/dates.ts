@@ -1,11 +1,38 @@
 /**
- * A calendar date (`YYYY-MM-DD`) in the locale's medium style, e.g. `Nov 1, 2026`.
- * The date is formatted in UTC, where it was parsed, so the day never shifts in a time zone
- * west of UTC (a purchase date is a day, not an instant).
+ * Calendar dates (`YYYY-MM-DD`) are formatted in UTC, where they were parsed, so the day never
+ * shifts in a time zone west of UTC (a purchase date is a day, not an instant).
  */
-export function formatDate(isoDate: string, locale?: string): string {
+function format(
+  isoDate: string,
+  options: Intl.DateTimeFormatOptions,
+  locale?: string,
+): string {
   return new Intl.DateTimeFormat(locale, {
-    dateStyle: "medium",
+    ...options,
     timeZone: "UTC",
   }).format(new Date(`${isoDate}T00:00:00Z`));
+}
+
+/** The date in the locale's medium style, e.g. `Nov 1, 2026`. */
+export function formatDate(isoDate: string, locale?: string): string {
+  return format(isoDate, { dateStyle: "medium" }, locale);
+}
+
+/** The date with its weekday, e.g. `Thu, Nov 5, 2026`. */
+export function formatFullDate(isoDate: string, locale?: string): string {
+  return format(
+    isoDate,
+    { weekday: "short", month: "short", day: "numeric", year: "numeric" },
+    locale,
+  );
+}
+
+/** The month the date falls in, e.g. `November 2026`. */
+export function formatMonth(isoDate: string, locale?: string): string {
+  return format(isoDate, { month: "long", year: "numeric" }, locale);
+}
+
+/** The date's short weekday, e.g. `Thu`. */
+export function formatWeekday(isoDate: string, locale?: string): string {
+  return format(isoDate, { weekday: "short" }, locale);
 }

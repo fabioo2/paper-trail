@@ -28,6 +28,7 @@ export function receiptSummary(
     total: cad(1155),
     item_count: 2,
     created_at: "2026-11-01T18:30:00Z",
+    savings: cad(0),
     ...overrides,
   };
 }
@@ -53,6 +54,8 @@ export function lineItem(overrides: Partial<LineItemOut> = {}): LineItemOut {
     category: "dairy_eggs",
     applies_to_position: null,
     match_source: null,
+    product_name: null,
+    product_category: null,
     ...overrides,
   };
 }

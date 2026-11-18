@@ -161,7 +161,8 @@ export interface paths {
         };
         /**
          * List receipts
-         * @description Receipts newest first. A bad cursor or limit is a 422 problem.
+         * @description Receipts by purchase date, newest first (undated last, then newest recorded first). A bad
+         *     cursor or limit is a 422 problem.
          */
         get: operations["listReceipts"];
         put?: never;
@@ -187,7 +188,8 @@ export interface paths {
         };
         /**
          * Get a receipt
-         * @description One receipt with its lines and an arithmetic report computed from the current data.
+         * @description One receipt with its lines (and the products they link to) and an arithmetic report
+         *     computed from the current data.
          */
         get: operations["getReceipt"];
         put?: never;
@@ -378,7 +380,10 @@ export interface components {
             /** Store Name */
             store_name: string;
         };
-        /** LineItemOut */
+        /**
+         * LineItemOut
+         * @description ``product_name`` and ``product_category`` are the linked product's, if any.
+         */
         LineItemOut: {
             /** Applies To Position */
             applies_to_position: number | null;
@@ -392,8 +397,11 @@ export interface components {
             match_source: components["schemas"]["MatchSource"] | null;
             /** Position */
             position: number;
+            product_category: components["schemas"]["Category"] | null;
             /** Product Id */
             product_id: number | null;
+            /** Product Name */
+            product_name: string | null;
             /** Quantity */
             quantity: string;
             /** Raw Text */
@@ -578,6 +586,7 @@ export interface components {
             payment_last4: string | null;
             /** Purchased On */
             purchased_on: string | null;
+            savings: components["schemas"]["MoneyOut"];
             stage: components["schemas"]["ProcessingStage"];
             status: components["schemas"]["ReceiptStatus"];
             /** Store Name */
@@ -598,7 +607,11 @@ export interface components {
          * @enum {string}
          */
         ReceiptStatus: "processing" | "needs_review" | "completed" | "failed";
-        /** ReceiptSummaryOut */
+        /**
+         * ReceiptSummaryOut
+         * @description ``item_count`` counts the ITEM lines (not discounts, deposits or fees); ``savings``
+         *     (>= 0) is what the receipt's discount lines took off.
+         */
         ReceiptSummaryOut: {
             /**
              * Created At
@@ -611,6 +624,7 @@ export interface components {
             item_count: number;
             /** Purchased On */
             purchased_on: string | null;
+            savings: components["schemas"]["MoneyOut"];
             status: components["schemas"]["ReceiptStatus"];
             /** Store Name */
             store_name: string;

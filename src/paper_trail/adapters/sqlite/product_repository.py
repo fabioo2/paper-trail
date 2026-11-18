@@ -1,5 +1,6 @@
 """``ProductRepository`` on SQLite: ``products`` and their ``product_aliases``."""
 
+from collections.abc import Collection
 from dataclasses import replace
 
 from sqlalchemy import Connection, RowMapping, func, insert, select, update
@@ -49,6 +50,12 @@ class SqliteProductRepository:
             .one_or_none()
         )
         return None if row is None else product_from_row(row)
+
+    def get_many(self, product_ids: Collection[int]) -> dict[int, Product]:
+        rows = self._connection.execute(
+            select(products).where(products.c.id.in_(product_ids))
+        ).mappings()
+        return {row["id"]: product_from_row(row) for row in rows}
 
     def list(self) -> tuple[Product, ...]:
         rows = self._connection.execute(select(products).order_by(products.c.id)).mappings()

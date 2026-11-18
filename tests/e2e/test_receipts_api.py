@@ -22,7 +22,16 @@ from tests.factories import cad, line_item, product, receipt_draft, simple_draft
 from tests.support import require_id
 
 PROBLEM_JSON = "application/problem+json"
-SUMMARY_KEYS = {"id", "status", "store_name", "purchased_on", "total", "item_count", "created_at"}
+SUMMARY_KEYS = {
+    "id",
+    "status",
+    "store_name",
+    "purchased_on",
+    "total",
+    "item_count",
+    "created_at",
+    "savings",
+}
 DETAIL_KEYS = SUMMARY_KEYS | {
     "stage",
     "subtotal",
@@ -45,6 +54,8 @@ LINE_KEYS = {
     "category",
     "applies_to_position",
     "match_source",
+    "product_name",
+    "product_category",
 }
 ISSUE_KEYS = {"code", "message", "expected", "actual", "position"}
 
@@ -96,7 +107,8 @@ def test_s1_ac_22_list_shape(migrated_client: TestClient, weighed: Receipt) -> N
     assert summary["store_name"] == "COSTCO WHOLESALE #1234"
     assert summary["purchased_on"] == "2026-11-01"
     assert summary["total"] == {"amount_cents": 397, "currency": "CAD"}
-    assert summary["item_count"] == 2
+    assert summary["item_count"] == 1
+    assert summary["savings"] == {"amount_cents": 100, "currency": "CAD"}
     created = datetime.fromisoformat(summary["created_at"])
     assert created.utcoffset() is not None
     assert created == weighed.created_at
@@ -130,7 +142,11 @@ def test_s1_ac_22_detail_shape(migrated_client: TestClient, weighed: Receipt) ->
         "category": "produce",
         "applies_to_position": None,
         "match_source": None,
+        "product_name": None,
+        "product_category": None,
     }
+    assert body["savings"] == {"amount_cents": 100, "currency": "CAD"}
+    assert body["item_count"] == 1
     assert savings["kind"] == "discount"
     assert savings["unit_price"] is None
     assert savings["line_total"] == {"amount_cents": -100, "currency": "CAD"}
@@ -349,6 +365,27 @@ def test_a_line_linked_by_its_code_shows_match_source_catalog(
         (product_id, "catalog"),
         *[(None, None)] * (len(body["items"]) - 1),
     ]
+
+
+def test_a_linked_line_carries_its_products_name_and_category(
+    migrated_client: TestClient, migrated_container: Container
+) -> None:
+    """The detail names the product a line links to (its canonical name and category, which may
+    differ from the line's own); an unlinked line carries nulls."""
+    stored = _record(migrated_container)
+    receipt_id = require_id(stored.id)
+    with migrated_container.uow_factory() as uow:
+        product_id = require_id(
+            uow.products.add(product(canonical_name="Organic Eggs", category=Category.PANTRY)).id
+        )
+        uow.receipts.link_items(receipt_id, [ItemLink(0, product_id, MatchSource.ALIAS)])
+        uow.commit()
+
+    body = migrated_client.get(f"/api/receipts/{receipt_id}").json()
+
+    assert [
+        (item["category"], item["product_name"], item["product_category"]) for item in body["items"]
+    ] == [(None, "Organic Eggs", "pantry"), ("dairy_eggs", None, None)]
 
 
 def test_the_match_source_enum_lists_the_six_sources(app: FastAPI) -> None:

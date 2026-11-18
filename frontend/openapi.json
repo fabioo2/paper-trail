@@ -303,6 +303,7 @@
         "type": "object"
       },
       "LineItemOut": {
+        "description": "``product_name`` and ``product_category`` are the linked product's, if any.",
         "properties": {
           "applies_to_position": {
             "anyOf": [
@@ -353,6 +354,16 @@
             "title": "Position",
             "type": "integer"
           },
+          "product_category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "product_id": {
             "anyOf": [
               {
@@ -363,6 +374,17 @@
               }
             ],
             "title": "Product Id"
+          },
+          "product_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Name"
           },
           "quantity": {
             "title": "Quantity",
@@ -395,7 +417,9 @@
           "product_id",
           "category",
           "applies_to_position",
-          "match_source"
+          "match_source",
+          "product_name",
+          "product_category"
         ],
         "title": "LineItemOut",
         "type": "object"
@@ -936,6 +960,9 @@
             ],
             "title": "Purchased On"
           },
+          "savings": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
           "stage": {
             "$ref": "#/components/schemas/ProcessingStage"
           },
@@ -985,6 +1012,7 @@
           "total",
           "item_count",
           "created_at",
+          "savings",
           "stage",
           "subtotal",
           "tax",
@@ -1035,6 +1063,7 @@
         "type": "string"
       },
       "ReceiptSummaryOut": {
+        "description": "``item_count`` counts the ITEM lines (not discounts, deposits or fees); ``savings``\n(>= 0) is what the receipt's discount lines took off.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -1061,6 +1090,9 @@
             ],
             "title": "Purchased On"
           },
+          "savings": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
           "status": {
             "$ref": "#/components/schemas/ReceiptStatus"
           },
@@ -1086,7 +1118,8 @@
           "purchased_on",
           "total",
           "item_count",
-          "created_at"
+          "created_at",
+          "savings"
         ],
         "title": "ReceiptSummaryOut",
         "type": "object"
@@ -1939,7 +1972,7 @@
     },
     "/api/receipts": {
       "get": {
-        "description": "Receipts newest first. A bad cursor or limit is a 422 problem.",
+        "description": "Receipts by purchase date, newest first (undated last, then newest recorded first). A bad\ncursor or limit is a 422 problem.",
         "operationId": "listReceipts",
         "parameters": [
           {
@@ -2127,7 +2160,7 @@
     },
     "/api/receipts/{receipt_id}": {
       "get": {
-        "description": "One receipt with its lines and an arithmetic report computed from the current data.",
+        "description": "One receipt with its lines (and the products they link to) and an arithmetic report\ncomputed from the current data.",
         "operationId": "getReceipt",
         "parameters": [
           {

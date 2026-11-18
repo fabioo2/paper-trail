@@ -29,6 +29,15 @@ describe("formatMoney", () => {
     );
   });
 
+  it("shows Canadian dollars as a bare $ where the locale would say CA$", () => {
+    expect(formatMoney({ amount_cents: 609, currency: "CAD" }, "en-US")).toBe(
+      "$6.09",
+    );
+    expect(formatMoney({ amount_cents: 609, currency: "USD" }, "en-CA")).toBe(
+      "US$6.09",
+    );
+  });
+
   it("S1-AC-27: follows the locale's conventions", () => {
     expect(
       formatMoney({ amount_cents: 123456, currency: "CAD" }, "fr-CA"),
