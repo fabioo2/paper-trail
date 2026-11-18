@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { ClipboardCheck, CloudOff } from "lucide-react";
+import { ChevronRight, ClipboardCheck, CloudOff } from "lucide-react";
 import { useEffect } from "react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useProductsToCheck } from "@/features/products/api";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import { type ReviewSummaryOut, useReviewList } from "@/features/reviews/api";
@@ -14,9 +15,10 @@ import { formatAge, reasonText } from "@/features/reviews/draft-form";
 const SKELETON_ROWS = 4;
 const LOAD_ERROR_TOAST = "reviews-load-error";
 
-/** The Review tab: every receipt waiting for a person, newest first. */
+/** The Review tab: the products to check, then every receipt waiting for a person, newest first. */
 export function ReviewList() {
   const reviews = useReviewList();
+  const toCheck = useProductsToCheck();
   const { isError, refetch } = reviews;
 
   useEffect(() => {
@@ -36,17 +38,27 @@ export function ReviewList() {
     });
   }, [isError, refetch]);
 
+  const products = toCheck.isError ? (
+    <ProductsToCheckRow count={null} />
+  ) : toCheck.data?.length ? (
+    <ProductsToCheckRow count={toCheck.data.length} />
+  ) : null;
+
   if (reviews.isPending) return <ReviewListSkeleton />;
   if (reviews.isError) {
     return (
-      <EmptyState
-        icon={CloudOff}
-        title="Reviews are unavailable"
-        description="Paper Trail could not reach the server. Retry from the notice once you are back online."
-      />
+      <>
+        {products ? <div className="px-4 pt-4">{products}</div> : null}
+        <EmptyState
+          icon={CloudOff}
+          title="Reviews are unavailable"
+          description="Paper Trail could not reach the server. Retry from the notice once you are back online."
+        />
+      </>
     );
   }
-  if (reviews.data.length === 0) {
+  if (reviews.data.length === 0 && !products) {
+    if (toCheck.isPending) return <ReviewListSkeleton />;
     return (
       <EmptyState
         icon={ClipboardCheck}
@@ -64,14 +76,42 @@ export function ReviewList() {
       <h1 id="reviews-heading" className="text-xl font-semibold tracking-tight">
         To review
       </h1>
-      <ul className="divide-y rounded-xl border bg-card">
-        {reviews.data.map((review) => (
-          <li key={review.id}>
-            <ReviewRow review={review} />
-          </li>
-        ))}
-      </ul>
+      {products}
+      {reviews.data.length > 0 ? (
+        <ul className="divide-y rounded-xl border bg-card">
+          {reviews.data.map((review) => (
+            <li key={review.id}>
+              <ReviewRow review={review} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
+  );
+}
+
+/** The way into the product queue; `count` is null when the list could not be read. */
+function ProductsToCheckRow({ count }: { count: number | null }) {
+  return (
+    <Link
+      to="/products/check"
+      className="flex min-h-16 items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+    >
+      <div className="min-w-0">
+        <p className="font-medium">
+          Products to check{count === null ? "" : ` (${String(count)})`}
+        </p>
+        <p className="truncate text-sm text-muted-foreground">
+          {count === null
+            ? "Couldn't count them right now. Open the list to try again."
+            : "Confirm or fix what Claude guessed, one product at a time."}
+        </p>
+      </div>
+      <ChevronRight
+        aria-hidden="true"
+        className="size-5 shrink-0 text-muted-foreground"
+      />
+    </Link>
   );
 }
 

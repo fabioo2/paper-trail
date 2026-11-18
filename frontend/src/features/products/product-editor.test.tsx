@@ -11,6 +11,7 @@ import {
 import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
+import { textOf } from "@/test/text";
 
 const sizeProblem: ProblemDetail = {
   type: "/problems/validation",
@@ -57,8 +58,17 @@ async function openEditor(user: UserEvent): Promise<void> {
 }
 
 describe("Product editor", () => {
-  it("prefills the fields and marks the guessed ones suggested", async () => {
-    serveProduct();
+  it("prefills the fields, marks the guessed ones AI and says where the others came from", async () => {
+    serveProduct(
+      product({
+        field_sources: {
+          canonical_name: "llm",
+          brand: "off",
+          size: "person",
+          category: "llm",
+        },
+      }),
+    );
     const user = userEvent.setup();
 
     renderApp("/products/5");
@@ -73,13 +83,11 @@ describe("Product editor", () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/^category/i)).toHaveValue("dairy_eggs");
     });
-    const suggested = ["Name", "Brand", "Size", "Category", "Tags"].filter(
-      (label) =>
-        within(screen.getByText(label, { selector: "label" })).queryByText(
-          "Suggested",
-        ) !== null,
-    );
-    expect(suggested).toEqual(["Name", "Category"]);
+    expect(
+      ["Name", "Brand", "Size", "Category", "Tags"].map((label) =>
+        textOf(screen.getByText(label, { selector: "label" })),
+      ),
+    ).toEqual(["NameAI", "Brandbarcode", "Sizeyou", "CategoryAI", "Tags"]);
   });
 
   it("saves only the changed fields, then returns to the refreshed list", async () => {

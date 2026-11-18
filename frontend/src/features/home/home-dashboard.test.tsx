@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SUMMARY_POLL_INTERVAL_MS } from "@/features/home/api";
-import { productSummary } from "@/test/fixtures/products";
+import { product, productToCheck } from "@/test/fixtures/products";
 import { cad, receiptSummary } from "@/test/fixtures/receipts";
 import { monthSummary, type MonthSummaryOut } from "@/test/fixtures/summary";
 import { server } from "@/test/msw/server";
@@ -105,10 +105,8 @@ describe("Home", () => {
       within(needs).getByRole("link", { name: "2 receipts to review" }),
     ).toHaveAttribute("href", "/review");
     expect(
-      within(needs).getByRole("link", {
-        name: "34 products have guessed details",
-      }),
-    ).toHaveAttribute("href", "/products?needsALook=true");
+      within(needs).getByRole("link", { name: "34 products to check" }),
+    ).toHaveAttribute("href", "/products/check");
 
     const recent = await card("Recent");
     expect(
@@ -122,23 +120,24 @@ describe("Home", () => {
     ]);
   });
 
-  it("opens Products on the unconfirmed ones from Needs you", async () => {
+  it("opens the products to check from Needs you", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     serveSummary(monthSummary({ ...november, open_reviews: 0 }));
     server.use(
-      http.get("/api/products", () => HttpResponse.json([productSummary()])),
+      http.get("/api/products/to-check", () =>
+        HttpResponse.json([productToCheck()]),
+      ),
+      http.get("/api/products/:productId", () => HttpResponse.json(product())),
     );
 
     renderApp("/");
     await user.click(
       within(await card("Needs you")).getByRole("link", {
-        name: /guessed details/,
+        name: /to check/,
       }),
     );
 
-    expect(
-      await screen.findByRole("button", { name: /needs a look/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByText("1 of 1 to check")).toBeInTheDocument();
   });
 
   it("invites a brand-new install to scan its first receipt", async () => {

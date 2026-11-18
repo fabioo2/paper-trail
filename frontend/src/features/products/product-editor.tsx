@@ -2,18 +2,22 @@ import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, type SyntheticEvent, useId, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   type Category,
+  type FieldSource,
   type ProductOut,
   type ProductUpdateIn,
+  isStale,
+  STALE_MESSAGE,
+  shownValues,
   sizeText,
   useCategories,
   useConfirmProduct,
   useUpdateProduct,
 } from "@/features/products/api";
+import { FieldSourceMark } from "@/features/products/field-source";
 
 interface Fields {
   canonical_name: string;
@@ -77,20 +81,22 @@ export function ProductEditor({ product }: { product: ProductOut }) {
   };
   const accept = () => {
     update.reset();
-    confirm.mutate(undefined, {
-      onSuccess: () => {
-        done("Product confirmed");
+    confirm.mutate(
+      { expected: shownValues(product) },
+      {
+        onSuccess: () => {
+          done("Product confirmed");
+        },
       },
-    });
+    );
   };
   const set = (key: keyof Fields) => (event: { target: { value: string } }) => {
     setFields((current) => ({ ...current, [key]: event.target.value }));
   };
-  const suggested = (key: string) => product.field_sources[key] === "llm";
 
   return (
     <form className="flex flex-col gap-4" onSubmit={save}>
-      <Field label="Name" suggested={suggested("canonical_name")}>
+      <Field label="Name" source={product.field_sources.canonical_name}>
         {(id) => (
           <Input
             id={id}
@@ -101,7 +107,7 @@ export function ProductEditor({ product }: { product: ProductOut }) {
           />
         )}
       </Field>
-      <Field label="Brand" suggested={suggested("brand")}>
+      <Field label="Brand" source={product.field_sources.brand}>
         {(id) => (
           <Input
             id={id}
@@ -111,7 +117,7 @@ export function ProductEditor({ product }: { product: ProductOut }) {
           />
         )}
       </Field>
-      <Field label="Size" suggested={suggested("size")}>
+      <Field label="Size" source={product.field_sources.size}>
         {(id) => (
           <Input
             id={id}
@@ -121,7 +127,7 @@ export function ProductEditor({ product }: { product: ProductOut }) {
           />
         )}
       </Field>
-      <Field label="Category" suggested={suggested("category")}>
+      <Field label="Category" source={product.field_sources.category}>
         {(id) => (
           <select
             id={id}
@@ -142,7 +148,7 @@ export function ProductEditor({ product }: { product: ProductOut }) {
           </select>
         )}
       </Field>
-      <Field label="Tags" suggested={suggested("tags")}>
+      <Field label="Tags" source={product.field_sources.tags}>
         {(id) => (
           <Input
             id={id}
@@ -154,7 +160,7 @@ export function ProductEditor({ product }: { product: ProductOut }) {
       </Field>
       {error ? (
         <p role="alert" className="text-sm text-destructive">
-          {error.message}
+          {isStale(error) ? STALE_MESSAGE : error.message}
         </p>
       ) : null}
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
@@ -183,11 +189,11 @@ export function ProductEditor({ product }: { product: ProductOut }) {
 
 function Field({
   label,
-  suggested,
+  source,
   children,
 }: {
   label: string;
-  suggested: boolean;
+  source: FieldSource | undefined;
   children: (id: string) => ReactNode;
 }) {
   const id = useId();
@@ -198,11 +204,7 @@ function Field({
         className="flex items-center gap-2 text-sm font-medium"
       >
         {label}
-        {suggested ? (
-          <Badge variant="outline" className="border-warning">
-            Suggested
-          </Badge>
-        ) : null}
+        <FieldSourceMark source={source} />
       </label>
       {children(id)}
     </div>

@@ -85,6 +85,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/products/to-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List products to check
+         * @description Every bought product nobody has confirmed yet, most bought first, then the newest
+         *     purchase, then the product id; each with its earliest receipt line as printed.
+         */
+        get: operations["listProductsToCheck"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/products/{product_id}": {
         parameters: {
             query?: never;
@@ -122,7 +143,9 @@ export interface paths {
         /**
          * Confirm a product
          * @description Accept the product's current values as the person's (every filled field stamped
-         *     ``person``); an unknown id is a 404 problem.
+         *     ``person``, or only the filled ``fields`` sent, the others' sources kept). A stored value
+         *     that differs from its ``expected`` one is a 409 problem (nothing written); an unknown id
+         *     a 404 problem.
          */
         post: operations["confirmProduct"];
         delete?: never;
@@ -394,6 +417,8 @@ export interface components {
          * @enum {string}
          */
         FieldSource: "receipt_text" | "person" | "plu" | "off" | "upc" | "llm" | "legacy_model";
+        /** @enum {string} */
+        FieldSourceKey: "canonical_name" | "brand" | "size" | "category" | "tags";
         /** HealthOut */
         HealthOut: {
             /** Build Sha */
@@ -533,6 +558,20 @@ export interface components {
          */
         ProcessingStage: "queued" | "reading" | "extracting" | "validating" | "matching" | "enriching" | "saving" | "done" | "needs_review" | "failed";
         /**
+         * ProductConfirmIn
+         * @description The fields to confirm (missing or null: every filled field) and, per field, the value
+         *     the person saw (``size`` as ``24 each``, null when empty); a stored value that differs
+         *     refuses the confirmation.
+         */
+        ProductConfirmIn: {
+            /** Expected */
+            expected?: {
+                [key: string]: string | string[] | null;
+            } | null;
+            /** Fields */
+            fields?: components["schemas"]["FieldSourceKey"][] | null;
+        };
+        /**
          * ProductOut
          * @description ``field_sources`` maps each stamped field (``canonical_name``, ``brand``, ``size``,
          *     ``category``, ``tags``) to where it came from; ``llm`` is a guess to show as suggested.
@@ -601,6 +640,21 @@ export interface components {
             size_value: string | null;
             /** Tags */
             tags: string[];
+            /** Times Bought */
+            times_bought: number;
+        };
+        /**
+         * ProductToCheckOut
+         * @description A bought product nobody has confirmed yet: ``raw_text`` is its earliest receipt line as
+         *     printed, ``times_bought`` counts its receipt lines.
+         */
+        ProductToCheckOut: {
+            /** Name */
+            name: string;
+            /** Product Id */
+            product_id: number;
+            /** Raw Text */
+            raw_text: string;
             /** Times Bought */
             times_bought: number;
         };
@@ -1060,6 +1114,44 @@ export interface operations {
             };
         };
     };
+    listProductsToCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductToCheckOut"][];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     getProduct: {
         parameters: {
             query?: never;
@@ -1171,7 +1263,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProductConfirmIn"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1184,6 +1280,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

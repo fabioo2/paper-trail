@@ -79,7 +79,7 @@ describe("Products tab", () => {
     );
   });
 
-  it("lists each product with brand, size, category, how often and where it was last bought, and a suggested badge", async () => {
+  it("lists each product with brand, size, category, how often and where it was last bought, and a dot for AI guesses", async () => {
     serveProducts();
 
     renderApp("/products");
@@ -100,8 +100,11 @@ describe("Products tab", () => {
       "Pantry",
     ])
       expect(textOf(milkRow)).toContain(part);
-    expect(within(eggsRow).getByText("Suggested")).toBeInTheDocument();
-    expect(within(milkRow).queryByText("Suggested")).toBeNull();
+    expect(
+      within(eggsRow).getByRole("img", { name: "Has AI guesses" }),
+    ).toBeInTheDocument();
+    expect(within(milkRow).queryByRole("img")).toBeNull();
+    expect(textOf(eggsRow)).not.toContain("Suggested");
     expect(
       [eggsRow, milkRow].map((row) =>
         row.querySelector("[data-category]")?.getAttribute("style"),
