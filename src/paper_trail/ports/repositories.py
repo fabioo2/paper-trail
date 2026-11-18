@@ -128,7 +128,8 @@ class ProductRepository(Protocol):
     def summaries(self) -> tuple[ProductSummary, ...]:
         """Every product with at least one ITEM line, by name (ignoring case), then id; each
         with its ITEM line count and newest line: the latest receipt date (an undated receipt
-        only when none is dated), then the highest receipt id and line position."""
+        only when none is dated), then the highest receipt id and line position. ``recent`` is
+        the dated ones among its ``RECENT_PRICE_POINTS`` newest lines, in that order."""
         ...
 
     def unconfirmed_count(self) -> int:

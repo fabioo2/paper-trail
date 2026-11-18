@@ -43,6 +43,22 @@ export function productSummary(
       store_name: "COSTCO WHOLESALE #1234",
       paid: cad(899),
     },
+    recent: [],
+    ...overrides,
+  };
+}
+
+export type PricePointOut = Schemas["PricePointOut"];
+
+export function pricePoint(
+  overrides: Partial<PricePointOut> = {},
+): PricePointOut {
+  return {
+    purchased_on: "2026-11-01",
+    store_name: "COSTCO WHOLESALE #1234",
+    quantity: "1",
+    unit: null,
+    paid: cad(899),
     ...overrides,
   };
 }

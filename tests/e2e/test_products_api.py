@@ -83,6 +83,15 @@ def test_the_list_shows_each_bought_product_with_its_last_purchase(
                 "store_name": STORE_NAME,
                 "paid": {"amount_cents": 899, "currency": "CAD"},
             },
+            "recent": [
+                {
+                    "purchased_on": PURCHASED_ON.isoformat(),
+                    "store_name": STORE_NAME,
+                    "quantity": "1",
+                    "unit": None,
+                    "paid": {"amount_cents": 899, "currency": "CAD"},
+                }
+            ],
         }
     ]
 

@@ -557,6 +557,24 @@ export interface components {
             /** Weeks */
             weeks: components["schemas"]["WeekSpendOut"][];
         };
+        /**
+         * PricePointOut
+         * @description One dated purchase for a price trend: ``paid`` for ``quantity`` of ``unit`` (null:
+         *     unknown, compared as each).
+         */
+        PricePointOut: {
+            paid: components["schemas"]["MoneyOut"];
+            /**
+             * Purchased On
+             * Format: date
+             */
+            purchased_on: string;
+            /** Quantity */
+            quantity: string;
+            /** Store Name */
+            store_name: string;
+            unit: components["schemas"]["LineUnit"] | null;
+        };
         /** ProblemDetail */
         ProblemDetail: {
             /**
@@ -650,7 +668,7 @@ export interface components {
         /**
          * ProductSummaryOut
          * @description A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the
-         *     newest of them.
+         *     newest of them, ``recent`` the dated ones among its 12 newest, newest first.
          */
         ProductSummaryOut: {
             /** Brand */
@@ -667,6 +685,8 @@ export interface components {
             /** Id */
             id: number;
             last_purchase: components["schemas"]["LastPurchaseOut"];
+            /** Recent */
+            recent: components["schemas"]["PricePointOut"][];
             size_unit: components["schemas"]["Unit"] | null;
             /** Size Value */
             size_value: string | null;
