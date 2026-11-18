@@ -22,6 +22,7 @@ export const handlers = [
   http.get("/api/health", () => HttpResponse.json(healthyResponse)),
   http.get("/api/receipts", () => HttpResponse.json(receiptPage([]))),
   http.get("/api/products", () => HttpResponse.json([])),
+  http.get("/api/products/to-check", () => HttpResponse.json([])),
   http.get("/api/products/:productId/purchases", () => HttpResponse.json([])),
   http.get("/api/reviews", () => HttpResponse.json([])),
   http.get("/api/categories", () => HttpResponse.json(categories)),

@@ -9,6 +9,7 @@ import {
 
 import { HomePage } from "@/routes/home-page";
 import { NotFoundPage } from "@/routes/not-found-page";
+import { ProductCheckPage } from "@/routes/product-check-page";
 import { ProductDetailPage } from "@/routes/product-detail-page";
 import { ProductsPage } from "@/routes/products-page";
 import { ReceiptDetailPage } from "@/routes/receipt-detail-page";
@@ -64,6 +65,11 @@ const pageRoutes = [
     component: ProductsPage,
     validateSearch: (search: Record<string, unknown>): ProductsSearch =>
       search.needsALook === true ? { needsALook: true } : {},
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/products/check",
+    component: ProductCheckPage,
   }),
   createRoute({
     getParentRoute: () => rootRoute,

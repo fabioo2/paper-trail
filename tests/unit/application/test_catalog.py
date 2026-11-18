@@ -243,12 +243,14 @@ def _row(  # noqa: PLR0913, PLR0917 - one TodoRow
     times: int,
     paid: int | None,
     day: int | None,
+    raw: str,
 ) -> TodoRow:
     url = COSTCO_URL.format(code.code) if code is not None and code.store_key == "costco" else None
     return TodoRow(
         product_id=product_id,
         name=name,
         name_source=FieldSource.RECEIPT_TEXT,
+        raw_text=raw,
         code=code,
         times_bought=times,
         last_paid=None if paid is None else cad(paid),
@@ -259,10 +261,10 @@ def _row(  # noqa: PLR0913, PLR0917 - one TodoRow
 
 def _todo_rows(ids: Todo) -> list[TodoRow]:
     return [
-        _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3),
-        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 2, 899, 2),
-        _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1),
-        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1),
+        _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3, C1),
+        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 2, 899, 2, L1),
+        _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1, C2),
+        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1, U1),
     ]
 
 
@@ -371,9 +373,9 @@ def test_pc_tc_103_a_barcode_bought_at_two_stores_is_counted_per_store(
     todo = CatalogTodo(factory)
 
     assert [todo()[0], *todo(store="loblaws"), *todo(store="walmart")] == [
-        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 3, 999, 5),
-        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 2, 899, 2),
-        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 1, 999, 5),
+        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 3, 999, 5, L1),
+        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 2, 899, 2, L1),
+        _row(WIPES, ids.wipes, "PC UNS BABYWIPES", 1, 999, 5, L1),
     ]
 
 
@@ -394,10 +396,10 @@ def test_pc_tc_103_ties_go_to_the_newest_date_then_the_product_and_undated_last(
     _bought(factory, STORE_NAME, None, ("4444444 D", 400, pids["4444444 D"]))
 
     assert list(CatalogTodo(factory)()) == [
-        _row(codes["2222222 B"], pids["2222222 B"], "B", 1, 200, 3),
-        _row(codes["1111111 C"], pids["1111111 C"], "C", 1, 300, 3),
-        _row(codes["3333333 A"], pids["3333333 A"], "A", 1, 100, 1),
-        _row(codes["4444444 D"], pids["4444444 D"], "D", 1, None, None),
+        _row(codes["2222222 B"], pids["2222222 B"], "B", 1, 200, 3, "2222222 B"),
+        _row(codes["1111111 C"], pids["1111111 C"], "C", 1, 300, 3, "1111111 C"),
+        _row(codes["3333333 A"], pids["3333333 A"], "A", 1, 100, 1, "3333333 A"),
+        _row(codes["4444444 D"], pids["4444444 D"], "D", 1, None, None, "4444444 D"),
     ]
 
 
@@ -409,9 +411,9 @@ def test_a_product_with_two_codes_is_listed_once_with_its_first(
     _code(factory, second, ids.choc)
 
     assert list(CatalogTodo(factory)(store="costco")) == [
-        _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3),
-        _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1),
-        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1),
+        _row(CHOC, ids.choc, "CHOC PISTACH", 3, 1299, 3, C1),
+        _row(KIWI, ids.kiwi, "GOLD KIWI", 1, 1599, 1, C2),
+        _row(None, ids.loose, "KS ORG EGGS 24CT", 1, 899, 1, U1),
     ]
 
 
@@ -423,7 +425,7 @@ def test_pc_tc_156_todo_after_add_product(factory: UnitOfWorkFactory, add: AddCa
     add(CodeNaming("costco", "1362394", product_id=ids.eggs))
 
     assert list(CatalogTodo(factory)()) == [
-        _row(None, ids.choc, "CHOC PISTACH", 3, 1299, 3),
+        _row(None, ids.choc, "CHOC PISTACH", 3, 1299, 3, C1),
         *_todo_rows(ids)[1:],
     ]
 

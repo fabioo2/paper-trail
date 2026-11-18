@@ -5,9 +5,9 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from paper_trail.application.catalog import ProductEdit
+from paper_trail.application.catalog import ProductEdit, TodoRow
 from paper_trail.application.enrichment import MAX_NAME_CHARS, MAX_TAG_CHARS
-from paper_trail.application.payloads import MAX_TAGS
+from paper_trail.application.payloads import MAX_TAGS, FieldSourceKey
 from paper_trail.domain.enums import Category, FieldSource, Unit
 from paper_trail.domain.models import (
     LastPurchase,
@@ -127,3 +127,33 @@ class ProductUpdateIn(BaseModel):
             category=self.category,
             tags=None if self.tags is None else tuple(self.tags),
         )
+
+
+class ProductToCheckOut(BaseModel):
+    """A bought product nobody has confirmed yet: ``raw_text`` is its earliest receipt line as
+    printed, ``times_bought`` counts its receipt lines."""
+
+    product_id: int
+    name: str
+    raw_text: str
+    times_bought: int
+
+    @classmethod
+    def from_row(cls, row: TodoRow) -> "ProductToCheckOut":
+        return cls(
+            product_id=row.product_id,
+            name=row.name,
+            raw_text=row.raw_text,
+            times_bought=row.times_bought,
+        )
+
+
+class ProductConfirmIn(BaseModel):
+    """The fields to confirm (missing or null: every filled field) and, per field, the value
+    the person saw (``size`` as ``24 each``, null when empty); a stored value that differs
+    refuses the confirmation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[FieldSourceKey] | None = Field(default=None, min_length=1)
+    expected: dict[FieldSourceKey, str | list[str] | None] | None = None

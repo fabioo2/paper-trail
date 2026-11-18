@@ -307,11 +307,10 @@ function NeedsYouCard({ summary }: { summary: MonthSummaryOut }) {
         {products > 0 ? (
           <li>
             <Link
-              to="/products"
-              search={{ needsALook: true }}
+              to="/products/check"
               className="font-medium underline-offset-4 hover:underline"
             >
-              {plural(products, "product has", "products have")} guessed details
+              {plural(products, "product", "products")} to check
             </Link>
           </li>
         ) : null}

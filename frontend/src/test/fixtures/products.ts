@@ -47,6 +47,20 @@ export function productSummary(
   };
 }
 
+export type ProductToCheckOut = Schemas["ProductToCheckOut"];
+
+export function productToCheck(
+  overrides: Partial<ProductToCheckOut> = {},
+): ProductToCheckOut {
+  return {
+    product_id: 5,
+    name: "Kirkland Organic Eggs",
+    raw_text: "KS ORG EGGS 24CT",
+    times_bought: 2,
+    ...overrides,
+  };
+}
+
 export function productPurchase(
   overrides: Partial<ProductPurchaseOut> = {},
 ): ProductPurchaseOut {

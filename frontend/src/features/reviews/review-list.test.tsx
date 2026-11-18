@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
+import { productToCheck } from "@/test/fixtures/products";
 import { cad } from "@/test/fixtures/receipts";
 import { dateIssue, review, reviewSummary } from "@/test/fixtures/reviews";
 import { server } from "@/test/msw/server";
@@ -73,8 +74,119 @@ describe("Review list", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the count of waiting receipts on the Review tab", async () => {
+  it.each([
+    ["with no receipt waiting", []],
+    ["above the waiting receipts", [reviewSummary()]],
+  ])(
+    "links to the products to check, with their count, %s",
+    async (_, reviews) => {
+      serveReviews(...reviews);
+      server.use(
+        http.get("/api/products/to-check", () =>
+          HttpResponse.json([
+            productToCheck(),
+            productToCheck({ product_id: 6 }),
+          ]),
+        ),
+      );
+
+      renderApp("/review");
+
+      const entry = await screen.findByRole("link", {
+        name: /products to check/i,
+      });
+      expect(textOf(entry)).toBe(
+        "Products to check (2)Confirm or fix what Claude guessed, one product at a time.",
+      );
+      expect(entry).toHaveAttribute("href", "/products/check");
+      expect(
+        within(screen.getByRole("main")).queryAllByRole("listitem"),
+      ).toHaveLength(reviews.length);
+    },
+  );
+
+  it.each([
+    ["no receipt waiting", []],
+    ["receipts waiting", [reviewSummary()]],
+  ])(
+    "keeps the way into the products to check when they cannot be counted, with %s",
+    async (_, reviews) => {
+      serveReviews(...reviews);
+      server.use(
+        http.get("/api/products/to-check", () =>
+          HttpResponse.json(null, { status: 500 }),
+        ),
+      );
+
+      renderApp("/review");
+
+      const entry = await screen.findByRole("link", {
+        name: /products to check/i,
+      });
+      expect(textOf(entry)).toBe(
+        "Products to checkCouldn't count them right now. Open the list to try again.",
+      );
+      expect(entry).toHaveAttribute("href", "/products/check");
+      expect(
+        screen.queryByRole("heading", { name: "Nothing to review" }),
+      ).toBeNull();
+    },
+  );
+
+  it("still offers the products to check when the receipts cannot be loaded", async () => {
+    server.use(
+      http.get("/api/reviews", () => HttpResponse.json(null, { status: 500 })),
+      http.get("/api/products/to-check", () =>
+        HttpResponse.json([productToCheck()]),
+      ),
+    );
+
+    renderApp("/review");
+
+    expect(
+      await screen.findByRole("heading", { name: "Reviews are unavailable" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: /products to check \(1\)/i }),
+    ).toHaveAttribute("href", "/products/check");
+  });
+
+  it("waits for the products to check before saying there is nothing to review", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("/api/products/to-check", async () => {
+        await gate;
+        return HttpResponse.json([productToCheck()]);
+      }),
+    );
+
+    renderApp("/review");
+
+    const main = await screen.findByRole("main");
+    await waitFor(() => {
+      expect(
+        within(main).getByLabelText("Loading reviews"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Nothing to review" }),
+    ).toBeNull();
+    release();
+    expect(
+      await screen.findByRole("link", { name: /products to check \(1\)/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts only waiting receipts on the Review tab", async () => {
     serveReviews(reviewSummary(), reviewSummary({ id: 8 }));
+    server.use(
+      http.get("/api/products/to-check", () =>
+        HttpResponse.json([productToCheck()]),
+      ),
+    );
 
     renderApp("/scan");
 

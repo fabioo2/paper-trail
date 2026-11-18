@@ -17,6 +17,7 @@ import {
   useProductList,
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
+import { GuessDot } from "@/features/products/field-source";
 import { formatMoney } from "@/features/receipts/money";
 import { displayStoreName } from "@/features/receipts/store-name";
 
@@ -161,11 +162,7 @@ function ProductRow({
       <div className="min-w-0">
         <p className="flex items-center gap-2 font-medium">
           <span className="truncate">{product.canonical_name}</span>
-          {hasSuggestion(product) ? (
-            <Badge variant="outline" className="border-warning">
-              Suggested
-            </Badge>
-          ) : null}
+          {hasSuggestion(product) ? <GuessDot /> : null}
         </p>
         {details ? (
           <p className="truncate text-sm text-muted-foreground">{details}</p>

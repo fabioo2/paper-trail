@@ -8,9 +8,11 @@ from fastapi import APIRouter
 from paper_trail.interfaces.web.dependencies import ContainerDep
 from paper_trail.interfaces.web.errors import problem_responses
 from paper_trail.interfaces.web.schemas.products import (
+    ProductConfirmIn,
     ProductOut,
     ProductPurchaseOut,
     ProductSummaryOut,
+    ProductToCheckOut,
     ProductUpdateIn,
 )
 
@@ -26,6 +28,13 @@ def list_products(container: ContainerDep) -> list[ProductSummaryOut]:
     """Every product with at least one receipt line, by name, each with how often it was
     bought and its newest purchase."""
     return [ProductSummaryOut.from_summary(summary) for summary in container.list_products()]
+
+
+@router.get("/to-check", operation_id="listProductsToCheck", summary="List products to check")
+def list_products_to_check(container: ContainerDep) -> list[ProductToCheckOut]:
+    """Every bought product nobody has confirmed yet, most bought first, then the newest
+    purchase, then the product id; each with its earliest receipt line as printed."""
+    return [ProductToCheckOut.from_row(row) for row in container.catalog_todo()]
 
 
 @router.get(
@@ -70,9 +79,15 @@ def update_product(container: ContainerDep, product_id: int, body: ProductUpdate
     "/{product_id}/confirm",
     operation_id="confirmProduct",
     summary="Confirm a product",
-    responses=problem_responses(HTTPStatus.NOT_FOUND),
+    responses=problem_responses(HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT),
 )
-def confirm_product(container: ContainerDep, product_id: int) -> ProductOut:
+def confirm_product(
+    container: ContainerDep, product_id: int, body: ProductConfirmIn | None = None
+) -> ProductOut:
     """Accept the product's current values as the person's (every filled field stamped
-    ``person``); an unknown id is a 404 problem."""
-    return ProductOut.from_domain(container.confirm_product(product_id))
+    ``person``, or only the filled ``fields`` sent, the others' sources kept). A stored value
+    that differs from its ``expected`` one is a 409 problem (nothing written); an unknown id
+    a 404 problem."""
+    if body is None:
+        return ProductOut.from_domain(container.confirm_product(product_id))
+    return ProductOut.from_domain(container.confirm_product(product_id, body.fields, body.expected))

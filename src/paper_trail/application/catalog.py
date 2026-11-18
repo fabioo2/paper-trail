@@ -21,7 +21,7 @@ import os
 import re
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -201,14 +201,15 @@ def parse_size(text: str) -> tuple[Decimal, Unit]:
 class TodoRow:
     """A product nobody has confirmed yet (its name printed or guessed), coded or not, and how
     it was bought (at the asked store only, when one was asked). ``name_source`` is where its
-    name came from (``llm``: a guess). ``code`` is its first code (None: uncoded).
-    ``last_paid``/``last_date`` are the newest price observation's paid price and date (None
-    when its lines have none). ``lookup_url`` is the store's search link for the code, never
-    requested here."""
+    name came from (``llm``: a guess). ``raw_text`` is its earliest line as printed. ``code``
+    is its first code (None: uncoded). ``last_paid``/``last_date`` are the newest price
+    observation's paid price and date (None when its lines have none). ``lookup_url`` is the
+    store's search link for the code, never requested here."""
 
     product_id: int
     name: str
     name_source: FieldSource | None
+    raw_text: str
     code: CodeIdentity | None
     times_bought: int
     last_paid: Money | None
@@ -254,6 +255,7 @@ class CatalogTodo:
                         product_id=product_id,
                         name=product.canonical_name,
                         name_source=product.field_sources.get("canonical_name"),
+                        raw_text=lines[0].line.raw_text,
                         code=None if code is None else code.identity,
                         times_bought=len(lines),
                         last_paid=None if newest is None else newest.paid,
@@ -272,20 +274,66 @@ class CatalogTodo:
         return tuple(rows if limit is None else rows[:limit])
 
 
+type ShownValue = str | Sequence[str] | None
+
+
+def shown_value(product: Product, key: FieldSourceKey) -> ShownValue:
+    """A field as the product endpoints show it: the size as ``<value> <unit>`` (``24 each``),
+    the category's value, the tags as a tuple; None when empty."""
+    match key:
+        case "canonical_name":
+            return product.canonical_name
+        case "brand":
+            return product.brand
+        case "size":
+            return (
+                None
+                if product.size_value is None or product.size_unit is None
+                else f"{product.size_value} {product.size_unit}"
+            )
+        case "category":
+            return None if product.category is None else product.category.value
+        case "tags":
+            return product.tags or None
+
+
+def _shown(value: ShownValue) -> ShownValue:
+    """``value`` as ``shown_value`` gives it: tags as a tuple, no tags as None."""
+    if value is None or isinstance(value, str):
+        return value
+    return tuple(value) or None
+
+
 class ConfirmProduct:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    def __call__(self, product_id: int) -> Product:
+    def __call__(
+        self,
+        product_id: int,
+        fields: Collection[FieldSourceKey] | None = None,
+        expected: Mapping[FieldSourceKey, ShownValue] | None = None,
+    ) -> Product:
         """Stamp every filled field of the product ``person``, values unchanged (an empty field
         stays empty and unstamped, so enrichment may still fill it), in one unit of work, and
-        return it as stored. Confirming twice writes nothing. NotFoundError (nothing written)
-        for an unknown product."""
+        return it as stored. ``fields`` stamps only those filled fields and keeps the other
+        fields' sources. ``expected`` is what the person saw (``shown_value``); ConflictError
+        (nothing written) when a stored value differs, as after enrichment wrote in between.
+        Confirming twice writes nothing. NotFoundError (nothing written) for an unknown
+        product."""
         with self._uow_factory() as uow:
             product = uow.products.get(product_id)
             if product is None:
                 msg = f"product {product_id} does not exist"
                 raise NotFoundError(msg)
+            changed = sorted(
+                key
+                for key, value in (expected or {}).items()
+                if shown_value(product, key) != _shown(value)
+            )
+            if changed:
+                msg = f"product {product_id} changed since it was shown: {', '.join(changed)}"
+                raise ConflictError(msg)
             filled = {
                 "canonical_name": True,
                 "brand": product.brand is not None,
@@ -293,7 +341,12 @@ class ConfirmProduct:
                 "category": product.category is not None,
                 "tags": bool(product.tags),
             }
-            sources = {key: FieldSource.PERSON for key, value in filled.items() if value}
+            stamped = {
+                key: FieldSource.PERSON
+                for key, value in filled.items()
+                if value and (fields is None or key in fields)
+            }
+            sources = stamped if fields is None else {**product.field_sources, **stamped}
             if sources == product.field_sources:
                 return product
             stored = uow.products.update(replace(product, field_sources=sources))

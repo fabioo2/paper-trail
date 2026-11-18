@@ -26,7 +26,12 @@ import pytest
 from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.sqlite.store_catalog import StoreCatalog
 from paper_trail.application.budget import BudgetedReader
-from paper_trail.application.catalog import ConfirmProduct
+from paper_trail.application.catalog import (
+    ConfirmProduct,
+    ShownValue,
+    describe_product,
+    shown_value,
+)
 from paper_trail.application.enrichment import (
     GUESS_TAG,
     EnrichCatalog,
@@ -34,8 +39,9 @@ from paper_trail.application.enrichment import (
     Throttle,
     guess_text,
 )
+from paper_trail.application.payloads import FieldSourceKey, ProductFieldsPayload
 from paper_trail.domain.enums import Category, CodeSource, FieldSource, MatchSource, Unit
-from paper_trail.domain.errors import NotFoundError
+from paper_trail.domain.errors import ConflictError, NotFoundError
 from paper_trail.domain.models import Product, ProductCode
 from paper_trail.domain.rules.item_codes import parse_code_field
 from paper_trail.ports.enrichment import EnrichOutcome, EnrichTarget
@@ -698,6 +704,80 @@ def test_confirm_stamps_the_filled_fields_person(
     assert database.commits == commits
     with pytest.raises(NotFoundError):
         confirm(product_id + 1)
+
+
+def test_confirming_some_fields_stamps_only_those_and_enrichment_keeps_them(
+    factory: UnitOfWorkFactory, database: ScratchDatabase
+) -> None:
+    """An empty field asked for stays unstamped; the others keep their sources; a later
+    describe writes over the unconfirmed guess only."""
+    guessed = product(
+        size_value=None,
+        size_unit=None,
+        field_sources={"canonical_name": LLM, "brand": OFF, "category": LLM, "tags": LLM},
+    )
+    product_id = _stored(factory, guessed)
+    confirm = ConfirmProduct(factory)
+
+    confirmed = confirm(product_id, ["category", "size"])
+    commits = database.commits
+    again = confirm(product_id, ["category"])
+    described = describe_product(
+        factory,
+        product_id,
+        fields=ProductFieldsPayload(name="Eggs", category=Category.PANTRY, tags=["eggs"]),
+        sources=dict.fromkeys(("canonical_name", "category", "tags"), LLM),
+        alias=PRINTED,
+        store_key="costco",
+    )
+
+    sources = {"canonical_name": LLM, "brand": OFF, "category": PERSON, "tags": LLM}
+    assert confirmed == again == replace(guessed, id=product_id, field_sources=sources)
+    assert database.commits == commits + 1
+    assert described == replace(confirmed, canonical_name="Eggs", tags=("eggs",))
+
+
+def test_a_confirmation_of_values_enrichment_changed_since_they_were_shown_is_refused(
+    factory: UnitOfWorkFactory, database: ScratchDatabase
+) -> None:
+    """The person saw the stored values; enrichment then committed a new guess; confirming
+    what they saw writes nothing. What is still as shown confirms."""
+    guessed = product(field_sources=dict.fromkeys(("canonical_name", "category", "tags"), LLM))
+    product_id = _stored(factory, guessed)
+    shown: dict[FieldSourceKey, ShownValue] = {
+        key: shown_value(guessed, key)
+        for key in ("canonical_name", "brand", "size", "category", "tags")
+    }
+    describe_product(
+        factory,
+        product_id,
+        fields=ProductFieldsPayload(category=Category.PANTRY, tags=["eggs"]),
+        sources=dict.fromkeys(("category", "tags"), LLM),
+        alias=PRINTED,
+        store_key="costco",
+    )
+    after_enrichment = _product(factory, product_id)
+    commits = database.commits
+    confirm = ConfirmProduct(factory)
+
+    with pytest.raises(ConflictError, match="changed since it was shown: category, tags"):
+        confirm(product_id, None, shown)
+    with pytest.raises(ConflictError):
+        confirm(product_id, ["category"], {"category": shown["category"]})
+    assert database.commits == commits
+    assert _product(factory, product_id) == after_enrichment
+
+    confirmed = confirm(
+        product_id,
+        ["canonical_name", "size"],
+        {"canonical_name": shown["canonical_name"], "size": "24 each", "tags": ["eggs"]},
+    )
+
+    assert confirmed.field_sources == {
+        "canonical_name": PERSON, "size": PERSON, "category": LLM, "tags": LLM,
+    }  # fmt: skip
+    assert shown["size"] == "24 each"
+    assert shown["tags"] == ("organic", "free-run")
 
 
 def _bought(factory: UnitOfWorkFactory, *product_ids: int) -> None:

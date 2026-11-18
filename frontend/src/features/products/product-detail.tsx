@@ -5,7 +5,6 @@ import { useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { EmptyState } from "@/components/empty-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -19,6 +18,7 @@ import {
   useProductPurchases,
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
+import { GuessDot } from "@/features/products/field-source";
 import { ProductEditor } from "@/features/products/product-editor";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
@@ -85,11 +85,7 @@ function ProductView({ product }: { product: ProductOut }) {
               <h1 className="text-xl font-semibold tracking-tight break-words">
                 {product.canonical_name}
               </h1>
-              {hasSuggestion(product) ? (
-                <Badge variant="outline" className="border-warning">
-                  Suggested
-                </Badge>
-              ) : null}
+              {hasSuggestion(product) ? <GuessDot /> : null}
             </div>
             {details ? (
               <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
