@@ -66,6 +66,10 @@ class JobQueue(Protocol):
         """Whether a job of ``kind`` for the receipt is PENDING or RUNNING."""
         ...
 
+    def latest(self, kind: JobKind, receipt_id: int) -> Job | None:
+        """The receipt's newest job of ``kind`` (highest id), whatever its status; None if none."""
+        ...
+
     def pending_count(self) -> int:
         """PENDING jobs, those scheduled for later included."""
         ...

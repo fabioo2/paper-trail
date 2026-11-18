@@ -401,22 +401,7 @@ class ResolveReview:
         return receipt
 
     def _remember(self, uow: UnitOfWork, receipt_id: int, forced_reason: str | None) -> None:
-        """Why a receipt that does not add up was kept, card numbers masked, as a correction."""
-        if forced_reason is None:
-            return
-        uow.corrections.add(
-            Correction(
-                id=None,
-                kind=CorrectionKind.FIELD,
-                subject=f"receipt:{receipt_id}.arithmetic",
-                old_value=None,
-                new_value=mask_pans(forced_reason.strip()).text,
-                store_key=None,
-                receipt_id=receipt_id,
-                line_item_id=None,
-                created_at=self._clock.now(),
-            )
-        )
+        remember_forced_reason(uow, receipt_id, forced_reason, self._clock.now())
 
     def check(
         self,
@@ -470,7 +455,9 @@ class AnswerReview:
     work, after checking the review is still OPEN with no answer queued or running: a second
     answer to the same review is a ConflictError, however close behind the first it comes. A
     review left OPEN beside a COMPLETED receipt (its run finished, closing it did not) is
-    closed instead, and the answer refused with a ConflictError."""
+    closed instead, and the answer refused with a ConflictError. So is an answer to a review
+    whose receipt is not NEEDS_REVIEW (a FAILED one is retried instead: its graph may already
+    have taken an earlier answer, which a new one would silently replace)."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory, resolve_review: ResolveReview) -> None:
         self._uow_factory = uow_factory
@@ -509,6 +496,12 @@ class AnswerReview:
                 msg = f"review {review_id} was already answered: its receipt is being saved"
                 raise ConflictError(msg)
             saved = receipt.status is ReceiptStatus.COMPLETED
+            if not saved and receipt.status is not ReceiptStatus.NEEDS_REVIEW:
+                msg = (
+                    f"receipt {receipt_id} is {receipt.status.value}, not waiting for this"
+                    " review: use Try again on the receipt"
+                )
+                raise ConflictError(msg)
             if saved:
                 uow.reviews.resolve(review_id)
             else:
@@ -542,8 +535,7 @@ class PendingReview:
 
 class ListPendingReviews:
     """The OPEN reviews a person can answer now, newest first, each with its pending
-    extraction. A review whose answer is queued or running, or whose receipt is COMPLETED
-    already, is left out."""
+    extraction: those whose receipt is NEEDS_REVIEW with no answer queued or running."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory, runner: ReceiptGraphRunner) -> None:
         self._uow_factory = uow_factory
@@ -556,7 +548,7 @@ class ListPendingReviews:
                 (review, receipt)
                 for review in reviews
                 if (receipt := uow.receipts.get(review.receipt_id)) is not None
-                and receipt.status is not ReceiptStatus.COMPLETED
+                and receipt.status is ReceiptStatus.NEEDS_REVIEW
                 and not uow.jobs.has_active(JobKind.RESOLVE_REVIEW, review.receipt_id)
             ]
         return tuple(
@@ -667,6 +659,27 @@ class ListReceipts:
         store_key = None if store is None else normalize_store_name(store)
         with self._uow_factory(read_only=True) as uow:
             return uow.receipts.list(page, status=status, store_key=store_key)
+
+
+def remember_forced_reason(
+    uow: UnitOfWork, receipt_id: int, forced_reason: str | None, now: datetime
+) -> None:
+    """Why a receipt that does not add up was kept, card numbers masked, as a correction."""
+    if forced_reason is None:
+        return
+    uow.corrections.add(
+        Correction(
+            id=None,
+            kind=CorrectionKind.FIELD,
+            subject=f"receipt:{receipt_id}.arithmetic",
+            old_value=None,
+            new_value=mask_pans(forced_reason.strip()).text,
+            store_key=None,
+            receipt_id=receipt_id,
+            line_item_id=None,
+            created_at=now,
+        )
+    )
 
 
 def _still_open(uow: UnitOfWork, review_id: int, receipt_id: int) -> bool:

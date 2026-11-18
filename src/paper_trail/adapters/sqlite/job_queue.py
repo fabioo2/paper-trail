@@ -165,6 +165,19 @@ class SqliteJobQueue:
         )
         return self._connection.execute(active).first() is not None
 
+    def latest(self, kind: JobKind, receipt_id: int) -> Job | None:
+        row = (
+            self._connection.execute(
+                select(jobs)
+                .where(jobs.c.kind == kind, jobs.c.receipt_id == receipt_id)
+                .order_by(jobs.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else job_from_row(row)
+
     def pending_count(self) -> int:
         count: int = self._connection.execute(
             select(func.count()).select_from(jobs).where(jobs.c.status == JobStatus.PENDING)

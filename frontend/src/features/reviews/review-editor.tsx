@@ -67,6 +67,24 @@ export function ReviewEditor({ reviewId }: { reviewId: number }) {
       </EmptyState>
     );
   }
+  if (review.data.receipt_status !== "needs_review") {
+    return (
+      <EmptyState
+        icon={TriangleAlert}
+        title="This receipt can't be reviewed now"
+        description="Reading it stopped part way. Open the receipt and tap Try again; if it still needs a look, the review comes back here."
+      >
+        <Button asChild variant="outline">
+          <Link
+            to="/receipts/$receiptId"
+            params={{ receiptId: String(review.data.receipt_id) }}
+          >
+            Open receipt
+          </Link>
+        </Button>
+      </EmptyState>
+    );
+  }
   return <ReviewForm key={review.data.id} review={review.data} />;
 }
 

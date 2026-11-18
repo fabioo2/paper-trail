@@ -18,15 +18,18 @@ from pathlib import PurePosixPath
 
 import structlog
 
+from paper_trail.application.payloads import ReviewAnswerPayload
+from paper_trail.application.receipts import remember_forced_reason
 from paper_trail.domain.enums import (
     AgentRole,
     FailureReason,
     JobKind,
     ProcessingStage,
     ReceiptStatus,
+    ReviewStatus,
 )
 from paper_trail.domain.errors import ConflictError, NotFoundError, UnsupportedMediaError
-from paper_trail.domain.models import Receipt, require_id
+from paper_trail.domain.models import Receipt, ReviewItem, require_id
 from paper_trail.domain.money import DEFAULT_CURRENCY
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.trace import TraceKind
@@ -45,7 +48,7 @@ from paper_trail.ports.reader import (
     ReaderUnavailableError,
 )
 from paper_trail.ports.trace import Tracer
-from paper_trail.ports.unit_of_work import UnitOfWorkFactory
+from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 log = structlog.get_logger(__name__)
 
@@ -253,15 +256,16 @@ class ProcessReceiptFile:
     def resume(self, receipt_id: int) -> ProcessOutcome:
         """Continue the receipt's thread from its last checkpoint (after a pause, a stopped
         read or a crash); failures as for ``__call__``. NotFoundError for an unknown receipt;
-        ConflictError when it waits for a review (``review resolve`` answers that) or has
-        nothing to resume. A receipt marked FAILED by a crash after its matches were saved is
-        COMPLETED again when the resumed run finishes."""
+        ConflictError when its thread waits for its OPEN review (``review resolve`` answers
+        that; a FAILED receipt is set NEEDS_REVIEW again first, as a retry does) or has nothing
+        to resume. A receipt marked FAILED by a crash after its matches were saved is
+        COMPLETED again when the resumed run finishes, closing a review the run had taken."""
         with self._uow_factory(read_only=True) as uow:
             receipt = uow.receipts.get(receipt_id)
-            review = uow.reviews.find_open(receipt_id)
         if receipt is None:
             msg = f"receipt {receipt_id} does not exist"
             raise NotFoundError(msg)
+        review = self._waits_for_review(receipt_id)
         if review is not None:
             msg = (
                 f"receipt {receipt_id} waits for review #{review.id}:"
@@ -280,14 +284,15 @@ class ProcessReceiptFile:
         read again. A thread still waiting for its OPEN review (an answer whose workers died
         before the graph took it) is not resumed, which would accept the reading: the receipt
         waits for a person again. A run that completes closes a review still OPEN (the answer
-        was taken before the workers died). Failures as for ``__call__``; ConflictError for a
-        receipt without a stored photo."""
+        was taken before the workers died), keeping a forced answer's reason. A fresh read
+        dismisses an OPEN review first: the thread it belonged to is gone. Failures as for
+        ``__call__``; ConflictError for a receipt without a stored photo."""
         receipt_id = require_id(receipt.id)
         image_path = receipt.image_path
         if image_path is None:
             msg = f"receipt {receipt_id} has no stored photo to read"
             raise ConflictError(msg)
-        if self._waits_for_review(receipt_id):
+        if self._waits_for_review(receipt_id) is not None:
             return ProcessOutcome(receipt_id=receipt_id, duplicate=False, graph=None)
         try:
             outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
@@ -299,6 +304,7 @@ class ProcessReceiptFile:
             if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
                 self._completed(receipt_id)
             return outcome
+        self._dismiss_open_review(receipt_id)
         return self._run(
             receipt_id,
             lambda: self._runner.start(
@@ -416,20 +422,37 @@ class ProcessReceiptFile:
         log.info("receipt.created", receipt_id=receipt_id)
         return receipt_id
 
-    def _waits_for_review(self, receipt_id: int) -> bool:
-        """When the receipt's OPEN review is still what its thread waits for, set it
-        NEEDS_REVIEW again and say so."""
+    def _waits_for_review(self, receipt_id: int) -> ReviewItem | None:
+        """The receipt's OPEN review when its thread still waits for it, else None. A FAILED or
+        PROCESSING receipt is set NEEDS_REVIEW again, only while, read again in the write unit
+        of work, the review is still OPEN and the receipt still FAILED or PROCESSING."""
         with self._uow_factory(read_only=True) as uow:
             review = uow.reviews.find_open(receipt_id)
         if review is None or not self._runner.waiting_for_review(receipt_id):
-            return False
+            return None
+        review_id = require_id(review.id)
         with self._uow_factory() as uow:
-            uow.receipts.update_status(
-                receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
-            )
-            uow.commit()
-        log.info("receipt.waits_for_review", receipt_id=receipt_id, review_id=review.id)
-        return True
+            current = uow.reviews.get(review_id)
+            receipt = uow.receipts.get(receipt_id)
+            if (
+                current is not None
+                and current.status is ReviewStatus.OPEN
+                and receipt is not None
+                and receipt.status in {ReceiptStatus.FAILED, ReceiptStatus.PROCESSING}
+            ):
+                uow.receipts.update_status(
+                    receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
+                )
+                uow.commit()
+                log.info("receipt.waits_for_review", receipt_id=receipt_id, review_id=review_id)
+        return review
+
+    def _dismiss_open_review(self, receipt_id: int) -> None:
+        with self._uow_factory() as uow:
+            review = uow.reviews.find_open(receipt_id)
+            if review is not None:
+                uow.reviews.dismiss(require_id(review.id))
+                uow.commit()
 
     def _completed(self, receipt_id: int) -> None:
         """A run that failed after its matches were saved (describing its new products) marked
@@ -446,6 +469,9 @@ class ProcessReceiptFile:
                 )
             review = uow.reviews.find_open(receipt_id)
             if receipt is not None and review is not None:
+                remember_forced_reason(
+                    uow, receipt_id, _forced_reason(uow, review), self._clock.now()
+                )
                 uow.reviews.resolve(require_id(review.id))
             uow.commit()
 
@@ -472,3 +498,12 @@ class ProcessReceiptFile:
         log.error("receipt.failed", receipt_id=receipt_id, error_type=type(error).__name__)
         log.debug("receipt.failed_detail", receipt_id=receipt_id, error=failure)
         return ProcessOutcome(receipt_id=receipt_id, duplicate=False, graph=None, failure=failure)
+
+
+def _forced_reason(uow: UnitOfWork, review: ReviewItem) -> str | None:
+    """The reason of a forced answer to ``review`` queued in the receipt's latest answer job."""
+    job = uow.jobs.latest(JobKind.RESOLVE_REVIEW, review.receipt_id)
+    if job is None:
+        return None
+    answer = ReviewAnswerPayload.model_validate(job.payload)
+    return answer.reason if answer.force and answer.review_id == review.id else None
