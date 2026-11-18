@@ -20,6 +20,7 @@ from paper_trail.domain.models import (
     ProductAlias,
     ProductCode,
     Receipt,
+    ReceiptSpend,
     ReceiptSummary,
     ReviewItem,
 )
@@ -90,6 +91,17 @@ def receipt_summary_from_row(row: RowMapping) -> ReceiptSummary:
         total=_money(row["total_cents"], row["currency"]),
         item_count=row["item_count"],
         created_at=row["created_at"],
+        savings=Money(row["savings_cents"], row["currency"]),
+    )
+
+
+def receipt_spend_from_row(row: RowMapping) -> ReceiptSpend:
+    """Some ``receipts`` columns plus a ``savings_cents`` column."""
+    return ReceiptSpend(
+        store_key=row["store_key"],
+        store_name=row["store_name"],
+        purchased_on=row["purchased_on"],
+        total=_money(row["total_cents"], row["currency"]),
         savings=Money(row["savings_cents"], row["currency"]),
     )
 

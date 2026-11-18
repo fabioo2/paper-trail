@@ -32,11 +32,15 @@ function matches(product: ProductSummaryOut, query: string): boolean {
 }
 
 /** The Products tab: every product bought, searchable, with the unconfirmed ones a tap away. */
-export function ProductList() {
+export function ProductList({
+  needsALook: startOnUnconfirmed = false,
+}: {
+  needsALook?: boolean;
+}) {
   const products = useProductList();
   const categories = useCategories();
   const [query, setQuery] = useState("");
-  const [needsALook, setNeedsALook] = useState(false);
+  const [needsALook, setNeedsALook] = useState(startOnUnconfirmed);
   const { isError, refetch } = products;
 
   useEffect(() => {

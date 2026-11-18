@@ -29,6 +29,11 @@ _SEARCH = text(
     """  # noqa: S608 - the interpolated values are enum constants, the query is a parameter
 )
 
+_PRODUCTS = text(
+    "SELECT rowid FROM products_fts WHERE products_fts MATCH :query"
+    " ORDER BY bm25(products_fts), rowid"
+)
+
 
 def fts_query(user_text: str) -> str | None:
     """The FTS5 query for ``user_text``: every word as a quoted prefix term; None if no words."""
@@ -51,3 +56,9 @@ class SqliteTextSearchIndex:
             TextHit(kind=HitKind(kind), id=hit_id, score=float(score))
             for kind, hit_id, score in rows
         )
+
+    def product_ids(self, query: str) -> tuple[int, ...]:
+        match = fts_query(query)
+        if match is None:
+            return ()
+        return tuple(self._connection.execute(_PRODUCTS, {"query": match}).scalars())

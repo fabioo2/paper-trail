@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
+import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
 export type ProductOut = Schemas["ProductOut"];
@@ -74,7 +75,10 @@ export function useUpdateProduct(id: number) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: productKeys.all }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: productKeys.all }),
+        queryClient.invalidateQueries({ queryKey: searchKeys.all }),
+      ]),
   });
 }
 
@@ -90,7 +94,10 @@ export function useConfirmProduct(id: number) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: productKeys.all }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: productKeys.all }),
+        queryClient.invalidateQueries({ queryKey: searchKeys.all }),
+      ]),
   });
 }
 

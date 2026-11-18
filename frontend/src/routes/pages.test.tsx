@@ -4,13 +4,7 @@ import { describe, expect, it } from "vitest";
 import { renderApp } from "@/test/render";
 import { textOf } from "@/test/text";
 
-const PAGES = [
-  "/scan",
-  "/receipts",
-  "/products",
-  "/search",
-  "/review",
-] as const;
+const PAGES = ["/", "/scan", "/receipts", "/products", "/review"] as const;
 const FORBIDDEN_COPY = /\b(todo|lorem|placeholder)\b/i;
 
 async function pageHeading(): Promise<{

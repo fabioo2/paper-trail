@@ -286,6 +286,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search products and receipts
+         * @description Products bought (name, brand, tag or category) and receipts (store name, or a line's
+         *     printed text, description or product), every word matching as a word prefix. Search syntax
+         *     is plain text. A query shorter than 2 or longer than 100 characters is a 422 problem.
+         */
+        get: operations["search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a month's summary
+         * @description Spending of the month's completed receipts by purchase date, by week and by store, plus
+         *     what is waiting now (open reviews, unconfirmed products, receipts being read) and the newest
+         *     receipts. A malformed month is a 422 problem.
+         */
+        get: operations["getSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -427,6 +471,36 @@ export interface components {
             amount_cents: number;
             /** Currency */
             currency: string;
+        };
+        /**
+         * MonthSummaryOut
+         * @description A month's completed receipts by purchase date: ``spent`` and ``saved`` one sum per
+         *     currency (``saved`` in ``spent``'s order), ``trips`` the receipts, ``weeks`` the 1st-7th,
+         *     8th-14th, 15th-21st and 22nd-end, ``stores`` one row per store and currency, largest first.
+         *     ``open_reviews``, ``unconfirmed_products``, ``processing`` and ``recent`` (the newest
+         *     receipts of any month and status) describe the app now, whatever the month.
+         */
+        MonthSummaryOut: {
+            /** Month */
+            month: string;
+            /** Open Reviews */
+            open_reviews: number;
+            /** Processing */
+            processing: number;
+            /** Recent */
+            recent: components["schemas"]["ReceiptSummaryOut"][];
+            /** Saved */
+            saved: components["schemas"]["MoneyOut"][];
+            /** Spent */
+            spent: components["schemas"]["MoneyOut"][];
+            /** Stores */
+            stores: components["schemas"]["StoreSpendOut"][];
+            /** Trips */
+            trips: number;
+            /** Unconfirmed Products */
+            unconfirmed_products: number;
+            /** Weeks */
+            weeks: components["schemas"]["WeekSpendOut"][];
         };
         /** ProblemDetail */
         ProblemDetail: {
@@ -593,6 +667,31 @@ export interface components {
             store_name: string;
             subtotal: components["schemas"]["MoneyOut"] | null;
             tax: components["schemas"]["MoneyOut"] | null;
+            total: components["schemas"]["MoneyOut"] | null;
+        };
+        /**
+         * ReceiptMatchOut
+         * @description A receipt found by a search: ``lines`` are the descriptions of its lines that matched
+         *     (empty when only the store name did).
+         */
+        ReceiptMatchOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Item Count */
+            item_count: number;
+            /** Lines */
+            lines: string[];
+            /** Purchased On */
+            purchased_on: string | null;
+            savings: components["schemas"]["MoneyOut"];
+            status: components["schemas"]["ReceiptStatus"];
+            /** Store Name */
+            store_name: string;
             total: components["schemas"]["MoneyOut"] | null;
         };
         /** ReceiptPageOut */
@@ -781,11 +880,43 @@ export interface components {
             /** Receipt Id */
             receipt_id: number;
         };
+        /** SearchOut */
+        SearchOut: {
+            /** Products */
+            products: components["schemas"]["ProductSummaryOut"][];
+            /** Receipts */
+            receipts: components["schemas"]["ReceiptMatchOut"][];
+        };
+        /** StoreSpendOut */
+        StoreSpendOut: {
+            spent: components["schemas"]["MoneyOut"];
+            /** Store Name */
+            store_name: string;
+        };
         /**
          * Unit
          * @enum {string}
          */
         Unit: "each" | "g" | "kg" | "ml" | "l" | "lb" | "oz";
+        /**
+         * WeekSpendOut
+         * @description ``start`` to ``end`` inclusive; ``spent`` one sum per currency, largest first (empty
+         *     when nothing was bought).
+         */
+        WeekSpendOut: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Spent */
+            spent: components["schemas"]["MoneyOut"][];
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -1508,6 +1639,87 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    search: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getSummary: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM; the server's current month by default */
+                month?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonthSummaryOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -5,6 +5,7 @@ transaction. Methods that stamp times use the injected clock.
 """
 
 from collections.abc import Collection, Mapping, Sequence
+from datetime import date
 from typing import Protocol
 
 from paper_trail.domain.enums import CodeScheme, CorrectionKind, ProcessingStage, ReceiptStatus
@@ -19,6 +20,8 @@ from paper_trail.domain.models import (
     ProductPurchase,
     ProductSummary,
     Receipt,
+    ReceiptMatch,
+    ReceiptSpend,
     ReceiptSummary,
 )
 from paper_trail.domain.money import Money
@@ -41,6 +44,23 @@ class ReceiptRepository(Protocol):
     ) -> Page[ReceiptSummary]:
         """Newest purchase first (purchased_on desc with undated last, then created_at desc, id
         desc). DomainValidationError on a bad cursor."""
+        ...
+
+    def count(self, status: ReceiptStatus) -> int:
+        """How many receipts have ``status``."""
+        ...
+
+    def spending(self, start: date, end: date) -> tuple[ReceiptSpend, ...]:
+        """The COMPLETED receipts purchased from ``start`` to ``end`` (inclusive), earliest
+        first (then by id)."""
+        ...
+
+    def matching(self, query: str, *, limit: int) -> tuple[ReceiptMatch, ...]:
+        """Receipts whose store name contains ``query`` (ignoring ASCII case; ``%`` and ``_``
+        are plain text) or with an ITEM line whose printed text or description, or whose
+        product's name, brand or tags, match every word of ``query`` as a prefix (in
+        ``TextSearchIndex.search``'s terms). The first ``limit`` in ``list`` order, each with
+        the descriptions of its matching ITEM lines by position."""
         ...
 
     def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
@@ -95,6 +115,10 @@ class ProductRepository(Protocol):
         """Every product with at least one ITEM line, by name (ignoring case), then id; each
         with its ITEM line count and newest line: the latest receipt date (an undated receipt
         only when none is dated), then the highest receipt id and line position."""
+        ...
+
+    def unconfirmed_count(self) -> int:
+        """How many of the products ``summaries`` lists are not confirmed (``is_confirmed``)."""
         ...
 
     def purchases(self, product_id: int) -> tuple[ProductPurchase, ...]:

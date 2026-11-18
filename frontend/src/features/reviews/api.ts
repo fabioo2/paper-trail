@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { receiptKeys } from "@/features/receipts/api";
+import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
 export type ReviewSummaryOut = Schemas["ReviewSummaryOut"];
@@ -57,6 +58,7 @@ export function useResolveReview(id: number) {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: reviewKeys.all }),
         queryClient.invalidateQueries({ queryKey: receiptKeys.all }),
+        queryClient.invalidateQueries({ queryKey: searchKeys.all }),
       ]),
   });
 }

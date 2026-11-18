@@ -7,6 +7,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 
+import { HomePage } from "@/routes/home-page";
 import { NotFoundPage } from "@/routes/not-found-page";
 import { ProductDetailPage } from "@/routes/product-detail-page";
 import { ProductsPage } from "@/routes/products-page";
@@ -22,21 +23,26 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
+export interface ProductsSearch {
+  /** Open the list on the products whose details were guessed. */
+  needsALook?: boolean;
+}
+
+export interface ResultsSearch {
+  q?: string;
+}
+
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: RootLayout,
   notFoundComponent: NotFoundPage,
 });
 
-const indexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  beforeLoad: () => {
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router's redirect protocol
-    throw redirect({ to: "/scan" });
-  },
-});
-
 const pageRoutes = [
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: HomePage,
+  }),
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/scan",
@@ -56,6 +62,8 @@ const pageRoutes = [
     getParentRoute: () => rootRoute,
     path: "/products",
     component: ProductsPage,
+    validateSearch: (search: Record<string, unknown>): ProductsSearch =>
+      search.needsALook === true ? { needsALook: true } : {},
   }),
   createRoute({
     getParentRoute: () => rootRoute,
@@ -66,6 +74,14 @@ const pageRoutes = [
     getParentRoute: () => rootRoute,
     path: "/search",
     component: SearchPage,
+    validateSearch: (search: Record<string, unknown>): ResultsSearch =>
+      typeof search.q === "string" ? { q: search.q } : {},
+    beforeLoad: ({ search }) => {
+      if (!search.q?.trim()) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router's redirect protocol
+        throw redirect({ to: "/" });
+      }
+    },
   }),
   createRoute({
     getParentRoute: () => rootRoute,
@@ -79,7 +95,7 @@ const pageRoutes = [
   }),
 ] as const;
 
-const routeTree = rootRoute.addChildren([indexRoute, ...pageRoutes]);
+const routeTree = rootRoute.addChildren([...pageRoutes]);
 
 interface CreateAppRouterOptions {
   queryClient: QueryClient;

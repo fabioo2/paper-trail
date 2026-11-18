@@ -3,7 +3,7 @@
 from collections.abc import Collection
 from dataclasses import replace
 
-from sqlalchemy import Connection, RowMapping, func, insert, select, update
+from sqlalchemy import Connection, RowMapping, func, insert, or_, select, update
 
 from paper_trail.adapters.sqlite.mappers import (
     alias_from_row,
@@ -21,6 +21,7 @@ from paper_trail.adapters.sqlite.schema import (
 from paper_trail.domain.enums import AliasSource, LineKind
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
+    CONFIRMING_SOURCES,
     LastPurchase,
     Product,
     ProductAlias,
@@ -106,6 +107,20 @@ class SqliteProductRepository:
             )
             for row in rows
         )
+
+    def unconfirmed_count(self) -> int:
+        named_by = func.json_extract(products.c.field_sources, "$.canonical_name")
+        bought = (
+            select(line_items.c.id)
+            .where(line_items.c.product_id == products.c.id, line_items.c.kind == LineKind.ITEM)
+            .exists()
+        )
+        count: int = self._connection.execute(
+            select(func.count())
+            .select_from(products)
+            .where(or_(named_by.is_(None), named_by.not_in(sorted(CONFIRMING_SOURCES))), bought)
+        ).scalar_one()
+        return count
 
     def purchases(self, product_id: int) -> tuple[ProductPurchase, ...]:
         rows = self._connection.execute(

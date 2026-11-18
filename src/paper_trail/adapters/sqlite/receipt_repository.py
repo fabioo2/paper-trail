@@ -2,9 +2,26 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, Connection, delete, func, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Connection,
+    Integer,
+    Label,
+    Select,
+    TextualSelect,
+    and_,
+    column,
+    delete,
+    false,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    update,
+)
 
 from paper_trail.adapters.sqlite.integrity import unique_violation_as_conflict
 from paper_trail.adapters.sqlite.keyset import newest_purchase_first_page
@@ -12,13 +29,23 @@ from paper_trail.adapters.sqlite.mappers import (
     line_item_from_row,
     line_item_values,
     receipt_from_row,
+    receipt_spend_from_row,
     receipt_summary_from_row,
     receipt_values,
 )
 from paper_trail.adapters.sqlite.schema import line_items, receipts
+from paper_trail.adapters.sqlite.text_search import fts_query
 from paper_trail.domain.enums import LineKind, ProcessingStage, ReceiptStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
-from paper_trail.domain.models import ItemLink, LineItem, ProductLine, Receipt, ReceiptSummary
+from paper_trail.domain.models import (
+    ItemLink,
+    LineItem,
+    ProductLine,
+    Receipt,
+    ReceiptMatch,
+    ReceiptSpend,
+    ReceiptSummary,
+)
 from paper_trail.domain.paging import Page, PageRequest
 from paper_trail.ports.clock import Clock
 
@@ -65,22 +92,7 @@ class SqliteReceiptRepository:
         status: ReceiptStatus | None = None,
         store_key: str | None = None,
     ) -> Page[ReceiptSummary]:
-        item_count = (
-            select(func.count())
-            .where(line_items.c.receipt_id == receipts.c.id, line_items.c.kind == LineKind.ITEM)
-            .scalar_subquery()
-            .label("item_count")
-        )
-        savings = (
-            select(-func.coalesce(func.sum(line_items.c.line_total_cents), 0))
-            .where(
-                line_items.c.receipt_id == receipts.c.id,
-                line_items.c.kind == LineKind.DISCOUNT,
-            )
-            .scalar_subquery()
-            .label("savings_cents")
-        )
-        query = select(receipts, item_count, savings)
+        query = _summaries()
         if status is not None:
             query = query.where(receipts.c.status == status)
         if store_key is not None:
@@ -88,6 +100,63 @@ class SqliteReceiptRepository:
         return newest_purchase_first_page(
             self._connection, query, receipts, page, receipt_summary_from_row
         )
+
+    def count(self, status: ReceiptStatus) -> int:
+        count: int = self._connection.execute(
+            select(func.count()).select_from(receipts).where(receipts.c.status == status)
+        ).scalar_one()
+        return count
+
+    def spending(self, start: date, end: date) -> tuple[ReceiptSpend, ...]:
+        rows = self._connection.execute(
+            select(
+                receipts.c.store_key,
+                receipts.c.store_name,
+                receipts.c.purchased_on,
+                receipts.c.currency,
+                receipts.c.total_cents,
+                _savings(),
+            )
+            .where(
+                receipts.c.status == ReceiptStatus.COMPLETED,
+                receipts.c.purchased_on.between(start, end),
+            )
+            .order_by(receipts.c.purchased_on, receipts.c.id)
+        ).mappings()
+        return tuple(receipt_spend_from_row(row) for row in rows)
+
+    def matching(self, query: str, *, limit: int) -> tuple[ReceiptMatch, ...]:
+        match = fts_query(query)
+        matched_line = and_(
+            line_items.c.kind == LineKind.ITEM,
+            or_(
+                line_items.c.id.in_(_fts_ids("line_items_fts", match)),
+                line_items.c.product_id.in_(_fts_ids("products_fts", match)),
+            )
+            if match is not None
+            else false(),
+        )
+        candidates = _summaries().where(
+            or_(
+                receipts.c.store_name.contains(query, autoescape=True),
+                receipts.c.id.in_(select(line_items.c.receipt_id).where(matched_line)),
+            )
+        )
+        found = newest_purchase_first_page(
+            self._connection,
+            candidates,
+            receipts,
+            PageRequest(limit=limit),
+            receipt_summary_from_row,
+        ).items
+        lines: dict[int, list[str]] = {summary.id: [] for summary in found}
+        for receipt_id, description in self._connection.execute(
+            select(line_items.c.receipt_id, line_items.c.description)
+            .where(matched_line, line_items.c.receipt_id.in_(lines))
+            .order_by(line_items.c.receipt_id, line_items.c.position)
+        ):
+            lines[receipt_id].append(description)
+        return tuple(ReceiptMatch(summary, tuple(lines[summary.id])) for summary in found)
 
     def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
         self._update(receipt_id, {"status": status, "stage": stage})
@@ -212,3 +281,35 @@ class SqliteReceiptRepository:
             [line_item_values(item, receipt_id) for item in ordered],
         ).scalars()
         return tuple(replace(item, id=item_id) for item, item_id in zip(ordered, ids, strict=True))
+
+
+def _savings() -> Label[int]:
+    """What a receipt's DISCOUNT lines took off (>= 0), as ``savings_cents``."""
+    return (
+        select(-func.coalesce(func.sum(line_items.c.line_total_cents), 0))
+        .where(
+            line_items.c.receipt_id == receipts.c.id,
+            line_items.c.kind == LineKind.DISCOUNT,
+        )
+        .scalar_subquery()
+        .label("savings_cents")
+    )
+
+
+def _summaries() -> Select[tuple[object, ...]]:
+    item_count = (
+        select(func.count())
+        .where(line_items.c.receipt_id == receipts.c.id, line_items.c.kind == LineKind.ITEM)
+        .scalar_subquery()
+        .label("item_count")
+    )
+    return select(receipts, item_count, _savings())
+
+
+def _fts_ids(table: str, match: str) -> TextualSelect:
+    """The rowids of ``table`` (an FTS5 table of the schema) matching the FTS5 query."""
+    return (
+        text(f"SELECT rowid FROM {table} WHERE {table} MATCH :{table}")  # noqa: S608 - a constant
+        .bindparams(**{table: match})
+        .columns(column("rowid", Integer))
+    )
