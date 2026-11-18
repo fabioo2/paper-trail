@@ -26,13 +26,15 @@ function comparable(from: LineUnit, to: LineUnit): boolean {
   return weighed(from) === weighed(to);
 }
 
-/** A decimal string such as "0.452" as an exact fraction. */
+/** A decimal string such as "0.452" (or "4.52E-1") as an exact fraction. */
 function decimal(text: string): Cents {
-  const [whole = "0", fraction = ""] = text.split(".");
-  return {
-    num: BigInt(whole + fraction),
-    den: 10n ** BigInt(fraction.length),
-  };
+  const [mantissa = "0", exponent = "0"] = text.toLowerCase().split("e");
+  const [whole = "0", fraction = ""] = mantissa.split(".");
+  const shift = Number(exponent) - fraction.length;
+  const digits = BigInt(whole + fraction);
+  return shift >= 0
+    ? { num: digits * 10n ** BigInt(shift), den: 1n }
+    : { num: digits, den: 10n ** BigInt(-shift) };
 }
 
 function compare(a: Cents, b: Cents): number {

@@ -20,7 +20,12 @@ from paper_trail.domain.enums import (
 from paper_trail.domain.models import LineItem, Receipt, ReceiptDraft, ReviewItem, require_id
 from paper_trail.domain.money import Money
 from paper_trail.domain.rules.arithmetic import IssueCode
-from paper_trail.interfaces.web.schemas.receipts import LineUnit, MoneyOut, line_unit
+from paper_trail.interfaces.web.schemas.receipts import (
+    LineUnit,
+    MoneyOut,
+    decimal_text,
+    line_unit,
+)
 
 
 class ReviewIssueOut(BaseModel):
@@ -53,7 +58,7 @@ class ReviewLineBody(BaseModel):
             kind=line.kind,
             raw_text=line.raw_text,
             description=line.description,
-            quantity=str(line.quantity),
+            quantity=decimal_text(line.quantity),
             unit_price_cents=None if line.unit_price is None else line.unit_price.amount_cents,
             line_total_cents=line.line_total.amount_cents,
             category=line.category,

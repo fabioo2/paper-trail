@@ -352,34 +352,56 @@ class ResolveReview:
         forced_reason: str | None,
         failure: FailureReason = FailureReason.UNKNOWN,
     ) -> None:
-        """After a queued answer failed, decided by the graph's checkpoint alone. While the
-        thread still waits for the review (the answer was not taken), or there is no thread,
-        the receipt waits for a person again (NEEDS_REVIEW). Once the graph took the answer and
-        the run failed after it, the review is closed and the receipt FAILED with ``failure``:
-        like any failed run, ``process --resume`` or a retry continues it. Either way only while
-        the review is still OPEN and the receipt not COMPLETED, read in the write unit of work
-        that changes them."""
+        """After a queued answer failed, decided by the graph's checkpoint alone
+        (``answer_taken``, then ``settle_given_back`` in one unit of work)."""
+        receipt_id, taken = self.answer_taken(review_id)
+        with self._uow_factory() as uow:
+            self.settle_given_back(
+                uow,
+                review_id,
+                receipt_id,
+                taken=taken,
+                forced_reason=forced_reason,
+                failure=failure,
+            )
+            uow.commit()
+
+    def answer_taken(self, review_id: int) -> tuple[int, bool]:
+        """The review's receipt, and whether its graph took the answer: it has a thread that no
+        longer waits for the review. Reads the checkpoints, outside any unit of work."""
         receipt_id = GetReview(self._uow_factory)(review_id).receipt_id
         taken = self._runner.has_thread(receipt_id) and not self._runner.waiting_for_review(
             receipt_id
         )
-        with self._uow_factory() as uow:
-            if not _still_open(uow, review_id, receipt_id):
-                return
-            if taken:
-                self._remember(uow, receipt_id, forced_reason)
-                uow.reviews.resolve(review_id)
-                uow.receipts.update_status(
-                    receipt_id,
-                    ReceiptStatus.FAILED,
-                    ProcessingStage.FAILED,
-                    failure_reason=failure,
-                )
-            else:
-                uow.receipts.update_status(
-                    receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
-                )
-            uow.commit()
+        return receipt_id, taken
+
+    def settle_given_back(  # noqa: PLR0913 - the review, what the checkpoint said, the reasons
+        self,
+        uow: UnitOfWork,
+        review_id: int,
+        receipt_id: int,
+        *,
+        taken: bool,
+        forced_reason: str | None,
+        failure: FailureReason,
+    ) -> None:
+        """In the caller's unit of work, which commits: while the answer was not taken, the
+        receipt waits for a person again (NEEDS_REVIEW). Once the graph took it and the run
+        failed after it, the review is closed and the receipt FAILED with ``failure``: like
+        any failed run, ``process --resume`` or a retry continues it. Either way only while
+        the review is still OPEN and the receipt not COMPLETED, read here."""
+        if not _still_open(uow, review_id, receipt_id):
+            return
+        if taken:
+            self._remember(uow, receipt_id, forced_reason)
+            uow.reviews.resolve(review_id)
+            uow.receipts.update_status(
+                receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED, failure_reason=failure
+            )
+        else:
+            uow.receipts.update_status(
+                receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
+            )
 
     def _close(self, review: ReviewItem, forced_reason: str | None) -> Receipt:
         """RESOLVED, remembering ``forced_reason`` as a correction."""

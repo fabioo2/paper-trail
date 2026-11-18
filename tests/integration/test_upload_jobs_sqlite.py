@@ -574,15 +574,15 @@ def test_h4_03_the_job_and_its_receipt_fail_in_one_transaction() -> None:
         msg = "the transaction fails"
         raise RuntimeError(msg)
 
-    with (
-        pytest.MonkeyPatch.context() as patch,
-        pytest.raises(RuntimeError, match="the transaction fails"),
-    ):
+    with pytest.MonkeyPatch.context() as patch:
         patch.setattr(SqliteReceiptRepository, "update_status", broken)
-        queue.run_job()
+        assert queue.run_job() is False
 
     assert queue.settled()[0] is JobStatus.RUNNING
     assert queue.state(receipt_id) == (ReceiptStatus.PROCESSING, ProcessingStage.READING)
+    assert queue.run_job() is False
+    assert queue.settled()[0] is JobStatus.FAILED
+    assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.STOPPED_UNEXPECTEDLY)
 
 
 def test_h4_04_an_exhausted_job_does_not_hold_up_the_next_one() -> None:

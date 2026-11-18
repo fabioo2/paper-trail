@@ -65,6 +65,11 @@ describe("unitPriceSummary", () => {
       expected: [120, 210, "lb", 2],
     },
     {
+      name: "a quantity in exponent notation is read exactly",
+      purchases: [bought(452, "4.52E-1", "kg"), bought(1000, "1E+1", "kg")],
+      expected: [100, 550, "kg", 2],
+    },
+    {
       name: "full precision is kept until the final rounding",
       purchases: [bought(1001, "10", "each"), bought(503, "5", "each")],
       expected: [100, 100, "each", 2],

@@ -28,6 +28,7 @@ from paper_trail.application.receipts import (
     AnswerReview,
     InconsistentDraftError,
     ListPendingReviews,
+    ResolveReview,
 )
 from paper_trail.domain.enums import (
     AgentRole,
@@ -274,32 +275,78 @@ def test_h4_04_an_answer_whose_workers_keep_dying_fails_and_gives_its_review_bac
     assert reason is FailureReason.STOPPED_UNEXPECTEDLY
 
 
-def test_h4_04_a_worker_that_dies_after_giving_the_review_back_leaves_the_job_to_sweep() -> None:
-    stop = StopOnce(WorkerKilledError())
-    parked = _park(stop)
-    parked.answer(parked.review_id, _corrected())
+def _workers_die(parked: Parked) -> None:
+    """Every worker that takes the queued answer dies before it gives it: its attempts used up."""
     for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
-        stop.armed = True
-        with pytest.raises(WorkerKilledError):
-            parked.run_job()
+        with parked.harness.uow_factory() as uow:
+            assert uow.jobs.claim("dead-worker", LEASE) is not None
+            uow.commit()
         parked.harness.clock.advance(LEASE + timedelta(seconds=1))
 
-    def killed(*_: object, **__: object) -> None:
-        raise WorkerKilledError
 
-    with pytest.MonkeyPatch.context() as patch, pytest.raises(WorkerKilledError):
-        patch.setattr(SqliteJobQueue, "fail_abandoned", killed)
-        parked.run_job()
-    given_back = parked.state()
-    still_running = parked.jobs()[0].status
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("the review could not be given back"), WorkerKilledError()],
+    ids=["give-back-raises", "worker-dies-mid-recovery"],
+)
+def test_h4_04_a_recovery_that_fails_changes_nothing_and_the_next_sweep_recovers(
+    parked: Parked, failure: BaseException
+) -> None:
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    before = (parked.state(), parked.jobs())
+
+    def broken(*_: object, **__: object) -> None:
+        raise failure
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ResolveReview, "settle_given_back", broken)
+        if isinstance(failure, Exception):
+            assert parked.run_job() is False
+        else:
+            with pytest.raises(WorkerKilledError):
+                parked.run_job()
+    after_failure = (parked.state(), parked.jobs())
 
     assert parked.run_job() is False
 
-    assert given_back == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
-    assert still_running is JobStatus.RUNNING
+    assert after_failure == before
     job = parked.jobs()[0]
     assert (job.status, job.last_error) == (JobStatus.FAILED, STOPPED_UNEXPECTEDLY)
-    assert parked.state() == given_back
+    assert parked.state() == (
+        ReceiptStatus.NEEDS_REVIEW,
+        ProcessingStage.NEEDS_REVIEW,
+        ReviewStatus.OPEN,
+    )
+
+
+def test_h4_04_a_stale_sweeper_changes_nothing_after_a_new_answer_is_queued(
+    parked: Parked,
+) -> None:
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    with parked.harness.uow_factory(read_only=True) as uow:
+        stale = uow.jobs.abandoned()
+    assert parked.run_job() is False
+    parked.answer(parked.review_id, _corrected())
+    before = (parked.state(), parked.jobs())
+    late = ProcessReceiptJobs(
+        parked.harness.uow_factory,
+        parked.harness.process,
+        parked.harness.tracer,
+        worker_id="late-sweeper",
+        lease=LEASE,
+        resolve_review=parked.harness.resolve,
+    )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqliteJobQueue, "abandoned", lambda _: stale)
+        patch.setattr(SqliteJobQueue, "claim", lambda *_: None)
+        assert late() is False
+
+    assert before[0] == (ReceiptStatus.PROCESSING, ProcessingStage.QUEUED, ReviewStatus.OPEN)
+    assert [job.status for job in before[1]] == [JobStatus.FAILED, JobStatus.PENDING]
+    assert (parked.state(), parked.jobs()) == before
 
 
 def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked: Parked) -> None:

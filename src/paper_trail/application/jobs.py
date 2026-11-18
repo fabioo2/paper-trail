@@ -82,37 +82,58 @@ class ProcessReceiptJobs:
         return True
 
     def _sweep_and_claim(self) -> Job | None:
-        """Fail the jobs whose dead workers used up their attempts, then claim one. A
-        ``resolve_review`` job's review is given back first and the job failed after, so a
-        worker that dies in between leaves it to be swept again (giving back twice is
-        harmless); a ``process_receipt`` job fails in one transaction with its receipt."""
+        """Recover the jobs whose dead workers used up their attempts (``_recover``), then
+        claim one."""
         with self._uow_factory(read_only=True) as uow:
             abandoned = uow.jobs.abandoned()
         for lost in abandoned:
-            log.error("job.abandoned", job_id=lost.id, receipt_id=lost.receipt_id)
-            if lost.kind is JobKind.RESOLVE_REVIEW:
-                try:
-                    self._give_back(lost, FailureReason.STOPPED_UNEXPECTEDLY)
-                except Exception as failure:  # one job's failure must not stop the worker
-                    log.error("job.give_back_failed", error_type=type(failure).__name__)
+            try:
+                self._recover(lost)
+            except Exception as failure:  # one job's failure must not stop the worker
+                log.error("job.recovery_failed", job_id=lost.id, error_type=type(failure).__name__)
         with self._uow_factory() as uow:
-            for lost in abandoned:
-                try:
-                    uow.jobs.fail_abandoned(require_id(lost.id), STOPPED_UNEXPECTEDLY)
-                except ConflictError:
-                    continue  # another worker swept it
+            job = uow.jobs.claim(self._worker_id, self._lease)
+            uow.commit()
+        return job
+
+    def _recover(self, lost: Job) -> None:
+        """One transaction per job: ``fail_abandoned`` is the compare-and-set that gives this
+        worker the right to recover it (another sweeper already did: nothing happens), and
+        the job's receipt is FAILED as stopped unexpectedly, or a ``resolve_review`` job's
+        review given back, in the same transaction. Whether the graph took the answer is read
+        from the checkpoints first; the review and receipt are checked again inside. Any
+        failure rolls both back, leaving the job to the next sweep."""
+        answer = None
+        taken = None
+        if lost.kind is JobKind.RESOLVE_REVIEW:
+            answer = ReviewAnswerPayload.model_validate(lost.payload)
+            taken = self._resolve_review.answer_taken(answer.review_id)
+        with self._uow_factory() as uow:
+            try:
+                uow.jobs.fail_abandoned(require_id(lost.id), STOPPED_UNEXPECTEDLY)
+            except ConflictError:
+                return  # another worker recovered it
+            if answer is not None and taken is not None:
+                receipt_id, answer_taken = taken
+                self._resolve_review.settle_given_back(
+                    uow,
+                    answer.review_id,
+                    receipt_id,
+                    taken=answer_taken,
+                    forced_reason=answer.reason if answer.force else None,
+                    failure=FailureReason.STOPPED_UNEXPECTEDLY,
+                )
+            else:
                 receipt = uow.receipts.get(lost.receipt_id)
-                processing = receipt is not None and receipt.status is ReceiptStatus.PROCESSING
-                if lost.kind is JobKind.PROCESS_RECEIPT and processing:
+                if receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
                     uow.receipts.update_status(
                         lost.receipt_id,
                         ReceiptStatus.FAILED,
                         ProcessingStage.FAILED,
                         failure_reason=FailureReason.STOPPED_UNEXPECTEDLY,
                     )
-            job = uow.jobs.claim(self._worker_id, self._lease)
             uow.commit()
-        return job
+        log.error("job.abandoned", job_id=lost.id, receipt_id=lost.receipt_id)
 
     def renew_lease(self) -> None:
         """Extend the lease of the job that is running, if any (the heartbeat calls it)."""

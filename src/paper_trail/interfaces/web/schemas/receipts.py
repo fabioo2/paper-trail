@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal, cast
 
 from pydantic import BaseModel
@@ -22,6 +23,11 @@ from paper_trail.domain.rules.arithmetic import ArithmeticIssue, ArithmeticRepor
 
 # What a line is sold by (``LINE_UNITS``); null: unknown, compared as each.
 type LineUnit = Literal[Unit.EACH, Unit.KG, Unit.LB]
+
+
+def decimal_text(value: Decimal) -> str:
+    """An exact decimal written out in fixed point ("10", never "1E+1"), as clients parse it."""
+    return format(value, "f")
 
 
 def line_unit(unit: Unit | None) -> LineUnit | None:
@@ -117,7 +123,7 @@ class LineItemOut(BaseModel):
             kind=item.kind,
             raw_text=item.raw_text,
             description=item.description,
-            quantity=str(item.quantity),
+            quantity=decimal_text(item.quantity),
             unit_price=MoneyOut.from_optional(item.unit_price),
             line_total=MoneyOut.from_domain(item.line_total),
             product_id=item.product_id,

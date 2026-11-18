@@ -38,7 +38,12 @@ from paper_trail.ports.agents import (
 )
 from paper_trail.ports.clock import Clock
 from paper_trail.ports.images import ImageStore, StoredImage
-from paper_trail.ports.reader import BudgetReachedError, ReaderError, ReaderKeyError
+from paper_trail.ports.reader import (
+    BudgetReachedError,
+    ReaderError,
+    ReaderKeyError,
+    ReaderUnavailableError,
+)
 from paper_trail.ports.trace import Tracer
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
@@ -146,14 +151,16 @@ class RetryReceipt:
 
 
 def failure_reason(error: BaseException) -> FailureReason:
-    """Why a run that raised ``error`` failed, in words a person can act on."""
+    """Why a run that raised ``error`` failed, in words a person can act on. A refused, cut
+    off or malformed answer is often the same on a second read, so it is not "Claude
+    unavailable, try again in a minute" but UNKNOWN."""
     if isinstance(error, ProcessingStoppedError) and error.__cause__ is not None:
         error = error.__cause__
     if isinstance(error, BudgetReachedError):
         return FailureReason.BUDGET_REACHED
     if isinstance(error, ReaderKeyError):
         return FailureReason.NO_API_KEY
-    if isinstance(error, ReaderError):
+    if isinstance(error, ReaderUnavailableError):
         return FailureReason.CLAUDE_UNAVAILABLE
     if isinstance(error, UnsupportedMediaError):
         return FailureReason.UNREADABLE_PHOTO

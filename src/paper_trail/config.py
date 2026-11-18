@@ -44,7 +44,7 @@ class WebSettings(BaseModel):
     """The web app (``PAPER_TRAIL_WEB__*``, ADR-0020). ``allowed_hosts``: the host names or IPs
     the app is reached by besides ``localhost``, ``127.0.0.1``, ``::1`` and ``web``, as a comma
     list (e.g. ``192.168.0.187,fabio-server``); no scheme, port or wildcard. An IPv6 address may
-    be written with or without brackets and is kept without them, lowercased."""
+    be written with or without brackets and is kept in its compressed form without them."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -63,12 +63,12 @@ class WebSettings(BaseModel):
         bare = []
         for host in hosts:
             bracketed = host.startswith("[") and host.endswith("]")
-            name = host[1:-1] if bracketed else host
-            if not (_BARE_HOST.fullmatch(name) or _is_ipv6(name)):
+            ipv6 = _ipv6(host[1:-1] if bracketed else host)
+            if ipv6 is None and (bracketed or not _BARE_HOST.fullmatch(host)):
                 variable = env_var_name(("web", "allowed_hosts"))
                 msg = f"{variable}: {host!r} is not a bare host name or IP (no scheme, port or *)"
                 raise ValueError(msg)
-            bare.append(name.lower())
+            bare.append(ipv6 or host.lower())
         return tuple(bare)
 
 
@@ -252,11 +252,13 @@ class Settings(BaseSettings):
         return self
 
 
-def _is_ipv6(host: str) -> bool:
+def _ipv6(host: str) -> str | None:
+    """``host`` as a compressed IPv6 address, or None when it is not one."""
     try:
-        return isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address)
+        address = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return None
+    return address.compressed if isinstance(address, ipaddress.IPv6Address) else None
 
 
 def env_var_name(location: tuple[str | int, ...]) -> str:

@@ -1,6 +1,7 @@
 """Per-request correlation id, access log and last-resort error boundary (PLAN 1.4); the
 request body size limit; the Host and Origin checks (ADR-0020)."""
 
+import ipaddress
 import logging
 import re
 import time
@@ -21,7 +22,8 @@ from paper_trail.interfaces.web.errors import (
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_PORT = re.compile(r":[0-9]*$")
+_BRACKETED_HOST = re.compile(r"\[([0-9A-Fa-f:.]+)\](?::[0-9]+)?")
+_NAMED_HOST = re.compile(r"([A-Za-z0-9.-]+)(?::[0-9]+)?")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
 _QUIET_PATHS = frozenset({"/api/health", "/api/health/ready"})
@@ -131,7 +133,9 @@ class HostOriginMiddleware:
 
     def __init__(self, app: ASGIApp, *, allowed_hosts: Iterable[str]) -> None:
         self.app = app
-        self.allowed_hosts = frozenset(host.lower() for host in allowed_hosts)
+        self.allowed_hosts = frozenset(
+            canonical_ipv6(host) or host.lower() for host in allowed_hosts
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -164,12 +168,24 @@ class HostOriginMiddleware:
         await self.app(scope, receive, send)
 
 
-def _hostname(host: str) -> str:
-    """``host`` without its port (and an IPv6 address without its brackets), lowercased."""
-    host = host.lower()
-    if host.startswith("["):
-        return host[1:].partition("]")[0]
-    return host.rsplit(":", 1)[0] if _PORT.search(host) else host
+def _hostname(host: str) -> str | None:
+    """A ``Host`` header's name without its port: lowercased, an IPv6 address in its
+    compressed form without brackets. None for anything else (a stray bracket or colon, a
+    port that is not digits)."""
+    bracketed = _BRACKETED_HOST.fullmatch(host)
+    if bracketed is not None:
+        return canonical_ipv6(bracketed[1])
+    named = _NAMED_HOST.fullmatch(host)
+    return None if named is None else named[1].lower()
+
+
+def canonical_ipv6(address: str) -> str | None:
+    """``address`` as a compressed IPv6 address, or None when it is not one."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    return parsed.compressed if isinstance(parsed, ipaddress.IPv6Address) else None
 
 
 def _origin(origin: str) -> str:

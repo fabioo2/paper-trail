@@ -43,7 +43,10 @@ export function useReceiptList() {
   });
 }
 
-/** One receipt with its lines and arithmetic report (`getReceipt`). */
+/**
+ * One receipt with its lines and arithmetic report (`getReceipt`), polled while it is being
+ * read (after Try again, say) so its result shows without a refresh.
+ */
 export function useReceipt(id: number) {
   return useQuery({
     queryKey: receiptKeys.detail(id),
@@ -53,6 +56,10 @@ export function useReceipt(id: number) {
           params: { path: { receipt_id: id } },
         }),
       ),
+    refetchInterval: (query) =>
+      query.state.data?.status === "processing"
+        ? RECEIPT_POLL_INTERVAL_MS
+        : false,
   });
 }
 

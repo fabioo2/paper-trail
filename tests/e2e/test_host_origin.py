@@ -58,6 +58,8 @@ def client(container: Container) -> Iterator[TestClient]:
         "[::1]",
         "[::1]:8420",
         "[FD00::5]:8420",
+        "[fd00:0:0:0:0:0:0:5]",
+        "[0:0:0:0:0:0:0:1]:8000",
     ],
 )
 def test_h1_01_h1_03_built_in_and_configured_hosts_are_served(
@@ -68,7 +70,19 @@ def test_h1_01_h1_03_built_in_and_configured_hosts_are_served(
 
 @pytest.mark.parametrize(
     "host",
-    ["evil.example", "192.168.0.50", "web.evil.example", "evil.example:8000", "", "[fd00::6]:80"],
+    [
+        "evil.example",
+        "192.168.0.50",
+        "web.evil.example",
+        "evil.example:8000",
+        "",
+        "[fd00::6]:80",
+        "[::1].evil.example",
+        "[::1",
+        "[::1]:bad",
+        "web:",
+        "web:80:80",
+    ],
 )
 @pytest.mark.parametrize(
     ("method", "path"),

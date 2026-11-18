@@ -1,9 +1,12 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 
-import type { FailureReason } from "@/features/receipts/api";
+import {
+  type FailureReason,
+  RECEIPT_POLL_INTERVAL_MS,
+} from "@/features/receipts/api";
 import { formatFullDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import {
@@ -392,6 +395,45 @@ describe("Receipt detail page", () => {
     expect(textOf(main)).toMatch(/reading/i);
     expect(retries).toEqual(["/api/receipts/7/retry"]);
     expect(requests).toHaveLength(1);
+  });
+
+  it("polls a receipt being read until it settles, so a retry's result shows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const reads: string[] = [];
+      const states = [
+        receiptDetail({ status: "processing", stage: "queued" }),
+        receiptDetail({ status: "processing", stage: "reading" }),
+        receiptDetail(),
+      ];
+      server.use(
+        http.get("/api/receipts/:receiptId", ({ request }) => {
+          reads.push(new URL(request.url).pathname);
+          return HttpResponse.json(
+            states[Math.min(reads.length, states.length) - 1],
+          );
+        }),
+      );
+      renderApp("/receipts/7");
+      const main = await page();
+      expect(textOf(main)).toMatch(/reading/i);
+
+      await act(() =>
+        vi.advanceTimersByTimeAsync(RECEIPT_POLL_INTERVAL_MS * 2),
+      );
+
+      await waitFor(() => {
+        expect(textOf(main)).not.toMatch(/reading/i);
+      });
+      const settled = reads.length;
+      await act(() =>
+        vi.advanceTimersByTimeAsync(RECEIPT_POLL_INTERVAL_MS * 3),
+      );
+      expect(reads).toHaveLength(settled);
+      expect(settled).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each<{ name: string; respond: () => Response; toast: RegExp }>([

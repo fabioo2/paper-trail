@@ -14,10 +14,10 @@ import pytest
 
 from paper_trail.agents.schemas import ReceiptAnswer
 from paper_trail.application.budget import BudgetedReader
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.ports.budget import ClaudeCall
 from paper_trail.ports.reader import (
     BudgetReachedError,
-    ReaderError,
     ReaderOutputError,
     ReaderUnavailableError,
     ReadRequest,
@@ -114,11 +114,12 @@ def _billed_output_error() -> ReaderOutputError:
     [
         (_billed_output_error(), [ClaudeCall(NOW, HAIKU, 1000, 200, Decimal("0.0002"))]),
         (ReaderUnavailableError("the Claude API is unreachable"), []),
+        (UnsupportedMediaError("the stored photo cannot be read"), []),
     ],
-    ids=["billed-failure", "unbilled-failure"],
+    ids=["billed-failure", "unbilled-failure", "undecodable-photo"],
 )
 def test_ce_tc_037_a_failed_read_is_recorded_only_when_billed(
-    error: ReaderError, recorded: list[ClaudeCall]
+    error: Exception, recorded: list[ClaudeCall]
 ) -> None:
     ledger = FakeSpendLedger()
 
