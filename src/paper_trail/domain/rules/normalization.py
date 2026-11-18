@@ -20,6 +20,26 @@ _LEADING_ITEM_CODE = re.compile(r"(?:\([0-9]{1,2}\)\s*)?([0-9]{4,14})\s+(\S.*)",
 _STORE_SUFFIXES = frozenset(
     {"inc", "ltd", "llc", "corp", "co", "wholesale", "supercentre", "supercenter"}
 )
+# Chains whose branches print more after the name ("Costco Wholesale Windsor #534"): a store
+# name that starts with one, word for word, is that chain. No entry starts with another.
+KNOWN_CHAINS = frozenset(
+    {
+        "costco",
+        "walmart",
+        "metro",
+        "loblaws",
+        "real canadian superstore",
+        "no frills",
+        "food basics",
+        "freshco",
+        "sobeys",
+        "zehrs",
+        "iga",
+        "farm boy",
+        "giant tiger",
+        "shoppers drug mart",
+    }
+)
 _STORE_NUMBER = re.compile(r"#[0-9]+")
 _NUMBER = re.compile(r"[0-9]+")
 _STORE_WORD = "store"
@@ -109,7 +129,9 @@ def normalize_store_name(text: str) -> str:
     """The key of a store: e.g. ``"COSTCO WHOLESALE #1234"`` -> ``"costco"``.
 
     Drops store numbers (``#123``, ``store 123``, a bare trailing number) and legal-form or
-    store-format suffixes (``inc``, ``corp.``, ``wholesale``, ``supercentre`` ...).
+    store-format suffixes (``inc``, ``corp.``, ``wholesale``, ``supercentre`` ...). A name
+    that starts with a known chain is that chain: ``"Costco Wholesale Windsor #534"`` ->
+    ``"costco"``.
     """
     tokens = _tokens(text)
     while True:
@@ -119,8 +141,12 @@ def normalize_store_name(text: str) -> str:
         ):
             shorter = shorter[:-1]
         if shorter == tokens:
-            return " ".join(tokens)
+            break
         tokens = shorter
+    for end in range(1, len(tokens)):
+        if (chain := " ".join(tokens[:end])) in KNOWN_CHAINS:
+            return chain
+    return " ".join(tokens)
 
 
 def _without_store_numbers(tokens: list[str]) -> list[str]:

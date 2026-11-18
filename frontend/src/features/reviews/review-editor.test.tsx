@@ -1,7 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { toast } from "sonner";
+import { describe, expect, it, vi } from "vitest";
+
+import { RECEIPT_POLL_INTERVAL_MS } from "@/features/receipts/api";
 
 import type { ProblemDetail } from "@/test/msw/handlers";
 import {
@@ -11,6 +14,7 @@ import {
   reviewSummary,
   type ReviewOut,
 } from "@/test/fixtures/reviews";
+import { receiptDetail } from "@/test/fixtures/receipts";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
 
@@ -35,16 +39,27 @@ const inconsistent: ProblemDetail = {
 interface Requests {
   list: number;
   answers: unknown[];
+  /** Receipt 3 as the worker has it after the answer, and the open reviews. */
+  receipt: "processing" | "completed" | "needs_review";
+  open: ReturnType<typeof reviewSummary>[];
 }
 
 /** Serve the review and its list row; record every list read and every answer. */
 function serveReview(stored: ReviewOut = review()): Requests {
-  const requests: Requests = { list: 0, answers: [] };
+  const requests: Requests = {
+    list: 0,
+    answers: [],
+    receipt: "processing",
+    open: [reviewSummary()],
+  };
   server.use(
     http.get("/api/reviews", () => {
       requests.list += 1;
-      return HttpResponse.json([reviewSummary()]);
+      return HttpResponse.json(requests.open);
     }),
+    http.get("/api/receipts/:receiptId", () =>
+      HttpResponse.json(receiptDetail({ id: 3, status: requests.receipt })),
+    ),
     http.get("/api/reviews/:reviewId", () => HttpResponse.json(stored)),
     http.post("/api/reviews/:reviewId/resolve", async ({ request }) => {
       requests.answers.push(await request.json());
@@ -393,5 +408,33 @@ describe("Review editor", () => {
     expect(
       await screen.findByRole("heading", { name: "Review not found" }),
     ).toBeInTheDocument();
+  });
+
+  it("follows the answered receipt from the list it returns to and shows the review it reopens", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const requests = serveReview();
+      const user = userEvent.setup({
+        advanceTimers: (ms) => vi.advanceTimersByTime(ms),
+      });
+      const { router } = renderApp("/review");
+      await user.click(await screen.findByRole("link", { name: /costco/i }));
+      await form();
+      requests.open = [];
+      await user.click(screen.getByRole("button", { name: "Accept as read" }));
+
+      expect(await screen.findByText("Nothing to review")).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe("/review");
+      requests.receipt = "needs_review";
+      requests.open = [reviewSummary({ id: 8 })];
+      await act(() => vi.advanceTimersByTimeAsync(RECEIPT_POLL_INTERVAL_MS));
+
+      expect(
+        await screen.findByRole("link", { name: /costco/i }),
+      ).toHaveAttribute("href", "/review/8");
+    } finally {
+      toast.dismiss();
+      vi.useRealTimers();
+    }
   });
 });

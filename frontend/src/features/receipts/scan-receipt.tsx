@@ -25,8 +25,10 @@ import { Card } from "@/components/ui/card";
 import {
   isFinalStatus,
   type ReceiptDetailOut,
-  receiptKeys,
+  READING_TIMEOUT_MS,
   type ReceiptUploadOut,
+  refetchAfterReading,
+  watchReading,
   useReceiptProgress,
   useUploadReceipt,
 } from "@/features/receipts/api";
@@ -36,7 +38,6 @@ import { failureMessage } from "@/features/receipts/failure-reasons";
 import { RetryButton } from "@/features/receipts/receipt-failure";
 import { cn } from "@/lib/utils";
 
-const READING_TIMEOUT_MS = 3 * 60_000;
 const UPLOAD_ERROR_TOAST = "scan-upload-error";
 
 interface Photo {
@@ -299,7 +300,7 @@ function ReceiptProgress({
 
   useEffect(() => {
     if (settled) {
-      void queryClient.invalidateQueries({ queryKey: receiptKeys.list() });
+      void refetchAfterReading(queryClient);
     }
   }, [settled, queryClient]);
 
@@ -325,7 +326,13 @@ function ReceiptProgress({
           size="lg"
           className="h-12 w-full"
           disabled={progress.isFetching}
-          onClick={() => void progress.refetch()}
+          onClick={() => {
+            watchReading(queryClient, receiptId, {
+              status: "processing",
+              stage: receipt?.stage ?? "queued",
+            });
+            void progress.refetch();
+          }}
         >
           {progress.isFetching ? (
             <LoaderCircle aria-hidden="true" className="animate-spin" />

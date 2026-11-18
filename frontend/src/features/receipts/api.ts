@@ -1,13 +1,17 @@
 import {
+  type QueryClient,
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 import { ApiError, apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
 import { summaryKeys } from "@/features/home/api";
+import { productKeys } from "@/features/products/api";
+import { reviewKeys } from "@/features/reviews/api";
 import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
@@ -19,6 +23,8 @@ export type ReceiptUploadOut = Schemas["ReceiptUploadOut"];
 export type FailureReason = Schemas["FailureReason"];
 
 export const RECEIPT_POLL_INTERVAL_MS = 2_000;
+/** How long a receipt is followed while being read before the app stops polling it. */
+export const READING_TIMEOUT_MS = 3 * 60_000;
 /** Retries of one poll: three failures in a row stop polling. */
 const RECEIPT_POLL_RETRIES = 2;
 
@@ -28,9 +34,78 @@ export const receiptKeys = {
   detail: (id: number) => [...receiptKeys.all, "detail", id] as const,
 };
 
-/** Receipts newest first, one page per cursor (`listReceipts`). */
+/** The receipts being read, each with the time it stops being followed. */
+const watchedKey = ["watched-readings"] as const;
+
+export interface WatchedReading {
+  id: number;
+  until: number;
+}
+
+/** Follow a receipt the worker is reading until it settles (`useWatchedReadings`), after an
+ * upload, a Try again or a review answer; its cached detail takes the given status so an older
+ * settled status doesn't end it early. */
+export function watchReading(
+  queryClient: QueryClient,
+  receipt_id: number,
+  { status, stage }: Pick<ReceiptDetailOut, "status" | "stage">,
+) {
+  if (isFinalStatus(status)) return;
+  queryClient.setQueryData<ReceiptDetailOut>(
+    receiptKeys.detail(receipt_id),
+    (receipt) => receipt && { ...receipt, status, stage },
+  );
+  queryClient.setQueryData<WatchedReading[]>(watchedKey, (watched = []) => [
+    ...watched.filter(({ id }) => id !== receipt_id),
+    { id: receipt_id, until: Date.now() + READING_TIMEOUT_MS },
+  ]);
+}
+
+/** The receipts `watchReading` follows. */
+export function useWatchedReadings(): WatchedReading[] {
+  return (
+    useQuery({
+      queryKey: watchedKey,
+      queryFn: () => [] as WatchedReading[],
+      staleTime: Infinity,
+    }).data ?? []
+  );
+}
+
+/** Stop following a receipt; `refetchAfterReading` when it settled (not when polling failed or
+ * timed out). */
+export function unwatchReading(
+  queryClient: QueryClient,
+  id: number,
+  settled: boolean,
+) {
+  queryClient.setQueryData<WatchedReading[]>(watchedKey, (watched = []) =>
+    watched.filter((reading) => reading.id !== id),
+  );
+  if (settled) void refetchAfterReading(queryClient);
+}
+
+/** Refetch everything a receipt that finished being read may have changed: the receipt list,
+ * reviews, products, Home's summary and searches. */
+export function refetchAfterReading(queryClient: QueryClient) {
+  return Promise.all(
+    [
+      receiptKeys.list(),
+      reviewKeys.all,
+      productKeys.all,
+      summaryKeys.all,
+      searchKeys.all,
+    ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
+}
+
+/**
+ * Receipts newest first, one page per cursor (`listReceipts`), polled while one is being read
+ * (after a review answer, say). When the last one finishes, `refetchAfterReading`.
+ */
 export function useReceiptList() {
-  return useInfiniteQuery({
+  const queryClient = useQueryClient();
+  const list = useInfiniteQuery({
     queryKey: receiptKeys.list(),
     queryFn: ({ pageParam }) =>
       unwrap(
@@ -40,15 +115,32 @@ export function useReceiptList() {
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor,
+    refetchInterval: (query) =>
+      query.state.status !== "error" && anyProcessing(query.state.data?.pages)
+        ? RECEIPT_POLL_INTERVAL_MS
+        : false,
   });
+
+  useRefetchWhenRead(list.data && anyProcessing(list.data.pages), queryClient);
+  return list;
+}
+
+function anyProcessing(pages: Schemas["ReceiptPageOut"][] | undefined) {
+  return (
+    pages?.some((page) =>
+      page.items.some((receipt) => receipt.status === "processing"),
+    ) ?? false
+  );
 }
 
 /**
  * One receipt with its lines and arithmetic report (`getReceipt`), polled while it is being
- * read (after Try again, say) so its result shows without a refresh.
+ * read (after Try again or a review answer, say) so its result shows without a refresh. When
+ * it finishes, `refetchAfterReading`.
  */
 export function useReceipt(id: number) {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const receipt = useQuery({
     queryKey: receiptKeys.detail(id),
     queryFn: () =>
       unwrap(
@@ -57,10 +149,32 @@ export function useReceipt(id: number) {
         }),
       ),
     refetchInterval: (query) =>
+      query.state.status !== "error" &&
       query.state.data?.status === "processing"
         ? RECEIPT_POLL_INTERVAL_MS
         : false,
   });
+
+  const status = receipt.data?.status;
+  useRefetchWhenRead(
+    status === undefined ? undefined : status === "processing",
+    queryClient,
+  );
+  return receipt;
+}
+
+function useRefetchWhenRead(
+  processing: boolean | undefined,
+  queryClient: QueryClient,
+) {
+  const wasProcessing = useRef(false);
+  useEffect(() => {
+    if (processing === undefined) return;
+    if (wasProcessing.current && !processing) {
+      void refetchAfterReading(queryClient);
+    }
+    wasProcessing.current = processing;
+  }, [processing, queryClient]);
 }
 
 export interface UploadResult {
@@ -88,8 +202,10 @@ export function useUploadReceipt() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: uploadReceipt,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: receiptKeys.list() }),
+    onSuccess: ({ receipt }) => {
+      watchReading(queryClient, receipt.id, receipt);
+      return queryClient.invalidateQueries({ queryKey: receiptKeys.list() });
+    },
   });
 }
 
@@ -113,6 +229,7 @@ export function useRetryReceipt(id: number) {
         (receipt) =>
           receipt && { ...receipt, status, stage, failure_reason: null },
       );
+      watchReading(queryClient, id, { status, stage });
     },
     onSettled: () =>
       Promise.all([
@@ -148,6 +265,9 @@ export function useReceiptProgress(id: number, enabled: boolean) {
       !(error instanceof ApiError && error.status < 500) &&
       failureCount < RECEIPT_POLL_RETRIES,
     retryDelay: RECEIPT_POLL_INTERVAL_MS,
+    // A second observer (the scan page and `ReadingWatcher`) must not re-poll a receipt that
+    // already failed; Try again refetches it.
+    retryOnMount: false,
     refetchInterval: (query) => {
       if (query.state.status === "error") return false;
       const status = query.state.data?.status;

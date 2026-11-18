@@ -162,6 +162,23 @@ def test_an_edit_stamps_the_sent_fields_person_and_keeps_the_others(
     assert migrated_client.get(f"/api/products/{product_id}").json() == body
 
 
+def test_editing_values_that_changed_since_they_were_shown_is_a_409_problem(
+    migrated_container: Container, migrated_client: TestClient
+) -> None:
+    product_id = _stored(migrated_container, field_sources={"brand": FieldSource.LLM})
+    url = f"/api/products/{product_id}"
+
+    stale = migrated_client.patch(url, json={"brand": "", "expected": {"brand": "Compliments"}})
+    current = migrated_client.patch(
+        url, json={"brand": "", "expected": {"brand": "Kirkland Signature"}}
+    )
+
+    assert stale.status_code == 409, stale.text
+    assert stale.headers["content-type"].startswith("application/problem+json")
+    assert current.status_code == 200, current.text
+    assert current.json()["brand"] is None
+
+
 @pytest.mark.parametrize(
     ("body", "detail"),
     [

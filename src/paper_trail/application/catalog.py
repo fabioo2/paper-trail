@@ -305,6 +305,16 @@ def _shown(value: ShownValue) -> ShownValue:
     return tuple(value) or None
 
 
+def _refuse_changed(product: Product, expected: Mapping[FieldSourceKey, ShownValue] | None) -> None:
+    """ConflictError naming each field whose stored value is no longer the ``expected`` one."""
+    changed = sorted(
+        key for key, value in (expected or {}).items() if shown_value(product, key) != _shown(value)
+    )
+    if changed:
+        msg = f"product {product.id} changed since it was shown: {', '.join(changed)}"
+        raise ConflictError(msg)
+
+
 class ConfirmProduct:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
@@ -327,14 +337,7 @@ class ConfirmProduct:
             if product is None:
                 msg = f"product {product_id} does not exist"
                 raise NotFoundError(msg)
-            changed = sorted(
-                key
-                for key, value in (expected or {}).items()
-                if shown_value(product, key) != _shown(value)
-            )
-            if changed:
-                msg = f"product {product_id} changed since it was shown: {', '.join(changed)}"
-                raise ConflictError(msg)
+            _refuse_changed(product, expected)
             filled = {
                 "canonical_name": True,
                 "brand": product.brand is not None,
@@ -372,13 +375,19 @@ class EditProduct:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    def __call__(self, product_id: int, edit: ProductEdit) -> Product:
+    def __call__(
+        self,
+        product_id: int,
+        edit: ProductEdit,
+        expected: Mapping[FieldSourceKey, ShownValue] | None = None,
+    ) -> Product:
         """Write every given field and stamp it ``person`` (a cleared field is unstamped, like
         an empty field ``ConfirmProduct`` leaves), in one unit of work, and return the product
         as stored. Free text is masked and trimmed; tags are lowercased, blanks and repeats
-        dropped. Nothing is written when nothing changes. DomainValidationError (nothing
-        written) for a blank name, a tag with a comma or an unreadable size; NotFoundError for
-        an unknown product."""
+        dropped. Nothing is written when nothing changes. ``expected`` is what the person saw,
+        as for ``ConfirmProduct``: ConflictError (nothing written) when a stored value
+        differs. DomainValidationError (nothing written) for a blank name, a tag with a comma
+        or an unreadable size; NotFoundError for an unknown product."""
         if edit.name is not None and not edit.name.strip():
             msg = "a product's name is not blank"
             raise DomainValidationError(msg)
@@ -391,6 +400,7 @@ class EditProduct:
             if product is None:
                 msg = f"product {product_id} does not exist"
                 raise NotFoundError(msg)
+            _refuse_changed(product, expected)
             edited = _edited(product, edit, size)
             if edited == product:
                 return product

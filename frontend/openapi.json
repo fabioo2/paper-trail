@@ -1026,7 +1026,7 @@
       },
       "ProductUpdateIn": {
         "additionalProperties": false,
-        "description": "The fields a person changed; a missing or null field is left as it is. ``size`` is text\nlike ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.",
+        "description": "The fields a person changed; a missing or null field is left as it is. ``size`` is text\nlike ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.\n``expected`` is what the person saw, as for ``ProductConfirmIn``.",
         "properties": {
           "brand": {
             "anyOf": [
@@ -1061,6 +1061,36 @@
                 "type": "null"
               }
             ]
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "$ref": "#/components/schemas/FieldSourceKey"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
           },
           "size": {
             "anyOf": [
@@ -2222,7 +2252,7 @@
         ]
       },
       "patch": {
-        "description": "Write the fields sent and stamp each ``person``; the others are kept. A blank name or\nan unreadable size is a 422 problem, an unknown id a 404 problem.",
+        "description": "Write the fields sent and stamp each ``person``; the others are kept. A stored value\nthat differs from its ``expected`` one is a 409 problem (nothing written); a blank name or\nan unreadable size is a 422 problem, an unknown id a 404 problem.",
         "operationId": "updateProduct",
         "parameters": [
           {
@@ -2265,6 +2295,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {

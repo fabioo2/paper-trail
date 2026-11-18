@@ -77,7 +77,8 @@ export function useCategories() {
   });
 }
 
-/** Write the fields a person changed (`updateProduct`). */
+/** Write the fields a person changed (`updateProduct`), refused (409) when a field differs
+ * from `expected`. */
 export function useUpdateProduct(id: number) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -94,6 +95,10 @@ export function useUpdateProduct(id: number) {
         queryClient.invalidateQueries({ queryKey: productKeys.all }),
         queryClient.invalidateQueries({ queryKey: searchKeys.all }),
       ]),
+    onError: (error) =>
+      error instanceof ApiError && error.status === 409
+        ? queryClient.invalidateQueries({ queryKey: productKeys.all })
+        : undefined,
   });
 }
 
@@ -125,12 +130,13 @@ export function useConfirmProduct(id: number) {
 export const STALE_MESSAGE =
   "This product changed while you were looking. Check the new values and try again.";
 
-/** Whether a confirmation was refused because the product changed since it was shown. */
+/** Whether a confirmation or edit was refused because the product changed since it was shown. */
 export function isStale(error: Error | null): boolean {
   return error instanceof ApiError && error.status === 409;
 }
 
-/** The fields as the person sees them, for `confirmProduct`'s `expected`. */
+/** The fields as the person sees them, for `confirmProduct`'s and `updateProduct`'s
+ * `expected`. */
 export function shownValues(
   product: ProductOut,
   fields: readonly FieldSourceKey[] = [
