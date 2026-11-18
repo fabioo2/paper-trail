@@ -153,6 +153,49 @@ class SqliteJobQueue:
         self._owned(job_id, worker_id)
         self._finish(job_id, JobStatus.PENDING, available_at=available_at)
 
+    def hold(self, receipt_id: int, holder: str, lease: timedelta) -> Job:
+        active = (
+            self._connection.execute(
+                select(jobs.c.id, jobs.c.status)
+                .where(
+                    jobs.c.receipt_id == receipt_id,
+                    jobs.c.status.in_((JobStatus.PENDING, JobStatus.RUNNING)),
+                )
+                .order_by(jobs.c.id)
+                .limit(1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if active is not None:
+            msg = (
+                f"receipt {receipt_id} is already being processed (job {active['id']},"
+                f" {active['status']}): try again once it has finished"
+            )
+            raise ConflictError(msg)
+        now = self._clock.now()
+        row = (
+            self._connection.execute(
+                insert(jobs)
+                .values(
+                    kind=JobKind.PROCESS_RECEIPT,
+                    receipt_id=receipt_id,
+                    status=JobStatus.RUNNING,
+                    attempts=0,
+                    max_attempts=1,
+                    available_at=now,
+                    locked_by=holder,
+                    lease_expires_at=now + lease,
+                    created_at=now,
+                    updated_at=now,
+                )
+                .returning(jobs)
+            )
+            .mappings()
+            .one()
+        )
+        return job_from_row(row)
+
     def has_active(self, kind: JobKind, receipt_id: int) -> bool:
         active = (
             select(jobs.c.id)

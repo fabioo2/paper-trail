@@ -25,13 +25,14 @@ def test_s0_ac_26_help_lists_every_command() -> None:
         assert command in result.output
 
 
-def test_s0_ac_26_db_help_lists_upgrade_and_current() -> None:
-    """S0-AC-26 / S0-AC-23: the db group exposes `upgrade` and `current`."""
+def test_s0_ac_26_db_help_lists_upgrade_current_and_backup() -> None:
+    """S0-AC-26 / S0-AC-23: the db group exposes `upgrade`, `current` and `backup`."""
     result = runner.invoke(cli, ["db", "--help"])
 
     assert result.exit_code == 0, result.output
     assert "upgrade" in result.output
     assert "current" in result.output
+    assert "backup" in result.output
 
 
 def test_s0_ac_26_version_prints_package_version_and_unknown_sha() -> None:

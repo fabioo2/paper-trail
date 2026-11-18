@@ -6,11 +6,17 @@ nothing but the picture is kept, and stored as ``<root>/<sha[:2]>/<sha[2:4]>/<sh
 their content; an image above ``max_pixels`` is refused before it is decoded. An iPhone JPEG is
 an MPO (a JPEG primary image plus extra frames such as a depth or HDR gain map): it is a JPEG,
 and like every multi-frame image only its first (primary) frame is kept.
+
+A 40-megapixel image takes a few hundred MB to decode and re-encode, so a process decodes one
+image at a time (the web container has 512 MB, and uploads run on parallel threads); the
+decoded picture is turned in place, converted only when it is not RGB already, and freed before
+its RGB copy is encoded.
 """
 
 import hashlib
 import io
 import tempfile
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -26,6 +32,8 @@ ACCEPTED_FORMATS = frozenset({"JPEG", "MPO", "PNG", "WEBP", "HEIF"})
 CONTENT_TYPE = "image/jpeg"
 JPEG_QUALITY = 90
 
+_DECODING = threading.Lock()
+
 
 class FilesystemImageStore:
     """Implements ``paper_trail.ports.images.ImageStore``."""
@@ -35,7 +43,8 @@ class FilesystemImageStore:
         self._max_pixels = max_pixels
 
     def save(self, data: bytes) -> StoredImage:
-        jpeg, width, height = _normalized_jpeg(data, self._max_pixels)
+        with _DECODING:
+            jpeg, width, height = _normalized_jpeg(data, self._max_pixels)
         sha256 = hashlib.sha256(jpeg).hexdigest()
         relative = f"{sha256[:2]}/{sha256[2:4]}/{sha256}.jpg"
         path = self._root / relative
@@ -80,14 +89,16 @@ def _normalized_jpeg(data: bytes, max_pixels: int) -> tuple[bytes, int, int]:
                 )
                 raise UnsupportedMediaError(msg)
             image.seek(0)  # the primary frame of an MPO or an animation
-            upright = ImageOps.exif_transpose(image)
-            rgb = upright.convert("RGB")
+            ImageOps.exif_transpose(image, in_place=True)
+            rgb = image if image.mode == "RGB" else image.convert("RGB")
+            if rgb is not image:
+                image.close()  # frees the decoded original before the encoder needs memory
+            return _jpeg(rgb), rgb.width, rgb.height
     except UnsupportedMediaError:
         raise
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, EOFError) as error:
         msg = f"not a readable JPEG, PNG, WebP or HEIC image ({type(error).__name__})"
         raise UnsupportedMediaError(msg) from None
-    return _jpeg(rgb), rgb.width, rgb.height
 
 
 def _jpeg(image: Image.Image) -> bytes:

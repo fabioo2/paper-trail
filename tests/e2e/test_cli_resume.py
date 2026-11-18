@@ -16,6 +16,8 @@ Pinned:
   ``process --reprocess``); exit 4 when Claude is unavailable again.
 - Claude unavailable: exit 4 with the hint; the receipt is FAILED with its checkpoint (V11).
 - ``--reprocess`` re-reads a stored photo's receipt with Claude (same id, not "duplicate").
+- ``--resume`` and ``--reprocess`` of a receipt the worker is running: exit 1 naming its job,
+  no read, no job added.
 """
 
 import copy
@@ -381,6 +383,31 @@ def test_ce_tc_060_a_receipt_without_a_stored_image_cannot_be_reprocessed(
 
     assert code == 1, output
     assert fake.calls == 0
+
+
+@pytest.mark.parametrize("flag", ["--resume", "--reprocess"])
+def test_a_receipt_the_worker_is_running_is_not_run_again_by_the_cli(
+    data_dir: Path, claude: StartClaude, receipt: Path, flag: str
+) -> None:
+    claude(answer())
+    assert _process(str(receipt))[0] == 0
+    database = run_database(data_dir, RUN)
+    _execute(
+        database,
+        "INSERT INTO jobs (kind, receipt_id, status, attempts, max_attempts, available_at,"
+        " locked_by, lease_expires_at, created_at, updated_at) VALUES ('process_receipt', 1,"
+        " 'running', 0, 2, '2026-11-18T00:00:00.000000+00:00', 'worker-1',"
+        " '2999-01-01T00:00:00.000000+00:00', '2026-11-18T00:00:00.000000+00:00',"
+        " '2026-11-18T00:00:00.000000+00:00')",
+    )
+    fake = claude(answer())
+
+    code, output = _process("--resume", "1") if flag == "--resume" else _process(str(receipt), flag)
+
+    assert code == 1, output
+    assert "receipt 1 is already being processed (job 1, running)" in output
+    assert fake.calls == 0
+    assert rows(database, "SELECT count(*) FROM jobs") == [(1,)]
 
 
 def _execute(database: Path, sql: str) -> None:

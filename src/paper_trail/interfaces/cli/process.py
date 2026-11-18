@@ -6,9 +6,11 @@ continues a receipt's thread from its last checkpoint (after a pause, a stopped 
 crash); ``--reprocess`` has Claude read a stored photo again.
 
 Exit codes: 0 every receipt completed, is parked for review or paused; 1 the main database is
-not migrated, or ``--resume`` names an unknown receipt or one with nothing to resume (or that
-waits for a review); 2 a usage error, or ``--resume`` of a run saved by an older version; 3 a
-receipt failed (a file that is not an image included); 4 a Claude read stopped the batch (the
+not migrated, ``--resume`` names an unknown receipt or one with nothing to resume (or that
+waits for a review), or ``--resume`` or ``--reprocess`` meets a receipt that the worker or
+another command is processing (or, reprocessed, one without a stored photo): the batch stops
+there; 2 a usage error, or ``--resume`` of a run saved by an older version; 3 a receipt failed
+(a file that is not an image included); 4 a Claude read stopped the batch (the
 API failed or refused, the answer was cut off, there is no key, or the monthly budget is
 reached): the receipt in progress is failed and keeps its checkpoint; the output says how to
 resume it.
@@ -245,6 +247,8 @@ def _process_one(agents: AgentContainer, path: Path, batch: _Batch) -> None:
                 source, reprocess=options.reprocess, interrupt_after=options.interrupt_after
             ),
         )
+    except ConflictError as error:
+        fail(EXIT_UNAVAILABLE, f"{path.name}: {error}")
     except UnsupportedMediaError as error:
         batch.tally.receipts += 1
         batch.tally.failed += 1

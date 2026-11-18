@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 import structlog
 
+from paper_trail.application.holds import ReceiptHold
 from paper_trail.application.matching import (
     MatchChoice,
     MatchesRecorded,
@@ -288,7 +289,8 @@ class ResolveReview:
     the graph then saves itself, exactly as it would have without a review. It must add up
     unless ``force`` is set with a reason, which is remembered as a correction.
     The graph then saves the draft as PROCESSING/MATCHING, ``save_matches`` completes it, and only
-    after that is the review RESOLVED.
+    after that is the review RESOLVED. Answered here (the CLI), the receipt is held for the run
+    (``hold``); the worker answers through ``apply``, holding the answer's job itself.
     """
 
     def __init__(
@@ -297,11 +299,14 @@ class ResolveReview:
         runner: ReceiptGraphRunner,
         record_receipt: RecordReceipt,
         clock: Clock,
+        *,
+        hold: ReceiptHold,
     ) -> None:
         self._uow_factory = uow_factory
         self._runner = runner
         self._record_receipt = record_receipt
         self._clock = clock
+        self._hold = hold
 
     def __call__(
         self,
@@ -313,7 +318,20 @@ class ResolveReview:
         attribute: bool = True,
     ) -> Receipt:
         """Resolve the review with the answer. Without ``attribute`` a person's draft keeps the
-        discount links it was given (none added), as the web app's editor shows them."""
+        discount links it was given (none added), as the web app's editor shows them.
+        ConflictError while the receipt has a job waiting or running."""
+        with self._hold(self._open_review(review_id).receipt_id):
+            return self._resolve(review_id, draft, force=force, reason=reason, attribute=attribute)
+
+    def _resolve(
+        self,
+        review_id: int,
+        draft: ReceiptDraft | None,
+        *,
+        force: bool,
+        reason: str | None,
+        attribute: bool,
+    ) -> Receipt:
         answer = self.check(review_id, draft, force=force, reason=reason, attribute=attribute)
         # Accepted as it is, the graph saves its own extraction (its codes and the source of
         # each category kept); a person's draft is masked before it enters the graph.
@@ -337,7 +355,7 @@ class ResolveReview:
         review = self._open_review(review_id)
         receipt_id = review.receipt_id
         if self._runner.waiting_for_review(receipt_id):
-            return self(review_id, draft, force=force, reason=reason, attribute=False)
+            return self._resolve(review_id, draft, force=force, reason=reason, attribute=False)
         try:
             self._runner.resume(receipt_id)
         except NothingToResumeError:
@@ -453,7 +471,8 @@ class AnswerReview:
     web process). Its force reason is stored with card numbers masked, and only when the draft
     does not add up. Queuing sets the receipt PROCESSING/QUEUED in the same unit of
     work, after checking the review is still OPEN with no answer queued or running: a second
-    answer to the same review is a ConflictError, however close behind the first it comes. A
+    answer to the same review is a ConflictError, however close behind the first it comes, and
+    so is an answer while the receipt is being processed (the CLI resolving it, ``hold``). A
     review left OPEN beside a COMPLETED receipt (its run finished, closing it did not) is
     closed instead, and the answer refused with a ConflictError. So is an answer to a review
     whose receipt is not NEEDS_REVIEW (a FAILED one is retried instead: its graph may already
@@ -494,6 +513,9 @@ class AnswerReview:
                 raise ConflictError(msg)
             if uow.jobs.has_active(JobKind.RESOLVE_REVIEW, receipt_id):
                 msg = f"review {review_id} was already answered: its receipt is being saved"
+                raise ConflictError(msg)
+            if uow.jobs.has_active(JobKind.PROCESS_RECEIPT, receipt_id):
+                msg = f"receipt {receipt_id} is being processed: try again once it has finished"
                 raise ConflictError(msg)
             saved = receipt.status is ReceiptStatus.COMPLETED
             if not saved and receipt.status is not ReceiptStatus.NEEDS_REVIEW:

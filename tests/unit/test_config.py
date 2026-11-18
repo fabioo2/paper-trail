@@ -1,11 +1,12 @@
 """Settings defaults and validation (S0-AC-13)."""
 
+from datetime import time
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from paper_trail.config import Settings, WebSettings, WorkerSettings
+from paper_trail.config import BackupSettings, Settings, WebSettings, WorkerSettings
 
 
 def test_s0_ac_13_defaults_match_the_documented_table() -> None:
@@ -24,6 +25,7 @@ def test_s0_ac_13_defaults_match_the_documented_table() -> None:
     assert settings.worker.poll_interval_s == 1.0
     assert settings.worker.heartbeat_interval_s == 10.0
     assert settings.worker.shutdown_grace_s == 90.0
+    assert settings.backup == BackupSettings(at=time(3, 30), keep=14)
 
 
 def test_s0_ac_13_database_path_defaults_to_data_dir() -> None:
@@ -101,6 +103,8 @@ def test_s0_ac_13_reads_dotenv_file_when_present() -> None:
         ("PAPER_TRAIL_WORKER__POLL_INTERVAL_S", "0"),
         ("PAPER_TRAIL_WORKER__POLL_INTERVAL_S", "0.05"),
         ("PAPER_TRAIL_WORKER__POLL_INTERVAL_S", "61"),
+        ("PAPER_TRAIL_BACKUP__AT", "25:00"),
+        ("PAPER_TRAIL_BACKUP__KEEP", "0"),
     ],
 )
 def test_s0_ac_13_invalid_values_raise_validation_error(
@@ -111,6 +115,15 @@ def test_s0_ac_13_invalid_values_raise_validation_error(
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_the_backup_time_and_count_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PAPER_TRAIL_BACKUP__AT", "04:15")
+    monkeypatch.setenv("PAPER_TRAIL_BACKUP__KEEP", "3")
+
+    assert Settings().backup == BackupSettings(at=time(4, 15), keep=3)
 
 
 @pytest.mark.parametrize("value", ["0.1", "60"])

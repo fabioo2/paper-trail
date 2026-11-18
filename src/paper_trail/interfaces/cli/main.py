@@ -32,7 +32,9 @@ from pydantic import ValidationError
 import paper_trail
 from paper_trail.bootstrap import (
     Container,
+    backup_database,
     build_container,
+    database_backup_path,
     database_is_current,
     database_revision,
     dispose,
@@ -43,17 +45,17 @@ from paper_trail.domain.enums import AgentRole, Category, CodeScheme
 from paper_trail.interfaces.cli.options import Transport, with_transport
 from paper_trail.interfaces.cli.receipts import (
     EXIT_INVALID_INPUT,
+    EXIT_UNAVAILABLE,
     fail,
     import_receipt,
     show_receipt,
 )
+from paper_trail.interfaces.worker.backup import NightlyBackup
 from paper_trail.interfaces.worker.heartbeat import HEARTBEAT_FILENAME, HeartbeatFile
 from paper_trail.interfaces.worker.runner import WorkerRunner
 from paper_trail.observability import configure_logging
 
 STALE_AFTER_HEARTBEATS = 3
-# Renewed every heartbeat while the job runs; a dead worker's job is claimed again after it.
-JOB_LEASE = timedelta(minutes=5)
 
 app = typer.Typer(
     name="paper-trail",
@@ -192,8 +194,8 @@ def worker(
         ),
     ] = False,
 ) -> None:
-    """Process the receipts uploaded through the API until SIGTERM or SIGINT (the main
-    database must be migrated)."""
+    """Process the receipts uploaded through the API, and back the database up every night,
+    until SIGTERM or SIGINT (the main database must be migrated)."""
     settings = load_settings()
     if check_heartbeat:
         max_age = timedelta(seconds=STALE_AFTER_HEARTBEATS * settings.worker.heartbeat_interval_s)
@@ -201,6 +203,7 @@ def worker(
             fresh = _heartbeat(container).is_fresh(max_age)
         raise typer.Exit(0 if fresh else 1)
 
+    from paper_trail.application.holds import JOB_LEASE
     from paper_trail.application.jobs import ProcessReceiptJobs
     from paper_trail.interfaces.cli.runs import open_run
 
@@ -215,8 +218,14 @@ def worker(
             lease=JOB_LEASE,
             resolve_review=agents.resolve_review,
         )
+        backup = NightlyBackup(
+            lambda day: backup_database(container, day),
+            lambda day: database_backup_path(container, day).is_file(),
+            container.clock,
+            at=settings.backup.at,
+        )
         runner = WorkerRunner(
-            handlers=(jobs,),
+            handlers=(jobs, backup),
             clock=container.clock,
             heartbeat=_heartbeat(container),
             poll_interval_s=settings.worker.poll_interval_s,
@@ -236,6 +245,20 @@ def db_upgrade() -> None:
     with running_container(settings) as container:
         upgrade_database(container)
         log.info("db.upgraded", revision=database_revision(container))
+
+
+@db_app.command("backup")
+def db_backup() -> None:
+    """Back the database up now, as the worker does every night: an online, integrity-checked
+    copy in <DATA_DIR>/backups/paper_trail-YYYYMMDD.db (replacing today's)."""
+    settings = load_settings()
+    with running_container(settings) as container:
+        if not settings.database_path.is_file():
+            fail(EXIT_UNAVAILABLE, f"there is no database at {settings.database_path}")
+        backup = backup_database(container, container.clock.now().astimezone().date())
+    typer.echo(f"{backup.path} ({backup.size_bytes:,} bytes)")
+    for removed in backup.removed:
+        typer.echo(f"removed {removed.name}")
 
 
 @db_app.command("current")

@@ -128,6 +128,23 @@ def test_s0_ac_23_db_upgrade_twice_is_a_no_op(cli_env: dict[str, str], data_dir:
     assert _schema_snapshot(database) == before == [*before[:-1], (SCHEMA_HEAD,)]
 
 
+def test_db_backup_writes_todays_checked_copy_and_needs_a_database(
+    cli_env: dict[str, str], data_dir: Path
+) -> None:
+    missing = invoke("db", "backup")
+    assert not (data_dir / "paper_trail.db").exists()
+    assert invoke("db", "upgrade").exit_code == 0
+
+    backup = invoke("db", "backup")
+
+    (copy,) = (data_dir / "backups").glob("paper_trail-*.db")
+    assert (missing.exit_code, backup.exit_code) == (1, 0), backup.output
+    assert "there is no database" in missing.output
+    assert re.fullmatch(r"paper_trail-\d{8}\.db", copy.name)
+    assert backup.stdout.startswith(f"{copy} (")
+    assert _schema_snapshot(copy) == _schema_snapshot(data_dir / "paper_trail.db")
+
+
 def _database_at_0003_with_negative_observations(database: Path) -> None:
     """Revision 0003 with eight observations, ids 3 and 7 of line total -1.00 (discount lines
     observed as products: what migration 0004's preflight refuses, A2)."""

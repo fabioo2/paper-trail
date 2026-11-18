@@ -20,7 +20,7 @@ export APP_VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml
 
 BASE_IMAGES := python:3.12-slim-trixie node:24-trixie-slim
 
-.PHONY: help build up down logs ps restart shell fe-shell lock migrate revision \
+.PHONY: help build up down logs ps restart backup shell fe-shell lock migrate revision \
 	lint format typecheck test test-fast test-unit test-integration \
 	fe-install fe-deps fe-lint fe-format fe-typecheck fe-test fe-build fe-dev \
 	api-client api-check secrets smoke container-checks pre-commit hooks check ci \
@@ -52,6 +52,9 @@ restart: ## Restart web and worker
 
 migrate: ## Apply the migrations baked into the built image (`make build migrate` after adding one)
 	$(RUN) migrate
+
+backup: ## Back up the database now to <data volume>/backups (the worker does it every night)
+	$(RUN) cli db backup
 
 # --- development shells and dependencies -----------------------------------------------------
 

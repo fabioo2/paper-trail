@@ -62,6 +62,13 @@ class JobQueue(Protocol):
         """Owner only: back to PENDING at ``available_at`` without using an attempt."""
         ...
 
+    def hold(self, receipt_id: int, holder: str, lease: timedelta) -> Job:
+        """A new ``process_receipt`` job for a process that runs the receipt itself (the CLI):
+        RUNNING, locked by ``holder`` until now + ``lease``, with a single attempt, so once its
+        lease runs out it is never claimed, only ``abandoned``. ConflictError, adding nothing,
+        while the receipt has a PENDING or RUNNING job of any kind."""
+        ...
+
     def has_active(self, kind: JobKind, receipt_id: int) -> bool:
         """Whether a job of ``kind`` for the receipt is PENDING or RUNNING."""
         ...
