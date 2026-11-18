@@ -60,6 +60,11 @@ describe("unitPriceSummary", () => {
       expected: [441, 441, "kg", 2],
     },
     {
+      name: "a converted price of exactly half a cent rounds up: 0.90718474 kg for $2.39 is $1.195/lb",
+      purchases: [bought(300, "1", "lb"), bought(239, "0.90718474", "kg")],
+      expected: [120, 210, "lb", 2],
+    },
+    {
       name: "full precision is kept until the final rounding",
       purchases: [bought(1001, "10", "each"), bought(503, "5", "each")],
       expected: [100, 100, "each", 2],

@@ -693,7 +693,7 @@ most important ones:
   on. Set it to the server's LAN address to use the app from your phone.
 - `PAPER_TRAIL_PORT` (default `8420`): the host port.
 - `PAPER_TRAIL_WEB__ALLOWED_HOSTS` (default: none): the host names or IPs you open the app by,
-  comma-separated (e.g. `192.168.1.10,my-server`), besides `localhost`, `127.0.0.1` and `web`.
+  comma-separated (e.g. `192.168.1.10,my-server`), besides `localhost`, `127.0.0.1`, `::1` and `web`.
   Any other `Host` is refused with 400, and a write sent from another site's page with 403
   ([ADR-0020](docs/adr/0020-host-and-origin-checks.md)): the app has no login.
 - `PAPER_TRAIL_DATA_VOLUME` (default: the `paper-trail-data` named volume): where the database

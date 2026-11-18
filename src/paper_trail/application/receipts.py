@@ -22,6 +22,7 @@ from paper_trail.application.products import (
 from paper_trail.domain.enums import (
     AliasSource,
     CorrectionKind,
+    FailureReason,
     JobKind,
     LineKind,
     ProcessingStage,
@@ -344,13 +345,20 @@ class ResolveReview:
                 raise
         return self._close(review, reason if force else None)
 
-    def give_back(self, review_id: int, *, forced_reason: str | None) -> None:
+    def give_back(
+        self,
+        review_id: int,
+        *,
+        forced_reason: str | None,
+        failure: FailureReason = FailureReason.UNKNOWN,
+    ) -> None:
         """After a queued answer failed, decided by the graph's checkpoint alone. While the
         thread still waits for the review (the answer was not taken), or there is no thread,
         the receipt waits for a person again (NEEDS_REVIEW). Once the graph took the answer and
-        the run failed after it, the review is closed and the receipt FAILED: like any failed
-        run, ``process --resume`` continues it. Either way only while the review is still OPEN
-        and the receipt not COMPLETED, read in the write unit of work that changes them."""
+        the run failed after it, the review is closed and the receipt FAILED with ``failure``:
+        like any failed run, ``process --resume`` or a retry continues it. Either way only while
+        the review is still OPEN and the receipt not COMPLETED, read in the write unit of work
+        that changes them."""
         receipt_id = GetReview(self._uow_factory)(review_id).receipt_id
         taken = self._runner.has_thread(receipt_id) and not self._runner.waiting_for_review(
             receipt_id
@@ -361,7 +369,12 @@ class ResolveReview:
             if taken:
                 self._remember(uow, receipt_id, forced_reason)
                 uow.reviews.resolve(review_id)
-                uow.receipts.update_status(receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED)
+                uow.receipts.update_status(
+                    receipt_id,
+                    ReceiptStatus.FAILED,
+                    ProcessingStage.FAILED,
+                    failure_reason=failure,
+                )
             else:
                 uow.receipts.update_status(
                     receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW

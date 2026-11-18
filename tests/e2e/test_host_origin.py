@@ -22,7 +22,7 @@ from tests.images import png_bytes
 from tests.storage import in_unit, stored_state
 from tests.support import TEST_CLIENT_HOST, CopyMigrated, MakeSettings, require_id
 
-CONFIGURED = ("192.168.0.187", "fabio-server")
+CONFIGURED = ("192.168.0.187", "fabio-server", "fd00::5")
 PROBLEM_JSON = "application/problem+json"
 
 
@@ -55,6 +55,9 @@ def client(container: Container) -> Iterator[TestClient]:
         "192.168.0.187",
         "192.168.0.187:8420",
         "FABIO-SERVER:8420",
+        "[::1]",
+        "[::1]:8420",
+        "[FD00::5]:8420",
     ],
 )
 def test_h1_01_h1_03_built_in_and_configured_hosts_are_served(
@@ -64,7 +67,8 @@ def test_h1_01_h1_03_built_in_and_configured_hosts_are_served(
 
 
 @pytest.mark.parametrize(
-    "host", ["evil.example", "192.168.0.50", "web.evil.example", "evil.example:8000", ""]
+    "host",
+    ["evil.example", "192.168.0.50", "web.evil.example", "evil.example:8000", "", "[fd00::6]:80"],
 )
 @pytest.mark.parametrize(
     ("method", "path"),
@@ -100,42 +104,23 @@ def test_h1_09_default_settings_refuse_the_test_clients_host(
     assert (refused.status_code, served.status_code) == (400, 200)
 
 
-FOREIGN_ORIGINS = [
-    "http://evil.example",
-    "http://testserver:8080",
-    "https://testserver",
-    "null",
-    "http://localhost:8000",
-]
-
-
-@pytest.mark.parametrize("origin", FOREIGN_ORIGINS)
 @pytest.mark.parametrize(
-    ("method", "path"),
+    "origin",
     [
-        ("POST", "/api/receipts"),
-        ("PATCH", "/api/products/{product_id}"),
-        ("POST", "/api/reviews/1/resolve"),
-        ("PUT", "/api/receipts/1"),
-        ("DELETE", "/api/receipts/1"),
+        "http://evil.example",
+        "http://testserver:8080",
+        "https://testserver",
+        "null",
+        "http://localhost:8000",
     ],
-    ids=["upload", "product-edit", "review-answer", "put", "delete"],
 )
-def test_h1_05_a_write_from_another_origin_is_a_403_problem_and_changes_nothing(
-    client: TestClient, container: Container, origin: str, method: str, path: str
+def test_h1_05_an_upload_from_another_origin_is_a_403_problem_and_stores_nothing(
+    client: TestClient, container: Container, origin: str
 ) -> None:
-    stored = in_unit(container.uow_factory, lambda uow: uow.products.add(product()))
-    product_id = require_id(stored.id)
-    before = stored_state(container.engine)
-    body = {"canonical_name": "Hacked"} if method == "PATCH" else None
-    files = {"file": ("r.png", png_bytes(), "image/png")} if path == "/api/receipts" else None
-
-    response = client.request(
-        method,
-        path.format(product_id=product_id),
+    response = client.post(
+        "/api/receipts",
         headers={"Origin": origin},
-        json=body,
-        files=files,
+        files={"file": ("r.png", png_bytes(), "image/png")},
     )
 
     assert response.status_code == 403
@@ -145,9 +130,37 @@ def test_h1_05_a_write_from_another_origin_is_a_403_problem_and_changes_nothing(
         "title": "Forbidden",
         "status": 403,
         "detail": "Requests from another site are not accepted.",
-        "instance": path.format(product_id=product_id),
+        "instance": "/api/receipts",
         "errors": None,
     }
+    state = stored_state(container.engine)
+    assert (state.receipts, state.jobs) == ({}, {})
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PATCH", "/api/products/{product_id}"),
+        ("POST", "/api/reviews/1/resolve"),
+        ("PUT", "/api/receipts/1"),
+        ("DELETE", "/api/receipts/1"),
+    ],
+    ids=["product-edit", "review-answer", "put", "delete"],
+)
+def test_h1_05_every_method_that_changes_data_is_checked(
+    client: TestClient, container: Container, method: str, path: str
+) -> None:
+    stored = in_unit(container.uow_factory, lambda uow: uow.products.add(product()))
+    before = stored_state(container.engine)
+
+    response = client.request(
+        method,
+        path.format(product_id=require_id(stored.id)),
+        headers={"Origin": "http://evil.example"},
+        json={"canonical_name": "Hacked"} if method == "PATCH" else None,
+    )
+
+    assert response.status_code == 403
     assert stored_state(container.engine) == before
 
 
@@ -160,6 +173,7 @@ def test_h1_05_a_write_from_another_origin_is_a_403_problem_and_changes_nothing(
         ("web:80", "http://web"),
         ("web", "http://web:80"),
         ("192.168.0.187:8420", "http://192.168.0.187:8420"),
+        ("[::1]:8420", "http://[::1]:8420"),
     ],
 )
 def test_h1_06_a_write_from_its_own_origin_is_served(

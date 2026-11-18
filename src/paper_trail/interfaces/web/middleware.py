@@ -165,8 +165,11 @@ class HostOriginMiddleware:
 
 
 def _hostname(host: str) -> str:
-    """``host`` without its port, lowercased."""
-    return host.rsplit(":", 1)[0].lower() if _PORT.search(host) else host.lower()
+    """``host`` without its port (and an IPv6 address without its brackets), lowercased."""
+    host = host.lower()
+    if host.startswith("["):
+        return host[1:].partition("]")[0]
+    return host.rsplit(":", 1)[0] if _PORT.search(host) else host
 
 
 def _origin(origin: str) -> str:

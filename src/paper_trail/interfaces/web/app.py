@@ -29,7 +29,7 @@ API_PREFIX = "/api"
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 # Always served, whatever WEB__ALLOWED_HOSTS adds: the healthcheck's, a browser on the host's and
 # the compose service name (the smoke test, the Vite proxy).
-BUILT_IN_HOSTS = ("localhost", "127.0.0.1", "web")
+BUILT_IN_HOSTS = ("localhost", "127.0.0.1", "::1", "web")
 
 # FastAPI ships native OpenTelemetry hooks (no-op without an SDK). Paper Trail has no
 # telemetry (ADR-0015), so they are switched off explicitly rather than left dormant.

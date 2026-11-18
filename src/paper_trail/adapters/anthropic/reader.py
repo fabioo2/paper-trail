@@ -38,6 +38,7 @@ from PIL import Image, ImageOps
 from pydantic import TypeAdapter, ValidationError
 
 from paper_trail.config import ClaudeSettings
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.ports.reader import (
     ReaderError,
@@ -94,6 +95,15 @@ def prepare_image(image: bytes) -> bytes:
         upright.thumbnail((edge, edge), Image.Resampling.LANCZOS)
 
 
+def _decoded(image: bytes) -> bytes:
+    """``prepare_image``; a stored photo Pillow cannot decode is an UnsupportedMediaError."""
+    try:
+        return prepare_image(image)
+    except (OSError, Image.DecompressionBombError) as error:
+        msg = f"the stored photo cannot be read: {type(error).__name__}"
+        raise UnsupportedMediaError(msg) from error
+
+
 def _jpeg(image: Image.Image, quality: int) -> bytes:
     out = io.BytesIO()
     image.save(out, format="JPEG", quality=quality)
@@ -116,7 +126,7 @@ class AnthropicReader:
     def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         adapter = TypeAdapter(schema)
         self._sdk()  # no key: nothing is prepared or sent
-        image = None if request.image is None else prepare_image(request.image)
+        image = None if request.image is None else _decoded(request.image)
         sent = None if image is None else hashlib.sha256(image).hexdigest()
         try:
             response = self._create(request, image, adapter)

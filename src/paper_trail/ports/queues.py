@@ -35,9 +35,14 @@ class JobQueue(Protocol):
         attempt. None if idle."""
         ...
 
-    def fail_abandoned(self, error: str) -> list[Job]:
+    def abandoned(self) -> list[Job]:
         """RUNNING jobs whose lease expired before now and whose dead worker used up their last
-        attempt: FAILED with ``error``, that attempt counted. Returns them."""
+        attempt (``claim`` never takes them), by id."""
+        ...
+
+    def fail_abandoned(self, job_id: int, error: str) -> Job:
+        """One of ``abandoned``: FAILED with ``error``, that attempt counted. ConflictError when
+        it is not (any more) abandoned, NotFoundError for an unknown id."""
         ...
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:

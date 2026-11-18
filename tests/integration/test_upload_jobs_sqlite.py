@@ -18,7 +18,7 @@ transaction (H4-03 to H4-05).
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -51,6 +51,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.images import FakeImageStore, fake_png
 from tests.fakes.reader import ScriptedReader
 from tests.support import require_id
+from tests.unit.agents.graph_support import rewrite_latest
 
 WORKER = "worker-1"
 LEASE = timedelta(minutes=30)
@@ -404,6 +405,19 @@ def _running_job(queue: Queue) -> Callable[[int], None]:
     return claim
 
 
+def _photo_removed(queue: Queue) -> Callable[[int], None]:
+    """A FAILED receipt without a stored photo, e.g. one imported from JSON."""
+
+    def remove(receipt_id: int) -> None:
+        with queue.harness.uow_factory() as uow:
+            stored = uow.receipts.get(receipt_id)
+            assert stored is not None
+            uow.receipts.replace_contents(replace(stored, image_path=None))
+            uow.commit()
+
+    return remove
+
+
 @pytest.mark.parametrize(
     ("arrange", "message"),
     [
@@ -412,8 +426,9 @@ def _running_job(queue: Queue) -> Callable[[int], None]:
         (lambda queue: _set_status(queue, ReceiptStatus.COMPLETED), "is completed"),
         (_pending_job, "already being processed"),
         (_running_job, "already being processed"),
+        (_photo_removed, "no stored photo"),
     ],
-    ids=["processing", "needs-review", "completed", "pending-job", "running-job"],
+    ids=["processing", "needs-review", "completed", "pending-job", "running-job", "no-photo"],
 )
 def test_h2_05_a_retry_is_refused_unless_failed_with_no_job_waiting(
     arrange: Callable[[Queue], Callable[[int], None]], message: str
@@ -426,23 +441,6 @@ def test_h2_05_a_retry_is_refused_unless_failed_with_no_job_waiting(
         RetryReceipt(queue.harness.uow_factory)(receipt_id)
 
     assert (queue.harness.receipt(receipt_id), queue.job_count()) == (before, jobs)
-
-
-def test_h2_05_a_failed_receipt_without_a_photo_is_not_retried() -> None:
-    queue = _queue(ScriptedReader())
-    with queue.harness.uow_factory() as uow:
-        photoless = require_id(
-            uow.receipts.add(
-                receipt(status=ReceiptStatus.FAILED, stage=ProcessingStage.FAILED, items=())
-            ).id
-        )
-        uow.commit()
-
-    with pytest.raises(ConflictError, match="no stored photo"):
-        RetryReceipt(queue.harness.uow_factory)(photoless)
-
-    assert queue.job_count() == 0
-    assert queue.failed(photoless) == (ReceiptStatus.FAILED, None)
 
 
 def test_h2_08_a_retry_whose_transaction_fails_changes_nothing() -> None:
@@ -502,6 +500,32 @@ def test_h2_09_a_retry_without_a_checkpoint_reads_the_stored_photo_again() -> No
     assert len(queue.harness.images.files) == 1
     with queue.harness.uow_factory(read_only=True) as uow:
         assert uow.receipts.get(receipt_id + 1) is None
+
+
+def _at_version_2(values: dict[str, object]) -> None:
+    values["state_version"] = 2
+
+
+def test_h2_09_a_retry_of_a_thread_an_older_version_saved_reads_the_photo_again() -> None:
+    reader = ScriptedReader(answer(), answer())
+    queue = _queue(reader)
+    receipt_id = queue.uploaded()
+    image_path = queue.harness.receipt(receipt_id).image_path
+    assert image_path is not None
+    queue.harness.runner.start(
+        receipt_id, source_name="costco.jpg", image_path=image_path, interrupt_after="extract"
+    )
+    rewrite_latest(queue.harness.checkpointer, receipt_id, _at_version_2)
+    queue.die_running()
+    queue.die_running()
+    assert queue.run_job() is False
+
+    RetryReceipt(queue.harness.uow_factory)(receipt_id)
+    assert queue.run_job() is True
+
+    assert queue.failed(receipt_id) == (ReceiptStatus.COMPLETED, None)
+    assert queue.settled(2) == (JobStatus.SUCCEEDED, 0, None, None)
+    assert reader.calls == 2
 
 
 def test_h2_10_a_retry_that_fails_again_keeps_its_reason_and_can_be_retried() -> None:

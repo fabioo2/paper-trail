@@ -155,7 +155,7 @@ def failure_reason(error: BaseException) -> FailureReason:
         return FailureReason.NO_API_KEY
     if isinstance(error, ReaderError):
         return FailureReason.CLAUDE_UNAVAILABLE
-    if isinstance(error, UnsupportedMediaError | OSError):
+    if isinstance(error, UnsupportedMediaError):
         return FailureReason.UNREADABLE_PHOTO
     return FailureReason.UNKNOWN
 
@@ -268,8 +268,10 @@ class ProcessReceiptFile:
 
     def process_stored(self, receipt: Receipt) -> ProcessOutcome:
         """Run the graph over the stored photo of a receipt ``UploadReceipt`` created; when a
-        run of it had started (a worker that died), continue its thread instead. Failures as
-        for ``__call__``; ConflictError for a receipt without a stored photo."""
+        run of it had started (a worker that died, a retried failure), continue its thread
+        instead, unless an older version saved it: then the thread is forgotten and the photo
+        read again. Failures as for ``__call__``; ConflictError for a receipt without a stored
+        photo."""
         receipt_id = require_id(receipt.id)
         image_path = receipt.image_path
         if image_path is None:
@@ -279,6 +281,8 @@ class ProcessReceiptFile:
             outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
         except NothingToResumeError:
             pass
+        except OutdatedCheckpointError:
+            self._runner.reset(receipt_id)
         else:
             if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
                 self._completed(receipt_id)

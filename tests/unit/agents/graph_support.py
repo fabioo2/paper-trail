@@ -1,8 +1,9 @@
 """Helpers shared by the graph suites: the scripted reader of a harness, a second process on
 the same data, a run's outcome, and a tracer that keeps what it is given."""
 
+import copy
 import itertools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -118,3 +119,19 @@ def raw_traced(harness: Harness) -> Harness:
         ),
         resolve=ResolveReview(harness.uow_factory, runner, harness.record, harness.clock),
     )
+
+
+def rewrite_latest(
+    saver: BaseCheckpointSaver[Any], receipt_id: int, change: Callable[[dict[str, Any]], None]
+) -> None:
+    """Replace the thread's latest checkpoint (same id) by one whose values ``change`` edited:
+    what an older version would have saved."""
+    saved = saver.get_tuple(config(receipt_id))
+    assert saved is not None
+    checkpoint = copy.copy(saved.checkpoint)
+    values = dict(checkpoint["channel_values"])
+    change(values)
+    versions = {k: v for k, v in checkpoint["channel_versions"].items() if k in values}
+    checkpoint["channel_values"] = values
+    checkpoint["channel_versions"] = versions
+    saver.put(saved.parent_config or config(receipt_id), checkpoint, saved.metadata, versions)

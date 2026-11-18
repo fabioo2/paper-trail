@@ -83,5 +83,6 @@ class ReadResult[M]:
 class ReceiptReader(Protocol):
     def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         """The answer validated as ``schema``. Raises a ``ReaderError`` subclass for every
-        failure; no SDK exception escapes."""
+        failure of the call, and ``UnsupportedMediaError`` (nothing sent) for a photo that
+        cannot be decoded; no SDK or imaging exception escapes."""
         ...

@@ -130,8 +130,9 @@ def test_s0_ac_13_poll_interval_bounds_are_inclusive(
         (" 192.168.0.187 , Fabio-Server ,, ", ("192.168.0.187", "fabio-server")),
         ("", ()),
         (None, ()),
+        ("::1,[FD00::5]", ("::1", "fd00::5")),
     ],
-    ids=["one", "trimmed-lowercased-empty-dropped", "empty", "unset"],
+    ids=["one", "trimmed-lowercased-empty-dropped", "empty", "unset", "ipv6-bare-or-bracketed"],
 )
 def test_h1_04_web_allowed_hosts_is_a_comma_list(
     monkeypatch: pytest.MonkeyPatch, value: str | None, hosts: tuple[str, ...]
@@ -143,7 +144,16 @@ def test_h1_04_web_allowed_hosts_is_a_comma_list(
 
 
 @pytest.mark.parametrize(
-    "entry", ["http://192.168.0.187", "fabio-server:8420", "*", "*.example", "host/path"]
+    "entry",
+    [
+        "http://192.168.0.187",
+        "fabio-server:8420",
+        "*",
+        "*.example",
+        "host/path",
+        "[::1]:8420",
+        "[::1",
+    ],
 )
 def test_h1_04_a_host_with_a_scheme_port_path_or_wildcard_fails_naming_the_variable(
     monkeypatch: pytest.MonkeyPatch, entry: str

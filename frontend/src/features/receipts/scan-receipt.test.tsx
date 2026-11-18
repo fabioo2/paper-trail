@@ -18,7 +18,6 @@ import {
 } from "@/features/receipts/api";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
-import { FAILURE_MESSAGES } from "@/features/receipts/failure-reasons";
 import {
   cad,
   receiptDetail,
@@ -28,6 +27,27 @@ import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
 import { textOf } from "@/test/text";
+
+const FAILURE_COPY: [FailureReason, string][] = [
+  [
+    "budget_reached",
+    "This month's Claude budget is used up. Raise the budget or wait until next month, then try again.",
+  ],
+  [
+    "claude_unavailable",
+    "Claude couldn't read it just now. Try again in a minute.",
+  ],
+  [
+    "no_api_key",
+    "No Claude API key is set on the server. Add ANTHROPIC_API_KEY to .env, then try again.",
+  ],
+  [
+    "unreadable_photo",
+    "The photo couldn't be read. Retake it with the whole receipt flat, in focus and well lit.",
+  ],
+  ["stopped_unexpectedly", "Paper Trail stopped while reading it. Try again."],
+  ["unknown", "Something went wrong while reading it. Try again."],
+];
 
 const PREVIEW_URL = "blob:receipt-preview";
 const THREE_MINUTES_MS = 3 * 60_000;
@@ -369,7 +389,7 @@ describe("Scan page", () => {
     },
   );
 
-  it.each(Object.entries(FAILURE_MESSAGES) as [FailureReason, string][])(
+  it.each(FAILURE_COPY)(
     "a %s failure says why and offers Try again",
     async (reason, message) => {
       serveUpload(accepted);
@@ -407,6 +427,26 @@ describe("Scan page", () => {
     await advance(RECEIPT_POLL_INTERVAL_MS * 2);
     expect(textOf(await heading())).toMatch(/saved/i);
     expect(retries).toEqual(["/api/receipts/7/retry"]);
+    expect(polls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("Try again long after the failure gets a fresh 3 minutes and polls again", async () => {
+    serveUpload(accepted);
+    const polls = serveProgress(
+      failedDetail("claude_unavailable"),
+      processing,
+      receiptDetail(),
+    );
+    serveRetry(() => accepted());
+
+    await pickAndSend(user);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await advance(THREE_MINUTES_MS + 1_000);
+    await user.click(retry);
+
+    expect(textOf(await heading())).toMatch(/reading your receipt/i);
+    await advance(RECEIPT_POLL_INTERVAL_MS * 2);
+    expect(textOf(await heading())).toMatch(/saved/i);
     expect(polls.length).toBeGreaterThanOrEqual(3);
   });
 

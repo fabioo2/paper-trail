@@ -35,10 +35,10 @@ class ProcessReceiptJobs:
     PROCESSING (it was processed by other means) succeeds without a run. While a job runs,
     ``renew_lease`` keeps it claimed; a job whose worker died is claimed again once its lease
     runs out and continues the receipt's thread, which uses up an attempt. A job whose dead
-    workers used up its last attempt is FAILED instead, before the next claim and in the same
-    transaction: its receipt FAILED as stopped unexpectedly (a ``resolve_review`` job's review
-    given back), so a job that crashes its worker cannot run forever. The receipt's trace
-    events are dropped after its job.
+    workers used up its last attempt is FAILED instead, before the next claim
+    (``_sweep_and_claim``), so a job that crashes its worker cannot run forever: its receipt
+    FAILED as stopped unexpectedly, or a ``resolve_review`` job's review given back. The
+    receipt's trace events are dropped after its job.
 
     A ``resolve_review`` job resolves its review with the answer it carries
     (``ResolveReview.apply``: given once, even when a worker died after giving it). When that
@@ -67,27 +67,7 @@ class ProcessReceiptJobs:
 
     def __call__(self) -> bool:
         """True when a job was run, False when there was none."""
-        with self._uow_factory() as uow:
-            abandoned = uow.jobs.fail_abandoned(STOPPED_UNEXPECTEDLY)
-            for lost in abandoned:
-                receipt = uow.receipts.get(lost.receipt_id)
-                processing = receipt is not None and receipt.status is ReceiptStatus.PROCESSING
-                if lost.kind is JobKind.PROCESS_RECEIPT and processing:
-                    uow.receipts.update_status(
-                        lost.receipt_id,
-                        ReceiptStatus.FAILED,
-                        ProcessingStage.FAILED,
-                        failure_reason=FailureReason.STOPPED_UNEXPECTEDLY,
-                    )
-            job = uow.jobs.claim(self._worker_id, self._lease)
-            uow.commit()
-        for lost in abandoned:
-            log.error("job.abandoned", job_id=lost.id, receipt_id=lost.receipt_id)
-            if lost.kind is JobKind.RESOLVE_REVIEW:
-                try:
-                    self._give_back(lost)
-                except Exception as failure:  # one job's failure must not stop the worker
-                    log.error("job.give_back_failed", error_type=type(failure).__name__)
+        job = self._sweep_and_claim()
         if job is None:
             return False
         job_id = require_id(job.id)
@@ -100,6 +80,39 @@ class ProcessReceiptJobs:
                 self._running = None
                 self._tracer.forget(job.receipt_id)
         return True
+
+    def _sweep_and_claim(self) -> Job | None:
+        """Fail the jobs whose dead workers used up their attempts, then claim one. A
+        ``resolve_review`` job's review is given back first and the job failed after, so a
+        worker that dies in between leaves it to be swept again (giving back twice is
+        harmless); a ``process_receipt`` job fails in one transaction with its receipt."""
+        with self._uow_factory(read_only=True) as uow:
+            abandoned = uow.jobs.abandoned()
+        for lost in abandoned:
+            log.error("job.abandoned", job_id=lost.id, receipt_id=lost.receipt_id)
+            if lost.kind is JobKind.RESOLVE_REVIEW:
+                try:
+                    self._give_back(lost, FailureReason.STOPPED_UNEXPECTEDLY)
+                except Exception as failure:  # one job's failure must not stop the worker
+                    log.error("job.give_back_failed", error_type=type(failure).__name__)
+        with self._uow_factory() as uow:
+            for lost in abandoned:
+                try:
+                    uow.jobs.fail_abandoned(require_id(lost.id), STOPPED_UNEXPECTEDLY)
+                except ConflictError:
+                    continue  # another worker swept it
+                receipt = uow.receipts.get(lost.receipt_id)
+                processing = receipt is not None and receipt.status is ReceiptStatus.PROCESSING
+                if lost.kind is JobKind.PROCESS_RECEIPT and processing:
+                    uow.receipts.update_status(
+                        lost.receipt_id,
+                        ReceiptStatus.FAILED,
+                        ProcessingStage.FAILED,
+                        failure_reason=FailureReason.STOPPED_UNEXPECTEDLY,
+                    )
+            job = uow.jobs.claim(self._worker_id, self._lease)
+            uow.commit()
+        return job
 
     def renew_lease(self) -> None:
         """Extend the lease of the job that is running, if any (the heartbeat calls it)."""
@@ -151,15 +164,17 @@ class ProcessReceiptJobs:
             )
         except Exception as error:  # one job's failure must not stop the worker
             log.error("job.crashed", error_type=type(error).__name__)
-            self._give_back(job)
+            self._give_back(job, failure_reason(error))
             return mask_pans(str(error)).text or type(error).__name__
         return None
 
-    def _give_back(self, job: Job) -> None:
+    def _give_back(self, job: Job, failure: FailureReason) -> None:
         """Settle the review of a failed ``resolve_review`` job (``ResolveReview.give_back``)."""
         answer = ReviewAnswerPayload.model_validate(job.payload)
         self._resolve_review.give_back(
-            answer.review_id, forced_reason=answer.reason if answer.force else None
+            answer.review_id,
+            forced_reason=answer.reason if answer.force else None,
+            failure=failure,
         )
 
     def _settle(self, job_id: int, error: str | None) -> None:

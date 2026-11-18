@@ -36,6 +36,7 @@ from paper_trail.adapters.anthropic.reader import (
 from paper_trail.agents.schemas import ReceiptAnswer
 from paper_trail.agents.tracing import TracingReader
 from paper_trail.config import ClaudeSettings
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.ports.reader import (
     ReaderError,
     ReaderOutputError,
@@ -202,6 +203,16 @@ def test_c5_the_jpeg_is_saved_at_quality_90() -> None:
 
 # --- CE-TC-018: the request (the contract tests hand the adapter a client; the timeout and
 # retry tests let it build its own, as production does) --------------------------------
+
+
+def test_a_stored_photo_that_cannot_be_decoded_is_unsupported_media_and_nothing_is_sent() -> None:
+    """Hardening H2-01: so its receipt fails as an unreadable photo, not as Claude's fault."""
+    api = CannedApi(message(answer()))
+
+    with pytest.raises(UnsupportedMediaError, match="the stored photo cannot be read"):
+        _reader(api).read(replace(_request(), image=b"not a photo"), ReceiptAnswer)
+
+    assert api.requests == []
 
 
 def test_ce_tc_018_one_read_is_one_request_of_the_agreed_shape() -> None:

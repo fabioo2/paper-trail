@@ -273,9 +273,19 @@ function ReceiptProgress({
   onStartOver: () => void;
 }) {
   const [timedOut, setTimedOut] = useState(false);
+  // Each read (the first, then each Try again) gets its own READING_TIMEOUT_MS.
+  const [attempt, setAttempt] = useState(0);
+  const [wasSettled, setWasSettled] = useState(false);
   const progress = useReceiptProgress(receiptId, !timedOut);
   const receipt = progress.data;
   const settled = receipt !== undefined && isFinalStatus(receipt.status);
+  if (settled !== wasSettled) {
+    setWasSettled(settled);
+    if (!settled) {
+      setTimedOut(false);
+      setAttempt((count) => count + 1);
+    }
+  }
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -285,7 +295,7 @@ function ReceiptProgress({
     return () => {
       clearTimeout(timer);
     };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     if (settled) {

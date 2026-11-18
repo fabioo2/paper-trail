@@ -21,6 +21,7 @@ from datetime import timedelta
 
 import pytest
 
+from paper_trail.adapters.sqlite.job_queue import SqliteJobQueue
 from paper_trail.application.jobs import STOPPED_UNEXPECTEDLY, ProcessReceiptJobs
 from paper_trail.application.receipts import (
     REVIEW_ANSWER_JOB_ATTEMPTS,
@@ -30,6 +31,7 @@ from paper_trail.application.receipts import (
 )
 from paper_trail.domain.enums import (
     AgentRole,
+    FailureReason,
     JobKind,
     JobStatus,
     ProcessingStage,
@@ -38,6 +40,7 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import Job, JsonValue, ReceiptDraft
+from paper_trail.ports.reader import ReaderUnavailableError
 from paper_trail.ports.tools import ToolDescription, ToolGateway
 from tests.agent_harness import Harness, agent_settings, build_harness
 from tests.extractions import inconsistent_answer
@@ -267,6 +270,36 @@ def test_h4_04_an_answer_whose_workers_keep_dying_fails_and_gives_its_review_bac
         STOPPED_UNEXPECTEDLY,
     )
     assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
+    reason = parked.harness.receipt(parked.receipt_id).failure_reason
+    assert reason is FailureReason.STOPPED_UNEXPECTEDLY
+
+
+def test_h4_04_a_worker_that_dies_after_giving_the_review_back_leaves_the_job_to_sweep() -> None:
+    stop = StopOnce(WorkerKilledError())
+    parked = _park(stop)
+    parked.answer(parked.review_id, _corrected())
+    for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
+        stop.armed = True
+        with pytest.raises(WorkerKilledError):
+            parked.run_job()
+        parked.harness.clock.advance(LEASE + timedelta(seconds=1))
+
+    def killed(*_: object, **__: object) -> None:
+        raise WorkerKilledError
+
+    with pytest.MonkeyPatch.context() as patch, pytest.raises(WorkerKilledError):
+        patch.setattr(SqliteJobQueue, "fail_abandoned", killed)
+        parked.run_job()
+    given_back = parked.state()
+    still_running = parked.jobs()[0].status
+
+    assert parked.run_job() is False
+
+    assert given_back == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
+    assert still_running is JobStatus.RUNNING
+    job = parked.jobs()[0]
+    assert (job.status, job.last_error) == (JobStatus.FAILED, STOPPED_UNEXPECTEDLY)
+    assert parked.state() == given_back
 
 
 def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked: Parked) -> None:
@@ -280,8 +313,18 @@ def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked
     assert parked.jobs()[0].status is JobStatus.SUCCEEDED
 
 
-def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_failed_run() -> None:
-    stop = StopOnce(RuntimeError("matching failed"))
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (RuntimeError("matching failed"), FailureReason.UNKNOWN),
+        (ReaderUnavailableError("matching failed"), FailureReason.CLAUDE_UNAVAILABLE),
+    ],
+    ids=["unknown", "claude-unavailable"],
+)
+def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_failed_run(
+    error: Exception, reason: FailureReason
+) -> None:
+    stop = StopOnce(error)
     parked = _park(stop)
     parked.answer(parked.review_id, _corrected())
     stop.armed = True
@@ -290,6 +333,7 @@ def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_faile
 
     assert parked.jobs()[0].last_error == "matching failed"
     assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
+    assert parked.harness.receipt(parked.receipt_id).failure_reason is reason
     resumed = parked.harness.resume(parked.receipt_id).graph
     assert resumed is not None
     assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)

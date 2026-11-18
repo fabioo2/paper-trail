@@ -20,7 +20,7 @@ import {
 import { CategoryDot } from "@/features/products/category-dot";
 import { GuessDot } from "@/features/products/field-source";
 import {
-  paidPer,
+  paidPerUnit,
   unitPriceSummary,
   unitSuffix,
 } from "@/features/products/prices";
@@ -176,10 +176,7 @@ function PurchaseRow({ purchase }: { purchase: ProductPurchaseOut }) {
   const suffix = unitSuffix(purchase.unit);
   const notes = [
     suffix
-      ? `${purchase.quantity} ${purchase.unit ?? ""} · ${formatMoney({
-          ...purchase.paid,
-          amount_cents: Math.round(paidPer(purchase, purchase.unit)),
-        })}${suffix}`
+      ? `${purchase.quantity} ${purchase.unit ?? ""} · ${formatMoney(paidPerUnit(purchase))}${suffix}`
       : Number(purchase.quantity) === 1
         ? null
         : `× ${purchase.quantity}`,

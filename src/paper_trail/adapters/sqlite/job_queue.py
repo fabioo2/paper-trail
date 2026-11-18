@@ -14,7 +14,7 @@ from paper_trail.adapters.sqlite.mappers import job_from_row
 from paper_trail.adapters.sqlite.schema import jobs
 from paper_trail.domain.enums import JobKind, JobStatus
 from paper_trail.domain.errors import ConflictError, NotFoundError
-from paper_trail.domain.models import Job, JsonValue, require_id
+from paper_trail.domain.models import Job, JsonValue
 from paper_trail.ports.clock import Clock
 
 
@@ -90,12 +90,22 @@ class SqliteJobQueue:
         )
         return None if row is None else job_from_row(row)
 
-    def fail_abandoned(self, error: str) -> list[Job]:
-        now = self._clock.now()
+    def abandoned(self) -> list[Job]:
         rows = (
             self._connection.execute(
+                select(jobs).where(_exhausted(self._clock.now())).order_by(jobs.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [job_from_row(row) for row in rows]
+
+    def fail_abandoned(self, job_id: int, error: str) -> Job:
+        now = self._clock.now()
+        row = (
+            self._connection.execute(
                 update(jobs)
-                .where(_abandoned(now), jobs.c.attempts + 1 >= jobs.c.max_attempts)
+                .where(jobs.c.id == job_id, _exhausted(now))
                 .values(
                     status=JobStatus.FAILED,
                     attempts=jobs.c.attempts + 1,
@@ -107,9 +117,15 @@ class SqliteJobQueue:
                 .returning(jobs)
             )
             .mappings()
-            .all()
+            .one_or_none()
         )
-        return sorted((job_from_row(row) for row in rows), key=lambda job: require_id(job.id))
+        if row is None:
+            if self.get(job_id) is None:
+                msg = f"job {job_id} does not exist"
+                raise NotFoundError(msg)
+            msg = f"job {job_id} is not abandoned with its last attempt used up"
+            raise ConflictError(msg)
+        return job_from_row(row)
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:
         self._owned(job_id, worker_id)
@@ -199,3 +215,8 @@ class SqliteJobQueue:
 def _abandoned(now: datetime) -> ColumnElement[bool]:
     """A RUNNING job whose worker's lease ran out: that worker died (or lost the job)."""
     return and_(jobs.c.status == JobStatus.RUNNING, jobs.c.lease_expires_at < now)
+
+
+def _exhausted(now: datetime) -> ColumnElement[bool]:
+    """An abandoned job whose dead worker used up its last attempt."""
+    return and_(_abandoned(now), jobs.c.attempts + 1 >= jobs.c.max_attempts)

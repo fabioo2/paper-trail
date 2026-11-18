@@ -167,8 +167,6 @@ class _ClaudeReader:
 
 def _claude_reader(settings: Settings, clock: Clock, ledger_engine: Engine) -> _ClaudeReader:
     api = AnthropicReader(settings.claude)
-    # A reservation older than a whole read could take (three attempts and their backoff) was
-    # left by a dead process.
     ledger = SqliteSpendLedger(ledger_engine)
     return _ClaudeReader(
         api, BudgetedReader(api, ledger, clock, settings.claude.monthly_budget_usd)

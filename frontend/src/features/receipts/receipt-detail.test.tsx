@@ -3,9 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 
+import type { FailureReason } from "@/features/receipts/api";
 import { formatFullDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
-import { FAILURE_MESSAGES } from "@/features/receipts/failure-reasons";
 import {
   cad,
   lineItem,
@@ -16,6 +16,27 @@ import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
 import { textOf } from "@/test/text";
+
+const FAILURE_COPY: [FailureReason, string][] = [
+  [
+    "budget_reached",
+    "This month's Claude budget is used up. Raise the budget or wait until next month, then try again.",
+  ],
+  [
+    "claude_unavailable",
+    "Claude couldn't read it just now. Try again in a minute.",
+  ],
+  [
+    "no_api_key",
+    "No Claude API key is set on the server. Add ANTHROPIC_API_KEY to .env, then try again.",
+  ],
+  [
+    "unreadable_photo",
+    "The photo couldn't be read. Retake it with the whole receipt flat, in focus and well lit.",
+  ],
+  ["stopped_unexpectedly", "Paper Trail stopped while reading it. Try again."],
+  ["unknown", "Something went wrong while reading it. Try again."],
+];
 
 const LINE_MATH_MESSAGE = "line 2: 1 x 8.99 = 8.99 but line total is 9.89";
 
@@ -312,14 +333,14 @@ describe("Receipt detail page", () => {
     expect(textOf(main)).not.toMatch(/couldn['’]t read/i);
   });
 
-  it.each(Object.entries(FAILURE_MESSAGES))(
+  it.each(FAILURE_COPY)(
     "a %s failure says why, with Try again",
     async (reason, message) => {
       serveDetail(
         receiptDetail({
           status: "failed",
           stage: "failed",
-          failure_reason: reason as ReceiptDetailOut["failure_reason"],
+          failure_reason: reason,
         }),
       );
 

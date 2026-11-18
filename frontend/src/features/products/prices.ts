@@ -3,8 +3,14 @@ import type { MoneyOut } from "@/features/receipts/money";
 
 export type LineUnit = ProductPurchaseOut["unit"];
 
-/** One pound in kilograms, exactly (the international pound). */
-export const POUND_IN_KG = 0.45359237;
+/** One pound in kilograms, exactly (the international pound): 0.45359237. */
+const POUND_IN_KG = { num: 45_359_237n, den: 100_000_000n };
+
+/** An exact non-negative fraction of cents; prices are compared and summed without floats. */
+interface Cents {
+  num: bigint;
+  den: bigint;
+}
 
 /** What a price is per: "/kg", "/lb", or nothing for each (and unknown, compared as each). */
 export function unitSuffix(unit: LineUnit): string {
@@ -20,12 +26,47 @@ function comparable(from: LineUnit, to: LineUnit): boolean {
   return weighed(from) === weighed(to);
 }
 
-/** Cents paid per one `unit` (unrounded): a pound price converted when `unit` is kg, and back. */
-export function paidPer(purchase: ProductPurchaseOut, unit: LineUnit): number {
-  const perOwnUnit = purchase.paid.amount_cents / Number(purchase.quantity);
-  if (purchase.unit === "lb" && unit === "kg") return perOwnUnit / POUND_IN_KG;
-  if (purchase.unit === "kg" && unit === "lb") return perOwnUnit * POUND_IN_KG;
-  return perOwnUnit;
+/** A decimal string such as "0.452" as an exact fraction. */
+function decimal(text: string): Cents {
+  const [whole = "0", fraction = ""] = text.split(".");
+  return {
+    num: BigInt(whole + fraction),
+    den: 10n ** BigInt(fraction.length),
+  };
+}
+
+function compare(a: Cents, b: Cents): number {
+  const left = a.num * b.den;
+  const right = b.num * a.den;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Rounded half up to a whole cent. */
+function rounded(value: Cents): number {
+  return Number((2n * value.num + value.den) / (2n * value.den));
+}
+
+/** Cents paid per one `unit`, exactly: a pound price converted when `unit` is kg, and back. */
+function paidPer(purchase: ProductPurchaseOut, unit: LineUnit): Cents {
+  const quantity = decimal(purchase.quantity);
+  let num = BigInt(purchase.paid.amount_cents) * quantity.den;
+  let den = quantity.num;
+  if (purchase.unit === "lb" && unit === "kg") {
+    num *= POUND_IN_KG.den;
+    den *= POUND_IN_KG.num;
+  } else if (purchase.unit === "kg" && unit === "lb") {
+    num *= POUND_IN_KG.num;
+    den *= POUND_IN_KG.den;
+  }
+  return { num, den };
+}
+
+/** What one unit of the purchase cost, in its own unit, to the cent. */
+export function paidPerUnit(purchase: ProductPurchaseOut): MoneyOut {
+  return {
+    amount_cents: rounded(paidPer(purchase, purchase.unit)),
+    currency: purchase.paid.currency,
+  };
 }
 
 export interface UnitPriceSummary {
@@ -39,7 +80,7 @@ export interface UnitPriceSummary {
 /**
  * The lowest and average price paid per unit, over the purchases in the newest purchase's
  * currency and unit (pounds and kilograms compared after conversion), in the newest purchase's
- * unit. Rounded to the cent only at the end. Null without purchases.
+ * unit. Exact until the final rounding, half up, to the cent. Null without purchases.
  */
 export function unitPriceSummary(
   purchases: ProductPurchaseOut[],
@@ -53,15 +94,23 @@ export function unitPriceSummary(
         comparable(purchase.unit, newest.unit),
     )
     .map((purchase) => paidPer(purchase, newest.unit));
-  const cents = (value: number): MoneyOut => ({
-    amount_cents: Math.round(value),
+  const lowest = perUnit.reduce((low, value) =>
+    compare(value, low) < 0 ? value : low,
+  );
+  const total = perUnit.reduce((sum, value) => ({
+    num: sum.num * value.den + value.num * sum.den,
+    den: sum.den * value.den,
+  }));
+  const cents = (value: Cents): MoneyOut => ({
+    amount_cents: rounded(value),
     currency: newest.paid.currency,
   });
   return {
-    lowest: cents(Math.min(...perUnit)),
-    average: cents(
-      perUnit.reduce((sum, value) => sum + value, 0) / perUnit.length,
-    ),
+    lowest: cents(lowest),
+    average: cents({
+      num: total.num,
+      den: total.den * BigInt(perUnit.length),
+    }),
     unit: newest.unit,
     count: perUnit.length,
   };

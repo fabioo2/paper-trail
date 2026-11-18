@@ -3,6 +3,7 @@
 ``Settings`` is constructed once, in the CLI entry point, and passed down explicitly.
 """
 
+import ipaddress
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -41,8 +42,9 @@ class WorkerSettings(BaseModel):
 
 class WebSettings(BaseModel):
     """The web app (``PAPER_TRAIL_WEB__*``, ADR-0020). ``allowed_hosts``: the host names or IPs
-    the app is reached by besides ``localhost``, ``127.0.0.1`` and ``web``, as a comma list
-    (e.g. ``192.168.0.187,fabio-server``); no scheme, port or wildcard."""
+    the app is reached by besides ``localhost``, ``127.0.0.1``, ``::1`` and ``web``, as a comma
+    list (e.g. ``192.168.0.187,fabio-server``); no scheme, port or wildcard. An IPv6 address may
+    be written with or without brackets and is kept without them, lowercased."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -58,12 +60,16 @@ class WebSettings(BaseModel):
     @field_validator("allowed_hosts", mode="after")
     @classmethod
     def _bare_hosts(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
+        bare = []
         for host in hosts:
-            if not _BARE_HOST.fullmatch(host):
+            bracketed = host.startswith("[") and host.endswith("]")
+            name = host[1:-1] if bracketed else host
+            if not (_BARE_HOST.fullmatch(name) or _is_ipv6(name)):
                 variable = env_var_name(("web", "allowed_hosts"))
                 msg = f"{variable}: {host!r} is not a bare host name or IP (no scheme, port or *)"
                 raise ValueError(msg)
-        return tuple(host.lower() for host in hosts)
+            bare.append(name.lower())
+        return tuple(bare)
 
 
 class UploadSettings(BaseModel):
@@ -244,6 +250,13 @@ class Settings(BaseSettings):
             )
             raise ValueError(msg)
         return self
+
+
+def _is_ipv6(host: str) -> bool:
+    try:
+        return isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address)
+    except ValueError:
+        return False
 
 
 def env_var_name(location: tuple[str | int, ...]) -> str:
