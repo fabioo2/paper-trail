@@ -22,13 +22,14 @@ from datetime import timedelta
 import pytest
 
 from paper_trail.adapters.sqlite.job_queue import SqliteJobQueue
+from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.application.jobs import STOPPED_UNEXPECTEDLY, ProcessReceiptJobs
+from paper_trail.application.process_receipt import RetryReceipt
 from paper_trail.application.receipts import (
     REVIEW_ANSWER_JOB_ATTEMPTS,
     AnswerReview,
     InconsistentDraftError,
     ListPendingReviews,
-    ResolveReview,
 )
 from paper_trail.domain.enums import (
     AgentRole,
@@ -252,7 +253,11 @@ def test_a_worker_that_died_after_giving_the_answer_continues_the_run_without_gi
     assert parked.jobs()[0].status is JobStatus.SUCCEEDED
 
 
-def test_h4_04_an_answer_whose_workers_keep_dying_fails_and_gives_its_review_back() -> None:
+def test_h4_04_an_answer_whose_workers_keep_dying_fails_the_receipt_and_try_again_finishes_it() -> (
+    None
+):
+    """The graph took the answer before each worker died: the sweep fails the receipt and
+    leaves the review OPEN; Try again resumes the thread, which completes and closes it."""
     stop = StopOnce(WorkerKilledError())
     parked = _park(stop)
     parked.answer(parked.review_id, _corrected())
@@ -270,9 +275,16 @@ def test_h4_04_an_answer_whose_workers_keep_dying_fails_and_gives_its_review_bac
         REVIEW_ANSWER_JOB_ATTEMPTS,
         STOPPED_UNEXPECTEDLY,
     )
-    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
     reason = parked.harness.receipt(parked.receipt_id).failure_reason
     assert reason is FailureReason.STOPPED_UNEXPECTEDLY
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+    assert parked.harness.receipt(parked.receipt_id).store_name == "Costco"
+    assert parked.pending() == []
 
 
 def _workers_die(parked: Parked) -> None:
@@ -284,10 +296,34 @@ def _workers_die(parked: Parked) -> None:
         parked.harness.clock.advance(LEASE + timedelta(seconds=1))
 
 
+def test_h4_04_try_again_before_the_answer_was_taken_gives_the_review_back_to_answer() -> None:
+    parked = _park()
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    assert parked.run_job() is False
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (
+        ReceiptStatus.NEEDS_REVIEW,
+        ProcessingStage.NEEDS_REVIEW,
+        ReviewStatus.OPEN,
+    )
+    assert parked.reader.calls == 1
+    assert parked.pending() == [parked.review_id]
+    with pytest.raises(ConflictError, match="not failed"):
+        RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    parked.answer(parked.review_id, _corrected())
+    assert parked.run_job() is True
+    assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+
+
 @pytest.mark.parametrize(
     "failure",
-    [RuntimeError("the review could not be given back"), WorkerKilledError()],
-    ids=["give-back-raises", "worker-dies-mid-recovery"],
+    [RuntimeError("the receipt could not be failed"), WorkerKilledError()],
+    ids=["recovery-raises", "worker-dies-mid-recovery"],
 )
 def test_h4_04_a_recovery_that_fails_changes_nothing_and_the_next_sweep_recovers(
     parked: Parked, failure: BaseException
@@ -300,9 +336,9 @@ def test_h4_04_a_recovery_that_fails_changes_nothing_and_the_next_sweep_recovers
         raise failure
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(ResolveReview, "settle_given_back", broken)
+        patch.setattr(SqliteReceiptRepository, "update_status", broken)
         if isinstance(failure, Exception):
-            assert parked.run_job() is False
+            assert parked.run_job() is False  # idle: the worker waits a poll, never spins
         else:
             with pytest.raises(WorkerKilledError):
                 parked.run_job()
@@ -313,11 +349,7 @@ def test_h4_04_a_recovery_that_fails_changes_nothing_and_the_next_sweep_recovers
     assert after_failure == before
     job = parked.jobs()[0]
     assert (job.status, job.last_error) == (JobStatus.FAILED, STOPPED_UNEXPECTEDLY)
-    assert parked.state() == (
-        ReceiptStatus.NEEDS_REVIEW,
-        ProcessingStage.NEEDS_REVIEW,
-        ReviewStatus.OPEN,
-    )
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
 
 
 def test_h4_04_a_stale_sweeper_changes_nothing_after_a_new_answer_is_queued(

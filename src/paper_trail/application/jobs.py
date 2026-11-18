@@ -37,8 +37,8 @@ class ProcessReceiptJobs:
     runs out and continues the receipt's thread, which uses up an attempt. A job whose dead
     workers used up its last attempt is FAILED instead, before the next claim
     (``_sweep_and_claim``), so a job that crashes its worker cannot run forever: its receipt
-    FAILED as stopped unexpectedly, or a ``resolve_review`` job's review given back. The
-    receipt's trace events are dropped after its job.
+    FAILED as stopped unexpectedly, for a person to retry. The receipt's trace events are
+    dropped after its job.
 
     A ``resolve_review`` job resolves its review with the answer it carries
     (``ResolveReview.apply``: given once, even when a worker died after giving it). When that
@@ -99,39 +99,24 @@ class ProcessReceiptJobs:
     def _recover(self, lost: Job) -> None:
         """One transaction per job: ``fail_abandoned`` is the compare-and-set that gives this
         worker the right to recover it (another sweeper already did: nothing happens), and
-        the job's receipt is FAILED as stopped unexpectedly, or a ``resolve_review`` job's
-        review given back, in the same transaction. Whether the graph took the answer is read
-        from the checkpoints first; the review and receipt are checked again inside. Any
-        failure rolls both back, leaving the job to the next sweep."""
-        answer = None
-        taken = None
-        if lost.kind is JobKind.RESOLVE_REVIEW:
-            answer = ReviewAnswerPayload.model_validate(lost.payload)
-            taken = self._resolve_review.answer_taken(answer.review_id)
+        the job's receipt, while still PROCESSING, is FAILED as stopped unexpectedly in the
+        same transaction, whatever the job's kind. A ``resolve_review`` job's review stays as
+        it is: a retry resumes the graph, whose checkpoint says whether the answer was taken
+        (``ProcessReceiptFile.process_stored``). Any failure rolls both back, leaving the job
+        to the next sweep."""
         with self._uow_factory() as uow:
             try:
                 uow.jobs.fail_abandoned(require_id(lost.id), STOPPED_UNEXPECTEDLY)
             except ConflictError:
                 return  # another worker recovered it
-            if answer is not None and taken is not None:
-                receipt_id, answer_taken = taken
-                self._resolve_review.settle_given_back(
-                    uow,
-                    answer.review_id,
-                    receipt_id,
-                    taken=answer_taken,
-                    forced_reason=answer.reason if answer.force else None,
-                    failure=FailureReason.STOPPED_UNEXPECTEDLY,
+            receipt = uow.receipts.get(lost.receipt_id)
+            if receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
+                uow.receipts.update_status(
+                    lost.receipt_id,
+                    ReceiptStatus.FAILED,
+                    ProcessingStage.FAILED,
+                    failure_reason=FailureReason.STOPPED_UNEXPECTEDLY,
                 )
-            else:
-                receipt = uow.receipts.get(lost.receipt_id)
-                if receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
-                    uow.receipts.update_status(
-                        lost.receipt_id,
-                        ReceiptStatus.FAILED,
-                        ProcessingStage.FAILED,
-                        failure_reason=FailureReason.STOPPED_UNEXPECTEDLY,
-                    )
             uow.commit()
         log.error("job.abandoned", job_id=lost.id, receipt_id=lost.receipt_id)
 
