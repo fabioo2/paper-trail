@@ -22,7 +22,7 @@ from tests.images import png_bytes
 from tests.storage import in_unit, stored_state
 from tests.support import TEST_CLIENT_HOST, CopyMigrated, MakeSettings, require_id
 
-CONFIGURED = ("192.168.0.187", "fabio-server", "fd00::5")
+CONFIGURED = ("192.168.1.10", "my-server", "fd00::5")
 PROBLEM_JSON = "application/problem+json"
 
 
@@ -52,9 +52,9 @@ def client(container: Container) -> Iterator[TestClient]:
         "127.0.0.1:8000",
         "web",
         "web:8000",
-        "192.168.0.187",
-        "192.168.0.187:8420",
-        "FABIO-SERVER:8420",
+        "192.168.1.10",
+        "192.168.1.10:8420",
+        "MY-SERVER:8420",
         "[::1]",
         "[::1]:8420",
         "[FD00::5]:8420",
@@ -186,7 +186,7 @@ def test_h1_05_every_method_that_changes_data_is_checked(
         ("web", "http://web"),
         ("web:80", "http://web"),
         ("web", "http://web:80"),
-        ("192.168.0.187:8420", "http://192.168.0.187:8420"),
+        ("192.168.1.10:8420", "http://192.168.1.10:8420"),
         ("[::1]:8420", "http://[::1]:8420"),
     ],
 )
