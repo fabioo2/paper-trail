@@ -2,7 +2,7 @@ import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 
-import { formatDate } from "@/features/receipts/dates";
+import { formatFullDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import {
   cad,
@@ -44,57 +44,54 @@ describe("Receipt detail page", () => {
     expect(requests.map((url) => url.pathname)).toEqual(["/api/receipts/7"]);
   });
 
-  it("S1-AC-26: header shows store, date, total and status", async () => {
+  it("S1-AC-26: header shows the tidy store name, full date, line count and total, and no badge once completed", async () => {
     serveDetail(receiptDetail());
 
     renderApp("/receipts/7");
     const main = await page();
 
-    const header = textOf(main);
-    expect(header).toContain("COSTCO WHOLESALE #1234");
-    expect(header).toContain(formatDate("2026-11-01"));
-    expect(header).toContain(formatMoney(cad(1155)));
-    expect(header).toMatch(/completed/i);
+    expect(
+      within(main).getByRole("link", { name: "Receipts" }),
+    ).toHaveAttribute("href", "/receipts");
+    expect(within(main).getByRole("heading", { level: 1 })).toHaveTextContent(
+      /^Costco$/,
+    );
+    const text = textOf(main);
+    expect(text).toContain(`${formatFullDate("2026-11-01")} · 2 lines`);
+    expect(text).toContain(`Total${formatMoney(cad(1155))}`);
+    expect(text).not.toMatch(/completed|you saved/i);
   });
 
-  it("S1-AC-26: renders one table row per line item with qty, unit price and total", async () => {
-    serveDetail(receiptDetail());
-
-    renderApp("/receipts/7");
-    const main = await page();
-
-    const table = within(main).getByRole("table");
-    const rows = within(table).getAllByRole("row");
-    const bananas = rows.find((row) => textOf(row).includes("Bananas"));
-    const eggs = rows.find((row) =>
-      textOf(row).includes("Kirkland Organic Eggs 24 ct"),
-    );
-    if (!bananas || !eggs) throw new Error("missing line item rows");
-    expect(textOf(bananas)).toContain("1.36");
-    expect(textOf(bananas)).toContain(formatMoney(cad(150)));
-    expect(textOf(bananas)).toContain(formatMoney(cad(204)));
-    expect(textOf(eggs)).toContain(formatMoney(cad(899)));
-    expect(within(table).getAllByRole("columnheader").map(textOf)).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/description|item/i),
-        expect.stringMatching(/qty|quantity/i),
-        expect.stringMatching(/unit price/i),
-        expect.stringMatching(/total/i),
-      ]),
-    );
-  });
-
-  it("S1-AC-26: a discount line without unit price shows its negative total", async () => {
+  it("reads each line as a stacked row: name, printed text or category, and what was paid", async () => {
     serveDetail(
       receiptDetail({
         items: [
+          lineItem(),
+          lineItem({
+            id: 11,
+            position: 1,
+            raw_text: "1100231 KS EGGS 24CT",
+            description: "Kirkland Organic Eggs 24 ct",
+          }),
           lineItem({
             id: 12,
+            position: 2,
+            raw_text: "1281 BANANAS",
+            description: "Bananas",
+            quantity: "1.36",
+            unit_price: cad(150),
+            line_total: cad(204),
+            category: "produce",
+          }),
+          lineItem({
+            id: 13,
+            position: 3,
             kind: "discount",
+            raw_text: "TPD/1362394",
             description: "Instant savings",
-            quantity: "1",
             unit_price: null,
             line_total: cad(-500),
+            category: null,
           }),
         ],
       }),
@@ -102,13 +99,72 @@ describe("Receipt detail page", () => {
 
     renderApp("/receipts/7");
     const main = await page();
+    await within(main).findByText("Produce");
 
-    const row = within(within(main).getByRole("table"))
-      .getAllByRole("row")
-      .find((candidate) => textOf(candidate).includes("Instant savings"));
-    if (!row) throw new Error("missing discount row");
-    expect(textOf(row)).toContain(formatMoney(cad(-500)));
-    expect(textOf(row)).not.toMatch(/NaN|undefined|null/);
+    const rows = within(within(main).getByRole("list", { name: "Items" }))
+      .getAllByRole("listitem")
+      .map(textOf);
+    expect(rows).toEqual([
+      `Kirkland Organic Eggs 24 ctKS ORG EGGS 24CT${formatMoney(cad(899))}`,
+      `Kirkland Organic Eggs 24 ctKS EGGS 24CT${formatMoney(cad(899))}`,
+      `Bananas ×1.36Produce${formatMoney(cad(204))}`,
+      `Instant savingsTPD/1362394${formatMoney(cad(-500))}`,
+    ]);
+    expect(within(main).queryByRole("table")).toBeNull();
+    expect(
+      main.querySelector('[data-category="produce"]')?.getAttribute("style"),
+    ).toBe("background-color: var(--cat-produce);");
+  });
+
+  it("folds discounts into their item, collapses repeats to ×N and links matched rows to the product", async () => {
+    const choc = {
+      raw_text: "1362394 CHOC PISTACH",
+      description: "Choc Pistach",
+      product_id: 42,
+      product_name: "Chocolate Pistachio",
+      product_category: "snacks_candy",
+    } as const;
+    serveDetail(
+      receiptDetail({
+        savings: cad(800),
+        items: [0, 2].flatMap((position) => [
+          lineItem({
+            ...choc,
+            id: 20 + position,
+            position,
+            line_total: cad(1699),
+          }),
+          lineItem({
+            id: 21 + position,
+            position: position + 1,
+            kind: "discount",
+            raw_text: "TPD/1362394",
+            description: "Instant savings",
+            unit_price: null,
+            line_total: cad(-400),
+            applies_to_position: position,
+          }),
+        ]),
+      }),
+    );
+
+    renderApp("/receipts/7");
+    const main = await page();
+
+    const [row, ...others] = within(
+      within(main).getByRole("list", { name: "Items" }),
+    ).getAllByRole("listitem");
+    if (!row) throw new Error("expected one row");
+    expect(others).toEqual([]);
+    expect(textOf(row)).toBe(
+      `Chocolate Pistachio ×2CHOC PISTACH${formatMoney(cad(2598))}saved ${formatMoney(cad(800))}`,
+    );
+    expect(within(row).getByRole("link")).toHaveAttribute(
+      "href",
+      "/products/42",
+    );
+    expect(textOf(main)).toContain(`You saved${formatMoney(cad(800))}`);
+    expect(textOf(main)).toContain("· 4 lines");
   });
 
   it("S1-AC-26: shows the totals block (subtotal, tax, total)", async () => {
@@ -163,7 +219,7 @@ describe("Receipt detail page", () => {
     expect(
       within(main).getByText("items add up to 11.03 but the subtotal is 11.93"),
     ).toBeInTheDocument();
-    expect(textOf(main)).toMatch(/needs review/i);
+    expect(textOf(main)).toMatch(/needs a look/i);
   });
 
   it("S1-AC-26: lists issues that share a code and position, without key warnings", async () => {

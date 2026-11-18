@@ -81,7 +81,7 @@ def receipt_from_row(row: RowMapping, items: Sequence[RowMapping]) -> Receipt:
 
 
 def receipt_summary_from_row(row: RowMapping) -> ReceiptSummary:
-    """A ``receipts`` row plus an ``item_count`` column."""
+    """A ``receipts`` row plus ``item_count`` and ``savings_cents`` columns."""
     return ReceiptSummary(
         id=row["id"],
         status=row["status"],
@@ -90,6 +90,7 @@ def receipt_summary_from_row(row: RowMapping) -> ReceiptSummary:
         total=_money(row["total_cents"], row["currency"]),
         item_count=row["item_count"],
         created_at=row["created_at"],
+        savings=Money(row["savings_cents"], row["currency"]),
     )
 
 

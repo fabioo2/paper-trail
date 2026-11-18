@@ -93,9 +93,9 @@ describe("Product detail", () => {
       "/receipts/10",
     ]);
     expect(rows.map(textOf)).toEqual([
-      `${formatDate("2026-11-03")} · LOBLAWS #1012save ${formatMoney(cad(400))}${formatMoney(cad(1299))}`,
-      `${formatDate("2026-11-02")} · COSTCO WHOLESALE #1234× 2${formatMoney(cad(1218))}`,
-      `Date unknown · COSTCO WHOLESALE #1234${formatMoney(cad(899))}`,
+      `${formatDate("2026-11-03")} · Loblawssave ${formatMoney(cad(400))}${formatMoney(cad(1299))}`,
+      `${formatDate("2026-11-02")} · Costco× 2${formatMoney(cad(1218))}`,
+      `Date unknown · Costco${formatMoney(cad(899))}`,
     ]);
     expect(screen.queryByLabelText(/^name/i)).toBeNull();
   });

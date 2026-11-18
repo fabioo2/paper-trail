@@ -1,7 +1,7 @@
 """Products, their aliases and their prices: the writes shared by every use case that links a
 receipt line to a product (import, matching, a person's correction), and reading one back."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 
 from paper_trail.domain.enums import AliasSource, Category, FieldSource
@@ -114,6 +114,16 @@ class GetProduct:
             msg = f"product {product_id} does not exist"
             raise NotFoundError(msg)
         return product
+
+
+class GetProducts:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self, product_ids: Iterable[int]) -> dict[int, Product]:
+        """The stored products among ``product_ids``, by id; unknown ids are left out. Read-only."""
+        with self._uow_factory(read_only=True) as uow:
+            return uow.products.get_many(set(product_ids))
 
 
 class ListProducts:

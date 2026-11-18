@@ -102,6 +102,20 @@ def test_s1_ac_10_get_missing_product_is_none(uow_factory: UnitOfWorkFactory) ->
         assert uow.products.get(12345) is None
 
 
+def test_get_many_returns_the_known_products_by_id(uow_factory: UnitOfWorkFactory) -> None:
+    """get_many() maps each stored id asked for to its product; unknown ids are left out."""
+    eggs = _add_product(uow_factory)
+    milk = _add_product(uow_factory, product(canonical_name="Milk"))
+    _add_product(uow_factory)
+
+    with uow_factory() as uow:
+        found = uow.products.get_many({require_id(eggs.id), require_id(milk.id), 12345})
+        nothing = uow.products.get_many(set())
+
+    assert found == {require_id(eggs.id): eggs, require_id(milk.id): milk}
+    assert nothing == {}
+
+
 def test_s1_ac_10_add_alias_assigns_an_id(uow_factory: UnitOfWorkFactory) -> None:
     """S1-AC-10: add_alias returns the stored alias with an id."""
     saved = _add_product(uow_factory)

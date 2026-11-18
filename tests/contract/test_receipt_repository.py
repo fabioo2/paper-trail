@@ -10,7 +10,7 @@ from paper_trail.domain.enums import Category, LineKind, MatchSource, Processing
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import ItemLink, LineItem, ProductLine, Receipt, ReceiptSummary
 from paper_trail.domain.money import Money
-from paper_trail.domain.paging import PageRequest
+from paper_trail.domain.paging import PageRequest, encode_cursor
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from tests.factories import (
     PRINTED_SUBTOTAL,
@@ -213,7 +213,61 @@ def test_s1_ac_11_summary_fields(uow_factory: UnitOfWorkFactory) -> None:
         total=cad(1635),
         item_count=2,
         created_at=saved.created_at,
+        savings=cad(0),
     )
+
+
+def test_list_is_by_purchase_date_newest_first_undated_last(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """A receipt is listed by the date on it: a September trip scanned last still sorts below
+    November's; one day's receipts newest recorded first; undated receipts after every date."""
+    (undated_old,) = _add_at(uow_factory, [0], purchased_on=None)
+    (nov_2,) = _add_at(uow_factory, [1], purchased_on=date(2026, 11, 2))
+    nov_5 = _add_at(uow_factory, [2, 3, 3], purchased_on=date(2026, 11, 5))
+    (undated_new,) = _add_at(uow_factory, [4], purchased_on=None)
+    (sep_24,) = _add_at(uow_factory, [5], purchased_on=date(2026, 9, 24))
+    (dec_31_2025,) = _add_at(uow_factory, [6], purchased_on=date(2025, 12, 31))
+    expected = [*nov_5[::-1], nov_2, sep_24, dec_31_2025, undated_new, undated_old]
+
+    whole, _ = _list(uow_factory, PageRequest())
+    paged: list[int] = []
+    cursor: str | None = None
+    while True:
+        items, cursor = _list(uow_factory, PageRequest(limit=2, cursor=cursor))
+        paged += [summary.id for summary in items]
+        if cursor is None:
+            break
+
+    assert [summary.id for summary in whole] == expected
+    assert paged == expected
+
+
+def test_list_rejects_a_created_at_cursor(uow_factory: UnitOfWorkFactory) -> None:
+    """A cursor of the old created_at order (or the review queue's) is not a receipt cursor."""
+    with pytest.raises(DomainValidationError):
+        _list(uow_factory, PageRequest(cursor=encode_cursor(at(0), 1)))
+
+
+def test_summary_savings_and_item_count(uow_factory: UnitOfWorkFactory) -> None:
+    """``savings`` is what the discount lines took off, as a positive amount (a deposit is not
+    a saving); ``item_count`` counts only the ITEM lines."""
+    lines = (
+        *simple_lines(link=True),
+        line_item(position=5, kind=LineKind.DISCOUNT, raw_text="COUPON", quantity=Decimal(1),
+                  unit_price=None, line_total=cad(-150)),
+        line_item(position=6, kind=LineKind.DEPOSIT, raw_text="DEPOSIT", quantity=Decimal(1),
+                  unit_price=cad(-10), line_total=cad(-10)),
+    )  # fmt: skip
+    discounted = _add(uow_factory, receipt(items=lines, created_at=at(1)))
+    plain = _add(uow_factory, receipt(created_at=at(0)))
+
+    items, _ = _list(uow_factory, PageRequest())
+
+    assert [(s.id, s.savings, s.item_count) for s in items] == [
+        (discounted.id, cad(650), 4),
+        (plain.id, cad(0), 2),
+    ]
 
 
 def test_s1_ac_11_list_honours_limit_and_cursor(uow_factory: UnitOfWorkFactory) -> None:

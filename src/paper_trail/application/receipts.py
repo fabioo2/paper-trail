@@ -641,7 +641,8 @@ class GetReceiptImage:
 
 
 class ListReceipts:
-    """Receipts newest first, optionally of one status and one store (any spelling of it)."""
+    """Receipts by purchase date, newest first (undated last), optionally of one status and one
+    store (any spelling of it)."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory

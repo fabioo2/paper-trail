@@ -13,7 +13,7 @@ import structlog
 
 from paper_trail.domain.enums import ReceiptStatus
 from paper_trail.domain.errors import DomainValidationError, NotFoundError
-from paper_trail.domain.models import LineItem, require_id
+from paper_trail.domain.models import LineItem, ReceiptSummary, require_id
 from paper_trail.domain.paging import MAX_PAGE_LIMIT, PageRequest
 from paper_trail.domain.rules.discounts import Refusal, attribute_discounts
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
@@ -102,7 +102,7 @@ class BackfillPrices:
         return discounts
 
     def _receipt_ids(self, receipt_id: int | None) -> list[int]:
-        """The COMPLETED receipts to look at, newest first."""
+        """The COMPLETED receipts to look at, newest recorded first."""
         with self._uow_factory(read_only=True) as uow:
             if receipt_id is not None:
                 receipt = uow.receipts.get(receipt_id)
@@ -113,13 +113,14 @@ class BackfillPrices:
                     msg = f"receipt {receipt_id} is not completed"
                     raise DomainValidationError(msg)
                 return [receipt_id]
-            ids: list[int] = []
+            summaries: list[ReceiptSummary] = []
             request = PageRequest(limit=MAX_PAGE_LIMIT)
             while True:
                 page = uow.receipts.list(request, status=ReceiptStatus.COMPLETED)
-                ids += [summary.id for summary in page.items]
+                summaries += page.items
                 if page.next_cursor is None:
-                    return ids
+                    newest = sorted(summaries, key=lambda s: (s.created_at, s.id), reverse=True)
+                    return [summary.id for summary in newest]
                 request = PageRequest(limit=MAX_PAGE_LIMIT, cursor=page.next_cursor)
 
 

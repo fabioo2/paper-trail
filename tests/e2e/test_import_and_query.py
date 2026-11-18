@@ -93,7 +93,7 @@ def test_s1_ac_24_import_then_list_over_http(migrated: Path, api: TestClient) ->
     assert summary["id"] == receipt_id
     assert summary["store_name"] == "COSTCO WHOLESALE #1234"
     assert summary["total"] == {"amount_cents": 3292, "currency": "CAD"}
-    assert summary["item_count"] == 5
+    assert summary["item_count"] == 4
     detail = api.get(f"/api/receipts/{receipt_id}").json()
     assert detail["arithmetic"] == {"ok": True, "issues": []}
     assert [item["quantity"] for item in detail["items"]] == ["1", "2", "1.36", "1", "1"]

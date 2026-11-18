@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import ColumnElement, Connection, delete, func, insert, select, update
 
 from paper_trail.adapters.sqlite.integrity import unique_violation_as_conflict
-from paper_trail.adapters.sqlite.keyset import newest_first_page
+from paper_trail.adapters.sqlite.keyset import newest_purchase_first_page
 from paper_trail.adapters.sqlite.mappers import (
     line_item_from_row,
     line_item_values,
@@ -67,16 +67,27 @@ class SqliteReceiptRepository:
     ) -> Page[ReceiptSummary]:
         item_count = (
             select(func.count())
-            .where(line_items.c.receipt_id == receipts.c.id)
+            .where(line_items.c.receipt_id == receipts.c.id, line_items.c.kind == LineKind.ITEM)
             .scalar_subquery()
             .label("item_count")
         )
-        query = select(receipts, item_count)
+        savings = (
+            select(-func.coalesce(func.sum(line_items.c.line_total_cents), 0))
+            .where(
+                line_items.c.receipt_id == receipts.c.id,
+                line_items.c.kind == LineKind.DISCOUNT,
+            )
+            .scalar_subquery()
+            .label("savings_cents")
+        )
+        query = select(receipts, item_count, savings)
         if status is not None:
             query = query.where(receipts.c.status == status)
         if store_key is not None:
             query = query.where(receipts.c.store_key == store_key)
-        return newest_first_page(self._connection, query, receipts, page, receipt_summary_from_row)
+        return newest_purchase_first_page(
+            self._connection, query, receipts, page, receipt_summary_from_row
+        )
 
     def update_status(self, receipt_id: int, status: ReceiptStatus, stage: ProcessingStage) -> None:
         self._update(receipt_id, {"status": status, "stage": stage})

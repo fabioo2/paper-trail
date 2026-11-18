@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { formatDate } from "@/features/receipts/dates";
+import {
+  formatDate,
+  formatFullDate,
+  formatMonth,
+  formatWeekday,
+} from "@/features/receipts/dates";
 
 /** What a calendar date looks like in `locale`, independent of the machine's time zone. */
 function expected(isoDate: string, locale: string): string {
@@ -31,5 +36,15 @@ describe("formatDate", () => {
     expect(formatDate("2026-11-01", "fr-CA")).toBe(
       expected("2026-11-01", "fr-CA"),
     );
+  });
+});
+
+describe("month, weekday and full date", () => {
+  it("never shift the day west of UTC", () => {
+    vi.stubEnv("TZ", "America/Toronto");
+
+    expect(formatMonth("2026-11-01", "en-CA")).toBe("November 2026");
+    expect(formatWeekday("2026-11-01", "en-CA")).toBe("Sun");
+    expect(formatFullDate("2026-11-05", "en-CA")).toBe("Thu, Nov 5, 2026");
   });
 });

@@ -206,7 +206,8 @@ class Receipt:
 
 @dataclass(frozen=True, slots=True)
 class ReceiptSummary:
-    """A receipt as listed: no lines, just their count."""
+    """A receipt as listed: no lines, just how many are ITEM lines (``item_count``) and what its
+    discounts took off (``savings``, >= 0)."""
 
     id: int
     status: ReceiptStatus
@@ -215,6 +216,7 @@ class ReceiptSummary:
     total: Money | None
     item_count: int
     created_at: datetime
+    savings: Money
 
 
 # The keys of ``Product.field_sources``; ``size`` covers ``size_value`` and ``size_unit``.

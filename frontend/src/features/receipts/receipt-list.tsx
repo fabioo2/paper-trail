@@ -9,14 +9,18 @@ import {
   type ReceiptSummaryOut,
   useReceiptList,
 } from "@/features/receipts/api";
-import { formatDate } from "@/features/receipts/dates";
-import { formatMoney } from "@/features/receipts/money";
+import { formatMonth, formatWeekday } from "@/features/receipts/dates";
+import { formatMoney, type MoneyOut } from "@/features/receipts/money";
 import { ReceiptStatusBadge } from "@/features/receipts/receipt-status-badge";
+import { displayStoreName } from "@/features/receipts/store-name";
 
 const SKELETON_ROWS = 6;
 const LOAD_ERROR_TOAST = "receipts-load-error";
 
-/** The Receipts tab: every receipt newest first, loading more as the end scrolls into view. */
+/**
+ * The Receipts tab: every receipt by purchase date, newest first, under a heading per month
+ * with its total, loading more as the end scrolls into view.
+ */
 export function ReceiptList() {
   const receipts = useReceiptList();
   const { isError, isFetchNextPageError, refetch, fetchNextPage } = receipts;
@@ -63,17 +67,35 @@ export function ReceiptList() {
   }
 
   return (
-    <section aria-labelledby="receipts-heading" className="px-4 py-4">
+    <section
+      aria-labelledby="receipts-heading"
+      className="flex flex-col gap-4 px-4 py-4"
+    >
       <h1 id="receipts-heading" className="sr-only">
         Receipts
       </h1>
-      <ul className="divide-y rounded-xl border bg-card">
-        {rows.map((receipt) => (
-          <li key={receipt.id}>
-            <ReceiptRow receipt={receipt} />
-          </li>
-        ))}
-      </ul>
+      {groupByMonth(rows).map((month) => (
+        <section key={month.key} aria-label={month.label}>
+          <h2 className="mb-2 flex items-baseline justify-between gap-3 px-1">
+            <span className="font-semibold">{month.label}</span>
+            <span className="text-sm text-muted-foreground tabular-nums">
+              {[
+                month.totals.map((sum) => formatMoney(sum)).join(" + "),
+                `${String(month.receipts.length)} ${month.receipts.length === 1 ? "trip" : "trips"}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </h2>
+          <ul className="divide-y rounded-xl border bg-card">
+            {month.receipts.map((receipt) => (
+              <li key={receipt.id}>
+                <ReceiptRow receipt={receipt} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
       {receipts.hasNextPage ? (
         <LoadMoreSentinel
           // A new observer per page: one still in view after a page loads reports it again.
@@ -88,20 +110,87 @@ export function ReceiptList() {
   );
 }
 
+interface Month {
+  /** `YYYY-MM`, or "undated" for the receipts without a date (listed last). */
+  key: string;
+  label: string;
+  /** The month's receipt totals, one sum per currency in the order first seen. */
+  totals: MoneyOut[];
+  receipts: ReceiptSummaryOut[];
+}
+
+/**
+ * The receipts (newest purchase first) under one heading per month. A month seen again, e.g.
+ * after a date was corrected between two pages, joins its heading instead of repeating it.
+ */
+function groupByMonth(receipts: ReceiptSummaryOut[]): Month[] {
+  const months = new Map<string, Month>();
+  for (const receipt of receipts) {
+    const key = receipt.purchased_on?.slice(0, 7) ?? "undated";
+    let month = months.get(key);
+    if (month === undefined) {
+      month = {
+        key,
+        label:
+          receipt.purchased_on === null
+            ? "No date"
+            : formatMonth(receipt.purchased_on),
+        totals: [],
+        receipts: [],
+      };
+      months.set(key, month);
+    }
+    month.receipts.push(receipt);
+    const total = receipt.total;
+    if (total === null) continue;
+    const index = month.totals.findIndex(
+      (sum) => sum.currency === total.currency,
+    );
+    const sum = month.totals[index];
+    if (sum === undefined) month.totals.push(total);
+    else {
+      month.totals[index] = {
+        ...sum,
+        amount_cents: sum.amount_cents + total.amount_cents,
+      };
+    }
+  }
+  return [...months.values()];
+}
+
 function ReceiptRow({ receipt }: { receipt: ReceiptSummaryOut }) {
+  const items = `${String(receipt.item_count)} ${receipt.item_count === 1 ? "item" : "items"}`;
   return (
     <Link
       to="/receipts/$receiptId"
       params={{ receiptId: String(receipt.id) }}
       className="flex min-h-16 items-center justify-between gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
-      <div className="min-w-0">
-        <p className="truncate font-medium">{receipt.store_name}</p>
-        <p className="text-sm text-muted-foreground">
-          {receipt.purchased_on === null
-            ? "Date unknown"
-            : formatDate(receipt.purchased_on)}
-        </p>
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex w-8 shrink-0 flex-col items-center leading-tight">
+          {receipt.purchased_on === null ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <>
+              <span className="font-semibold tabular-nums">
+                {Number(receipt.purchased_on.slice(8, 10))}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {formatWeekday(receipt.purchased_on)}
+              </span>
+            </>
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className="truncate font-medium">
+            {displayStoreName(receipt.store_name)}
+          </p>
+          <p className="truncate text-sm text-muted-foreground">
+            {receipt.savings.amount_cents > 0
+              ? `${items} · saved ${formatMoney(receipt.savings)}`
+              : items}
+          </p>
+        </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <span className="font-medium tabular-nums">

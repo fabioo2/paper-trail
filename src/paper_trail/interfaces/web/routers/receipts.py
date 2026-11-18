@@ -1,5 +1,5 @@
-"""Recorded receipts: the list (newest first, keyset-paged), one receipt in full, its photo, and
-the upload of a photo for the worker to process."""
+"""Recorded receipts: the list (newest purchase first, keyset-paged), one receipt in full, its
+photo, and the upload of a photo for the worker to process."""
 
 from http import HTTPStatus
 from typing import Annotated
@@ -33,7 +33,8 @@ def list_receipts(
     status: ReceiptStatus | None = None,
     store: Annotated[str | None, Query(description="Store name, in any spelling")] = None,
 ) -> ReceiptPageOut:
-    """Receipts newest first. A bad cursor or limit is a 422 problem."""
+    """Receipts by purchase date, newest first (undated last, then newest recorded first). A bad
+    cursor or limit is a 422 problem."""
     page = container.list_receipts(PageRequest(limit=limit, cursor=cursor), status, store)
     return ReceiptPageOut.from_domain(page)
 
@@ -74,9 +75,13 @@ def upload_receipt(
     responses=problem_responses(HTTPStatus.NOT_FOUND),
 )
 def get_receipt(container: ContainerDep, receipt_id: int) -> ReceiptDetailOut:
-    """One receipt with its lines and an arithmetic report computed from the current data."""
+    """One receipt with its lines (and the products they link to) and an arithmetic report
+    computed from the current data."""
     receipt, report = container.get_receipt(receipt_id)
-    return ReceiptDetailOut.from_receipt(receipt, report)
+    products = container.get_products(
+        item.product_id for item in receipt.items if item.product_id is not None
+    )
+    return ReceiptDetailOut.from_receipt(receipt, report, products)
 
 
 @router.get(
