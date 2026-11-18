@@ -219,6 +219,58 @@ class ReceiptSummary:
     savings: Money
 
 
+@dataclass(frozen=True, slots=True)
+class ReceiptSpend:
+    """A COMPLETED receipt as counted in a month's spending: its store, date, total and what
+    its discounts took off (``savings``, >= 0)."""
+
+    store_key: str
+    store_name: str
+    purchased_on: date
+    total: Money | None
+    savings: Money
+
+
+@dataclass(frozen=True, slots=True)
+class WeekSpend:
+    """Spending from ``start`` to ``end`` (inclusive): one sum per currency, largest first."""
+
+    start: date
+    end: date
+    spent: tuple[Money, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StoreSpend:
+    store_name: str
+    spent: Money
+
+
+@dataclass(frozen=True, slots=True)
+class MonthSummary:
+    """A month's COMPLETED receipts by purchase date (``spent`` and ``saved`` one sum per
+    currency, largest spend first), and what the app has waiting right now."""
+
+    month: date  # its first day
+    spent: tuple[Money, ...]
+    saved: tuple[Money, ...]
+    trips: int
+    weeks: tuple[WeekSpend, ...]
+    stores: tuple[StoreSpend, ...]
+    open_reviews: int
+    unconfirmed_products: int
+    processing: int
+    recent: tuple[ReceiptSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiptMatch:
+    """A receipt found by a search, with the descriptions of its lines that matched."""
+
+    receipt: ReceiptSummary
+    lines: tuple[str, ...]
+
+
 # The keys of ``Product.field_sources``; ``size`` covers ``size_value`` and ``size_unit``.
 FIELD_SOURCE_KEYS = ("canonical_name", "brand", "size", "category", "tags")
 # A product is confirmed when one of these named it: a person or a data source, never a model.

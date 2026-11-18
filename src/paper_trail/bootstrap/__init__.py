@@ -47,6 +47,8 @@ from paper_trail.application.receipts import (
     ListReceipts,
     RecordReceipt,
 )
+from paper_trail.application.search import SearchPurchases
+from paper_trail.application.summary import GetMonthSummary
 from paper_trail.config import Settings
 from paper_trail.domain.rules.arithmetic import Tolerances
 from paper_trail.ports.clock import Clock
@@ -81,6 +83,8 @@ class Container:
     list_catalog_codes: ListCatalogCodes
     remove_catalog_code: RemoveCatalogCode
     lookup_catalog_code: LookupCatalogCode
+    get_month_summary: GetMonthSummary
+    search: SearchPurchases
     tolerances: Tolerances
 
 
@@ -132,6 +136,8 @@ def build_container(settings: Settings) -> Container:
         list_catalog_codes=ListCatalogCodes(uow_factory),
         remove_catalog_code=RemoveCatalogCode(uow_factory),
         lookup_catalog_code=LookupCatalogCode(CompositeCatalog(StoreCatalog(uow_factory), plu)),
+        get_month_summary=GetMonthSummary(uow_factory, clock),
+        search=SearchPurchases(uow_factory),
         tolerances=tolerances,
     )
 

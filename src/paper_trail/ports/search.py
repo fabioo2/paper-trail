@@ -24,3 +24,8 @@ class TextSearchIndex(Protocol):
         The query is plain text: search syntax in it is never interpreted and never raises.
         """
         ...
+
+    def product_ids(self, query: str) -> tuple[int, ...]:
+        """Every product matching every word of ``query`` as a prefix (in ``search``'s terms),
+        best first; no limit, so a caller can narrow them before taking the first few."""
+        ...

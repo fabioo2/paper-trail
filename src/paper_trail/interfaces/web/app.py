@@ -9,7 +9,15 @@ from paper_trail import __version__
 from paper_trail.bootstrap import Container, ReviewServices
 from paper_trail.interfaces.web.errors import install_error_handlers, problem_schemas
 from paper_trail.interfaces.web.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
-from paper_trail.interfaces.web.routers import health, meta, products, receipts, reviews
+from paper_trail.interfaces.web.routers import (
+    health,
+    meta,
+    products,
+    receipts,
+    reviews,
+    search,
+    summary,
+)
 from paper_trail.interfaces.web.spa import SpaStaticFiles
 
 API_PREFIX = "/api"
@@ -57,7 +65,15 @@ def create_app(container: Container, review_services: ReviewServices | None = No
         max_bytes=container.settings.upload.max_bytes + MULTIPART_OVERHEAD_BYTES,
     )
     app.add_middleware(RequestContextMiddleware)
-    for router in (health.router, receipts.router, reviews.router, products.router, meta.router):
+    for router in (
+        health.router,
+        receipts.router,
+        reviews.router,
+        products.router,
+        summary.router,
+        search.router,
+        meta.router,
+    ):
         app.include_router(router, prefix=API_PREFIX)
     if container.settings.static_dir.is_dir():
         app.mount("/", SpaStaticFiles(directory=container.settings.static_dir), name="spa")

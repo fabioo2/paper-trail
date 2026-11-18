@@ -466,6 +466,80 @@
         "title": "MoneyOut",
         "type": "object"
       },
+      "MonthSummaryOut": {
+        "description": "A month's completed receipts by purchase date: ``spent`` and ``saved`` one sum per\ncurrency (``saved`` in ``spent``'s order), ``trips`` the receipts, ``weeks`` the 1st-7th,\n8th-14th, 15th-21st and 22nd-end, ``stores`` one row per store and currency, largest first.\n``open_reviews``, ``unconfirmed_products``, ``processing`` and ``recent`` (the newest\nreceipts of any month and status) describe the app now, whatever the month.",
+        "properties": {
+          "month": {
+            "title": "Month",
+            "type": "string"
+          },
+          "open_reviews": {
+            "title": "Open Reviews",
+            "type": "integer"
+          },
+          "processing": {
+            "title": "Processing",
+            "type": "integer"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptSummaryOut"
+            },
+            "title": "Recent",
+            "type": "array"
+          },
+          "saved": {
+            "items": {
+              "$ref": "#/components/schemas/MoneyOut"
+            },
+            "title": "Saved",
+            "type": "array"
+          },
+          "spent": {
+            "items": {
+              "$ref": "#/components/schemas/MoneyOut"
+            },
+            "title": "Spent",
+            "type": "array"
+          },
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/StoreSpendOut"
+            },
+            "title": "Stores",
+            "type": "array"
+          },
+          "trips": {
+            "title": "Trips",
+            "type": "integer"
+          },
+          "unconfirmed_products": {
+            "title": "Unconfirmed Products",
+            "type": "integer"
+          },
+          "weeks": {
+            "items": {
+              "$ref": "#/components/schemas/WeekSpendOut"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "month",
+          "spent",
+          "saved",
+          "trips",
+          "weeks",
+          "stores",
+          "open_reviews",
+          "unconfirmed_products",
+          "processing",
+          "recent"
+        ],
+        "title": "MonthSummaryOut",
+        "type": "object"
+      },
       "ProblemDetail": {
         "properties": {
           "detail": {
@@ -1024,6 +1098,76 @@
         "title": "ReceiptDetailOut",
         "type": "object"
       },
+      "ReceiptMatchOut": {
+        "description": "A receipt found by a search: ``lines`` are the descriptions of its lines that matched\n(empty when only the store name did).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "purchased_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchased On"
+          },
+          "savings": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReceiptStatus"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "store_name",
+          "purchased_on",
+          "total",
+          "item_count",
+          "created_at",
+          "savings",
+          "lines"
+        ],
+        "title": "ReceiptMatchOut",
+        "type": "object"
+      },
       "ReceiptPageOut": {
         "properties": {
           "items": {
@@ -1529,6 +1673,47 @@
         "title": "ReviewSummaryOut",
         "type": "object"
       },
+      "SearchOut": {
+        "properties": {
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSummaryOut"
+            },
+            "title": "Products",
+            "type": "array"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptMatchOut"
+            },
+            "title": "Receipts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "products",
+          "receipts"
+        ],
+        "title": "SearchOut",
+        "type": "object"
+      },
+      "StoreSpendOut": {
+        "properties": {
+          "spent": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "store_name",
+          "spent"
+        ],
+        "title": "StoreSpendOut",
+        "type": "object"
+      },
       "Unit": {
         "enum": [
           "each",
@@ -1541,6 +1726,35 @@
         ],
         "title": "Unit",
         "type": "string"
+      },
+      "WeekSpendOut": {
+        "description": "``start`` to ``end`` inclusive; ``spent`` one sum per currency, largest first (empty\nwhen nothing was bought).",
+        "properties": {
+          "end": {
+            "format": "date",
+            "title": "End",
+            "type": "string"
+          },
+          "spent": {
+            "items": {
+              "$ref": "#/components/schemas/MoneyOut"
+            },
+            "title": "Spent",
+            "type": "array"
+          },
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "spent"
+        ],
+        "title": "WeekSpendOut",
+        "type": "object"
       }
     }
   },
@@ -2504,6 +2718,124 @@
         "summary": "Answer a review",
         "tags": [
           "reviews"
+        ]
+      }
+    },
+    "/api/search": {
+      "get": {
+        "description": "Products bought (name, brand, tag or category) and receipts (store name, or a line's\nprinted text, description or product), every word matching as a word prefix. Search syntax\nis plain text. A query shorter than 2 or longer than 100 characters is a 422 problem.",
+        "operationId": "search",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Search products and receipts",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/summary": {
+      "get": {
+        "description": "Spending of the month's completed receipts by purchase date, by week and by store, plus\nwhat is waiting now (open reviews, unconfirmed products, receipts being read) and the newest\nreceipts. A malformed month is a 422 problem.",
+        "operationId": "getSummary",
+        "parameters": [
+          {
+            "description": "YYYY-MM; the server's current month by default",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YYYY-MM; the server's current month by default",
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthSummaryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get a month's summary",
+        "tags": [
+          "summary"
         ]
       }
     }

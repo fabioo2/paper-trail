@@ -4,19 +4,28 @@ import { describe, expect, it } from "vitest";
 import { renderApp } from "@/test/render";
 
 describe("router", () => {
-  it("S0-AC-28: / redirects to /scan", async () => {
+  it("/ is Home", async () => {
     const { router } = renderApp("/");
 
-    await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/scan");
-    });
     const nav = await screen.findByRole("navigation", { name: "Primary" });
     expect(
-      within(nav).getByRole("link", { current: "page" }),
-    ).toHaveAccessibleName("Scan");
+      await within(nav).findByRole("link", { current: "page" }),
+    ).toHaveAccessibleName("Home");
+    expect(router.state.location.pathname).toBe("/");
   });
 
-  it("S0-AC-28: an unknown route renders the not-found page with a link back to /scan", async () => {
+  it.each(["/search", "/search?q=", "/search?q=%20%20"])(
+    "%s without a query redirects to Home",
+    async (path) => {
+      const { router } = renderApp(path);
+
+      await waitFor(() => {
+        expect(router.state.location.pathname).toBe("/");
+      });
+    },
+  );
+
+  it("S0-AC-28: an unknown route renders the not-found page with a link back Home", async () => {
     renderApp("/definitely/not/a/page");
 
     expect(
@@ -26,7 +35,7 @@ describe("router", () => {
     const homeLinks = screen
       .getAllByRole("link")
       .filter(
-        (link) => !nav.contains(link) && link.getAttribute("href") === "/scan",
+        (link) => !nav.contains(link) && link.getAttribute("href") === "/",
       );
     expect(homeLinks.length).toBeGreaterThanOrEqual(1);
   });

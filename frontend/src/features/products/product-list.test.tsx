@@ -137,7 +137,10 @@ describe("Products tab", () => {
     renderApp("/products");
     await productLinks();
 
-    await user.type(screen.getByRole("searchbox"), "zucchini");
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search products" }),
+      "zucchini",
+    );
 
     expect(
       screen.getByRole("heading", { name: "No matching products" }),

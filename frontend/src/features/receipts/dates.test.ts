@@ -4,6 +4,8 @@ import {
   formatDate,
   formatFullDate,
   formatMonth,
+  formatMonthDay,
+  formatMonthName,
   formatWeekday,
 } from "@/features/receipts/dates";
 
@@ -46,5 +48,7 @@ describe("month, weekday and full date", () => {
     expect(formatMonth("2026-11-01", "en-CA")).toBe("November 2026");
     expect(formatWeekday("2026-11-01", "en-CA")).toBe("Sun");
     expect(formatFullDate("2026-11-05", "en-CA")).toBe("Thu, Nov 5, 2026");
+    expect(formatMonthName("2026-11-01", "en-CA")).toBe("November");
+    expect(formatMonthDay("2026-11-05", "en-CA")).toBe("Nov 5");
   });
 });

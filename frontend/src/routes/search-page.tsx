@@ -1,13 +1,8 @@
-import { Search } from "lucide-react";
+import { useSearch } from "@tanstack/react-router";
 
-import { EmptyState } from "@/components/empty-state";
+import { SearchResults } from "@/features/search/search-results";
 
 export function SearchPage() {
-  return (
-    <EmptyState
-      icon={Search}
-      title="Search your purchases"
-      description="Find anything you have bought by name, store or category, even when the receipt abbreviates it."
-    />
-  );
+  const { q = "" } = useSearch({ from: "/search" });
+  return <SearchResults query={q} />;
 }

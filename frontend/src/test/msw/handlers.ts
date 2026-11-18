@@ -3,6 +3,7 @@ import { http, HttpResponse } from "msw";
 import type { components } from "@/api/schema";
 import { categories } from "@/test/fixtures/products";
 import { receiptPage } from "@/test/fixtures/receipts";
+import { monthSummary, searchResults } from "@/test/fixtures/summary";
 
 export type HealthOut = components["schemas"]["HealthOut"];
 export type ProblemDetail = components["schemas"]["ProblemDetail"];
@@ -24,4 +25,6 @@ export const handlers = [
   http.get("/api/products/:productId/purchases", () => HttpResponse.json([])),
   http.get("/api/reviews", () => HttpResponse.json([])),
   http.get("/api/categories", () => HttpResponse.json(categories)),
+  http.get("/api/summary", () => HttpResponse.json(monthSummary())),
+  http.get("/api/search", () => HttpResponse.json(searchResults())),
 ];

@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import { renderApp } from "@/test/render";
 
 const TABS = [
-  { name: "Scan", href: "/scan" },
+  { name: "Home", href: "/" },
   { name: "Receipts", href: "/receipts" },
+  { name: "Scan", href: "/scan" },
   { name: "Products", href: "/products" },
-  { name: "Search", href: "/search" },
   { name: "Review", href: "/review" },
 ] as const;
 

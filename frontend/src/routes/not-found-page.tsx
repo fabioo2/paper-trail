@@ -12,7 +12,7 @@ export function NotFoundPage() {
       description="There is nothing at this address. The link may be out of date."
     >
       <Button asChild className="mt-2 min-h-11">
-        <Link to="/scan">Go to Scan</Link>
+        <Link to="/">Go to Home</Link>
       </Button>
     </EmptyState>
   );
