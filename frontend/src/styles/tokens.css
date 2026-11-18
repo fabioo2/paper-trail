@@ -49,6 +49,12 @@
   --cat-services: oklch(0.64 0.05 195);
   --cat-other: oklch(0.6 0.05 290);
 
+  /* One colour per store on a price chart, in order (then repeated). */
+  --store-1: oklch(0.48 0.12 160);
+  --store-2: oklch(0.55 0.15 255);
+  --store-3: oklch(0.62 0.15 55);
+  --store-4: oklch(0.52 0.15 320);
+
   --radius: 0.75rem;
   --tab-bar-height: 4rem;
   --safe-top: env(safe-area-inset-top, 0px);
@@ -101,4 +107,9 @@
   --cat-restaurant: oklch(0.86 0.15 35);
   --cat-services: oklch(0.84 0.05 195);
   --cat-other: oklch(0.8 0.05 290);
+
+  --store-1: oklch(0.72 0.13 160);
+  --store-2: oklch(0.74 0.13 255);
+  --store-3: oklch(0.8 0.14 55);
+  --store-4: oklch(0.74 0.14 320);
 }

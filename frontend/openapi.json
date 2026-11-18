@@ -571,6 +571,46 @@
         "title": "MonthSummaryOut",
         "type": "object"
       },
+      "PricePointOut": {
+        "description": "One dated purchase for a price trend: ``paid`` for ``quantity`` of ``unit`` (null:\nunknown, compared as each).",
+        "properties": {
+          "paid": {
+            "$ref": "#/components/schemas/MoneyOut"
+          },
+          "purchased_on": {
+            "format": "date",
+            "title": "Purchased On",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "store_name": {
+            "title": "Store Name",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineUnit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "purchased_on",
+          "store_name",
+          "quantity",
+          "unit",
+          "paid"
+        ],
+        "title": "PricePointOut",
+        "type": "object"
+      },
       "ProblemDetail": {
         "properties": {
           "detail": {
@@ -853,7 +893,7 @@
         "type": "object"
       },
       "ProductSummaryOut": {
-        "description": "A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the\nnewest of them.",
+        "description": "A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the\nnewest of them, ``recent`` the dated ones among its 12 newest, newest first.",
         "properties": {
           "brand": {
             "anyOf": [
@@ -897,6 +937,13 @@
           },
           "last_purchase": {
             "$ref": "#/components/schemas/LastPurchaseOut"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/PricePointOut"
+            },
+            "title": "Recent",
+            "type": "array"
           },
           "size_unit": {
             "anyOf": [
@@ -942,7 +989,8 @@
           "field_sources",
           "confirmed",
           "times_bought",
-          "last_purchase"
+          "last_purchase",
+          "recent"
         ],
         "title": "ProductSummaryOut",
         "type": "object"

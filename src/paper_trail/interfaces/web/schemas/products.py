@@ -11,6 +11,7 @@ from paper_trail.application.payloads import MAX_TAGS, FieldSourceKey
 from paper_trail.domain.enums import Category, FieldSource, Unit
 from paper_trail.domain.models import (
     LastPurchase,
+    PricePoint,
     Product,
     ProductPurchase,
     ProductSummary,
@@ -69,12 +70,34 @@ class LastPurchaseOut(BaseModel):
         )
 
 
+class PricePointOut(BaseModel):
+    """One dated purchase for a price trend: ``paid`` for ``quantity`` of ``unit`` (null:
+    unknown, compared as each)."""
+
+    purchased_on: date
+    store_name: str
+    quantity: str  # the exact decimal, e.g. "0.452"
+    unit: LineUnit | None
+    paid: MoneyOut
+
+    @classmethod
+    def from_domain(cls, point: PricePoint) -> "PricePointOut":
+        return cls(
+            purchased_on=point.purchased_on,
+            store_name=point.store_name,
+            quantity=decimal_text(point.quantity),
+            unit=line_unit(point.unit),
+            paid=MoneyOut.from_domain(point.paid),
+        )
+
+
 class ProductSummaryOut(ProductOut):
     """A product as listed: ``times_bought`` counts its receipt lines, ``last_purchase`` is the
-    newest of them."""
+    newest of them, ``recent`` the dated ones among its 12 newest, newest first."""
 
     times_bought: int
     last_purchase: LastPurchaseOut
+    recent: list[PricePointOut]
 
     @classmethod
     def from_summary(cls, summary: ProductSummary) -> "ProductSummaryOut":
@@ -82,6 +105,7 @@ class ProductSummaryOut(ProductOut):
             **ProductOut.from_domain(summary.product).model_dump(),
             times_bought=summary.times_bought,
             last_purchase=LastPurchaseOut.from_domain(summary.last_purchase),
+            recent=[PricePointOut.from_domain(point) for point in summary.recent],
         )
 
 

@@ -19,11 +19,8 @@ import {
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
 import { GuessDot } from "@/features/products/field-source";
-import {
-  paidPerUnit,
-  unitPriceSummary,
-  unitSuffix,
-} from "@/features/products/prices";
+import { PriceHistory } from "@/features/products/price-history";
+import { paidPerUnit, unitSuffix } from "@/features/products/prices";
 import { ProductEditor } from "@/features/products/product-editor";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
@@ -113,13 +110,13 @@ function ProductView({ product }: { product: ProductOut }) {
         </header>
         {editing ? <ProductEditor product={product} /> : null}
       </section>
-      <ProductPurchases productId={product.id} />
+      <ProductPurchases product={product} />
     </article>
   );
 }
 
-function ProductPurchases({ productId }: { productId: number }) {
-  const purchases = useProductPurchases(productId);
+function ProductPurchases({ product }: { product: ProductOut }) {
+  const purchases = useProductPurchases(product.id);
 
   if (purchases.isPending) {
     return (
@@ -138,37 +135,32 @@ function ProductPurchases({ productId }: { productId: number }) {
   }
 
   const rows = purchases.data;
-  const summary = unitPriceSummary(rows);
   return (
-    <section
-      aria-labelledby="purchases-heading"
-      className="flex flex-col gap-3"
-    >
-      <h2 id="purchases-heading" className="font-semibold">
-        Purchases ({rows.length})
-      </h2>
-      {summary && summary.count >= 2 ? (
-        <p className="text-sm text-muted-foreground">
-          {unitSuffix(summary.unit)
-            ? `Lowest ${formatMoney(summary.lowest)}${unitSuffix(summary.unit)} · average ${formatMoney(summary.average)}${unitSuffix(summary.unit)}`
-            : `Lowest ${formatMoney(summary.lowest)} · average ${formatMoney(summary.average)} per unit`}
-        </p>
-      ) : null}
-      {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-          No purchases yet. Scan a receipt with this product to see what you
-          paid.
-        </p>
-      ) : (
-        <ul className="divide-y rounded-xl border bg-card">
-          {rows.map((purchase, index) => (
-            <li key={`${String(purchase.receipt_id)}-${String(index)}`}>
-              <PurchaseRow purchase={purchase} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <>
+      <PriceHistory product={product} purchases={rows} />
+      <section
+        aria-labelledby="purchases-heading"
+        className="flex flex-col gap-3"
+      >
+        <h2 id="purchases-heading" className="font-semibold">
+          Purchases ({rows.length})
+        </h2>
+        {rows.length === 0 ? (
+          <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+            No purchases yet. Scan a receipt with this product to see what you
+            paid.
+          </p>
+        ) : (
+          <ul className="divide-y rounded-xl border bg-card">
+            {rows.map((purchase, index) => (
+              <li key={`${String(purchase.receipt_id)}-${String(index)}`}>
+                <PurchaseRow purchase={purchase} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
   );
 }
 

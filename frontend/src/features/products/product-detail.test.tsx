@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
-import { formatDate } from "@/features/receipts/dates";
+import { formatDate, formatMonth } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import {
   product,
@@ -44,13 +44,28 @@ const purchases: ProductPurchaseOut[] = [
   productPurchase({ receipt_id: 10, purchased_on: null }),
 ];
 
-function serveProduct(bought: ProductPurchaseOut[]): void {
+function serveProduct(
+  bought: ProductPurchaseOut[],
+  overrides: Partial<ReturnType<typeof product>> = {},
+): void {
   server.use(
-    http.get("/api/products/:productId", () => HttpResponse.json(product())),
+    http.get("/api/products/:productId", () =>
+      HttpResponse.json(product(overrides)),
+    ),
     http.get("/api/products/:productId/purchases", () =>
       HttpResponse.json(bought),
     ),
   );
+}
+
+async function pricesSection(): Promise<HTMLElement> {
+  const heading = await screen.findByRole("heading", {
+    level: 2,
+    name: "Prices",
+  });
+  const section = heading.closest("section");
+  if (!section) throw new Error("expected the prices section");
+  return section;
 }
 
 async function purchasesSection(): Promise<HTMLElement> {
@@ -84,9 +99,6 @@ describe("Product detail", () => {
     const section = await purchasesSection();
     const rows = within(section).getAllByRole("link");
     expect(textOf(section)).toContain("Purchases (3)");
-    expect(textOf(section)).toContain(
-      `Lowest ${formatMoney(cad(609))} · average ${formatMoney(cad(936))} per unit`,
-    );
     expect(rows.map((row) => row.getAttribute("href"))).toEqual([
       "/receipts/12",
       "/receipts/11",
@@ -100,7 +112,7 @@ describe("Product detail", () => {
     expect(screen.queryByLabelText(/^name/i)).toBeNull();
   });
 
-  it("says so when the product was never bought, with no summary", async () => {
+  it("says so when the product was never bought, with no prices", async () => {
     serveProduct([]);
 
     renderApp("/products/5");
@@ -109,45 +121,170 @@ describe("Product detail", () => {
     expect(textOf(section)).toBe(
       "Purchases (0)No purchases yet. Scan a receipt with this product to see what you paid.",
     );
-  });
-
-  it("shows no summary for a single purchase", async () => {
-    serveProduct([productPurchase()]);
-
-    renderApp("/products/5");
-
-    const section = await purchasesSection();
-    expect(within(section).getAllByRole("link")).toHaveLength(1);
-    expect(textOf(section)).not.toContain("Lowest");
+    expect(screen.queryByRole("heading", { name: "Prices" })).toBeNull();
   });
 
   it.each([
+    ["a single purchase", [productPurchase()]],
     [
-      "keeps full precision until the final rounding",
-      [
-        productPurchase({ quantity: "10", paid: cad(1001) }),
-        productPurchase({ quantity: "5", paid: cad(503) }),
-      ],
-      `Lowest ${formatMoney(cad(100))} · average ${formatMoney(cad(100))} per unit`,
+      "two purchases, one undated",
+      [productPurchase(), productPurchase({ purchased_on: null })],
     ],
-    [
-      "counts only purchases in the newest purchase's currency",
-      [
-        productPurchase({ paid: cad(899) }),
-        productPurchase({ paid: { amount_cents: 100, currency: "USD" } }),
-        productPurchase({ paid: cad(1299) }),
-      ],
-      `Lowest ${formatMoney(cad(899))} · average ${formatMoney(cad(1099))} per unit`,
-    ],
-  ])("the summary %s", async (_, bought, summary) => {
-    serveProduct(bought);
+  ])(
+    "shows the store table but no chart or verdict for %s",
+    async (_, bought) => {
+      serveProduct(bought);
+
+      renderApp("/products/5");
+
+      const section = await pricesSection();
+      expect(within(section).getAllByRole("row")).toHaveLength(2);
+      expect(within(section).queryByRole("img")).toBeNull();
+      expect(textOf(section)).not.toContain("cheaper");
+    },
+  );
+
+  it("charts each store's price per unit, compares the stores and names the cheapest", async () => {
+    serveProduct([
+      productPurchase({
+        purchased_on: "2026-11-10",
+        store_name: "METRO #77",
+        quantity: "2",
+        unit: "kg",
+        paid: cad(1000),
+      }),
+      productPurchase({
+        purchased_on: "2026-10-01",
+        quantity: "1",
+        unit: "kg",
+        paid: cad(470),
+      }),
+      productPurchase({
+        purchased_on: "2026-09-01",
+        quantity: "1",
+        unit: "kg",
+        paid: cad(450),
+      }),
+      productPurchase({ purchased_on: "2026-08-01", unit: "each" }),
+    ]);
 
     renderApp("/products/5");
 
-    expect(textOf(await purchasesSection())).toContain(summary);
+    const section = await pricesSection();
+    const chart = within(section).getByRole("img");
+    expect(chart).toHaveAccessibleName(
+      `Price per kg, ${formatMonth("2026-09-01")} to ${formatMonth("2026-11-10")}. Costco: 2 purchases from ${formatMoney(cad(450))} to ${formatMoney(cad(470))}, last ${formatMoney(cad(470))}. Metro: 1 purchase, ${formatMoney(cad(500))}`,
+    );
+    expect(
+      [...chart.querySelectorAll("[data-store]")].map((line) => [
+        line.getAttribute("data-store"),
+        line.querySelectorAll("[data-point]").length,
+        line.querySelector("polyline")?.getAttribute("stroke-dasharray") ??
+          null,
+        line.querySelector("[data-point]")?.tagName,
+      ]),
+    ).toEqual([
+      ["Costco", 2, null, "circle"],
+      ["Metro", 1, "6 3", "rect"],
+    ]);
+    expect(within(section).getAllByRole("listitem").map(textOf)).toEqual([
+      "Costco",
+      "Metro",
+    ]);
+    expect(within(section).getAllByRole("row").map(textOf)).toEqual([
+      "Per kgLowAvgLast",
+      `Costco (cheapest)${formatMoney(cad(450))}${formatMoney(cad(460))}${formatMoney(cad(470))}`,
+      `Metro${formatMoney(cad(500))}${formatMoney(cad(500))}${formatMoney(cad(500))}`,
+    ]);
+    expect(textOf(section)).toContain(
+      "Costco is 8% cheaper per kg than Metro across your last 3 purchases",
+    );
   });
 
-  it("shows weighed prices per kg or lb, and the summary in the newest purchase's unit", async () => {
+  it("prices a sized product per litre, and with one purchase per store says what happened last time", async () => {
+    serveProduct(
+      [
+        productPurchase({
+          purchased_on: "2026-11-10",
+          store_name: "METRO #77",
+          quantity: "2",
+          paid: cad(1300),
+        }),
+        productPurchase({ purchased_on: "2026-11-01", paid: cad(609) }),
+      ],
+      { size_value: "4", size_unit: "l" },
+    );
+
+    renderApp("/products/5");
+
+    const section = await pricesSection();
+    expect(within(section).getByRole("img")).toHaveAccessibleName(
+      expect.stringMatching(/^Price per L, /),
+    );
+    expect(within(section).getAllByRole("row").map(textOf)).toEqual([
+      "Per LLowAvgLast",
+      `Costco (cheapest)${formatMoney(cad(152))}${formatMoney(cad(152))}${formatMoney(cad(152))}`,
+      `Metro${formatMoney(cad(163))}${formatMoney(cad(163))}${formatMoney(cad(163))}`,
+    ]);
+    expect(textOf(section)).toContain(
+      "Last time, Costco was 6% cheaper per L than Metro",
+    );
+  });
+
+  it("applies the chosen range to the chart, the table and the verdict", async () => {
+    serveProduct([
+      productPurchase({
+        purchased_on: "2026-11-10",
+        store_name: "METRO #77",
+        paid: cad(1000),
+      }),
+      productPurchase({ purchased_on: "2026-10-01", paid: cad(900) }),
+      productPurchase({
+        purchased_on: "2026-08-01",
+        store_name: "METRO #77",
+        paid: cad(1200),
+      }),
+      productPurchase({ purchased_on: "2025-12-01", paid: cad(700) }),
+    ]);
+    const user = userEvent.setup();
+    renderApp("/products/5");
+    const section = await pricesSection();
+    const range = within(section).getByRole("group", { name: "Chart range" });
+
+    expect(
+      within(range).getByRole("button", { name: "6M", pressed: true }),
+    ).toBeInTheDocument();
+    expect(within(section).getByRole("img")).toHaveAccessibleName(
+      expect.stringContaining(`Costco: 1 purchase, ${formatMoney(cad(900))}`),
+    );
+    expect(within(section).getAllByRole("row")).toHaveLength(3);
+    expect(textOf(section)).toContain(
+      "Costco is 18% cheaper per item than Metro in the last 6 months",
+    );
+
+    await user.click(within(range).getByRole("button", { name: "1M" }));
+    expect(within(section).queryByRole("img")).toBeNull();
+    expect(textOf(section)).toContain(
+      "Fewer than two purchases in this range.",
+    );
+    expect(within(section).getAllByRole("row").map(textOf)).toEqual([
+      "Per itemLowAvgLast",
+      `Metro${formatMoney(cad(1000))}${formatMoney(cad(1000))}${formatMoney(cad(1000))}`,
+    ]);
+    expect(textOf(section)).not.toContain("cheaper");
+
+    await user.click(within(range).getByRole("button", { name: "All" }));
+    expect(within(section).getByRole("img")).toHaveAccessibleName(
+      expect.stringContaining(
+        `Costco: 2 purchases from ${formatMoney(cad(700))} to ${formatMoney(cad(900))}`,
+      ),
+    );
+    expect(textOf(section)).toContain(
+      "Costco is 27% cheaper per item than Metro across your last 4 purchases",
+    );
+  });
+
+  it("shows weighed prices per kg or lb", async () => {
     serveProduct([
       productPurchase({
         receipt_id: 21,
@@ -169,9 +306,6 @@ describe("Product detail", () => {
     renderApp("/products/5");
 
     const section = await purchasesSection();
-    expect(textOf(section)).toContain(
-      `Lowest ${formatMoney(cad(440))}/kg · average ${formatMoney(cad(440))}/kg`,
-    );
     expect(within(section).getAllByRole("link").map(textOf)).toEqual([
       `${formatDate("2026-11-01")} · Costco0.5 kg · ${formatMoney(cad(440))}/kg${formatMoney(cad(220))}`,
       `${formatDate("2026-10-30")} · Costco2 lb · ${formatMoney(cad(200))}/lb${formatMoney(cad(400))}`,

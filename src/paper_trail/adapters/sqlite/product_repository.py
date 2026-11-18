@@ -1,7 +1,8 @@
 """``ProductRepository`` on SQLite: ``products`` and their ``product_aliases``."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import replace
+from itertools import groupby
 
 from sqlalchemy import (
     ColumnElement,
@@ -34,7 +35,9 @@ from paper_trail.domain.enums import AliasSource, LineKind
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
     CONFIRMING_SOURCES,
+    RECENT_PRICE_POINTS,
     LastPurchase,
+    PricePoint,
     Product,
     ProductAlias,
     ProductPurchase,
@@ -82,6 +85,8 @@ class SqliteProductRepository:
                 receipts.c.purchased_on,
                 receipts.c.store_name,
                 receipts.c.currency,
+                line_items.c.quantity,
+                line_items.c.unit,
                 _paid(linked),
                 func.count().over(partition_by=line_items.c.product_id).label("times_bought"),
                 func.row_number()
@@ -100,24 +105,17 @@ class SqliteProductRepository:
                 lines.c.purchased_on,
                 lines.c.store_name,
                 lines.c.currency,
+                lines.c.quantity,
+                lines.c.unit,
                 lines.c.paid_cents,
                 lines.c.times_bought,
             )
             .join(lines, lines.c.product_id == products.c.id)
-            .where(lines.c.newest == 1)
-            .order_by(func.lower(products.c.canonical_name), products.c.id)
+            .where(lines.c.newest <= RECENT_PRICE_POINTS)
+            .order_by(func.lower(products.c.canonical_name), products.c.id, lines.c.newest)
         ).mappings()
         return tuple(
-            ProductSummary(
-                product=product_from_row(row),
-                times_bought=row["times_bought"],
-                last_purchase=LastPurchase(
-                    purchased_on=row["purchased_on"],
-                    store_name=row["store_name"],
-                    paid=Money(row["paid_cents"], row["currency"]),
-                ),
-            )
-            for row in rows
+            _summary_from_rows(list(group)) for _, group in groupby(rows, key=lambda r: r["id"])
         )
 
     def unconfirmed_count(self) -> int:
@@ -271,6 +269,32 @@ def _paid(linked: Subquery) -> Label[int]:
         price_observations.c.paid_cents,
         line_items.c.line_total_cents + func.coalesce(linked.c.discount_cents, 0),
     ).label("paid_cents")
+
+
+def _summary_from_rows(rows: Sequence[RowMapping]) -> ProductSummary:
+    """A product's newest lines, newest first: the first is its last purchase, the dated ones
+    (undated lines sort last) its recent price points."""
+    newest = rows[0]
+    return ProductSummary(
+        product=product_from_row(newest),
+        times_bought=newest["times_bought"],
+        last_purchase=LastPurchase(
+            purchased_on=newest["purchased_on"],
+            store_name=newest["store_name"],
+            paid=Money(newest["paid_cents"], newest["currency"]),
+        ),
+        recent=tuple(
+            PricePoint(
+                purchased_on=row["purchased_on"],
+                store_name=row["store_name"],
+                quantity=row["quantity"],
+                paid=Money(row["paid_cents"], row["currency"]),
+                unit=row["unit"],
+            )
+            for row in rows
+            if row["purchased_on"] is not None
+        ),
+    )
 
 
 def _purchase_from_row(row: RowMapping) -> ProductPurchase:

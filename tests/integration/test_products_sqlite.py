@@ -5,10 +5,11 @@
 Pinned: only products with an ITEM line are listed (a DISCOUNT line naming the product is no
 purchase), by name ignoring case; ``times_bought`` agrees with the stored ITEM lines; the last
 purchase is the newest dated line (the higher receipt id on the same day), paid after its
-linked discount, and an undated line only when no line is dated. A product's purchases are its
-ITEM lines in that same order, as many as ``times_bought``, each with its unit. A line without a
-price observation (an undated receipt) is paid after the DISCOUNT line linked to it on its own
-receipt, in both views (hardening H3-08, H3-09).
+linked discount, and an undated line only when no line is dated. The recent price points are
+the newest dated lines in that order, at most ``RECENT_PRICE_POINTS``, with quantity and unit.
+A product's purchases are its ITEM lines in that same order, as many as ``times_bought``, each
+with its unit. A line without a price observation (an undated receipt) is paid after the
+DISCOUNT line linked to it on its own receipt, in both views (hardening H3-08, H3-09).
 """
 
 from collections.abc import Iterator
@@ -24,8 +25,10 @@ from paper_trail.application.products import ListProductPurchases, ListProducts
 from paper_trail.domain.enums import MatchSource, Unit
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
+    RECENT_PRICE_POINTS,
     LastPurchase,
     LineItem,
+    PricePoint,
     Product,
     ProductPurchase,
     ProductSummary,
@@ -93,12 +96,65 @@ def test_lists_bought_products_with_their_newest_purchase(
 
     listed = ListProducts(factory)()
 
+    one = Decimal(1)
     assert listed == (
-        ProductSummary(juice, 1, LastPurchase(date(2026, 10, 30), COSTCO, cad(450))),
+        ProductSummary(
+            juice,
+            1,
+            LastPurchase(date(2026, 10, 30), COSTCO, cad(450)),
+            (PricePoint(date(2026, 10, 30), COSTCO, one, cad(450)),),
+        ),
         ProductSummary(bananas, 1, LastPurchase(None, LOBLAWS, cad(204))),
-        ProductSummary(eggs, 4, LastPurchase(date(2026, 11, 3), LOBLAWS, cad(1299))),
+        ProductSummary(
+            eggs,
+            4,
+            LastPurchase(date(2026, 11, 3), LOBLAWS, cad(1299)),
+            (
+                PricePoint(date(2026, 11, 3), LOBLAWS, one, cad(1299)),
+                PricePoint(date(2026, 11, 3), COSTCO, one, cad(999)),
+                PricePoint(date(2026, 11, 1), COSTCO, one, cad(899)),
+            ),
+        ),
     )
     assert sum("FROM products" in statement for statement in statements) == 1
+
+
+def test_recent_price_points_are_the_newest_dated_lines_capped_with_quantity_and_unit(
+    factory: UnitOfWorkFactory,
+) -> None:
+    apples = _add(factory, "Apples")
+    pid = require_id(apples.id)
+    _bought(factory, apples, LOBLAWS, None, line_total=1)
+    days = [date(2026, 1, day) for day in range(1, RECENT_PRICE_POINTS + 3)]
+    for day in days:
+        _bought(factory, apples, COSTCO, day, line_total=100 + day.day)
+    seed_purchase(
+        factory,
+        [
+            item_line(
+                0,
+                "APPLES",
+                452,
+                quantity=Decimal("0.452"),
+                unit=Unit.KG,
+                product_id=pid,
+                match_source=MatchSource.CATALOG,
+            )
+        ],
+        store_name=LOBLAWS,
+        purchased_on=date(2026, 2, 1),
+    )
+
+    (summary,) = ListProducts(factory)()
+
+    assert summary.times_bought == len(days) + 2
+    assert summary.recent == (
+        PricePoint(date(2026, 2, 1), LOBLAWS, Decimal("0.452"), cad(452), Unit.KG),
+        *(
+            PricePoint(day, COSTCO, Decimal(1), cad(100 + day.day))
+            for day in reversed(days[-(RECENT_PRICE_POINTS - 1) :])
+        ),
+    )
 
 
 def test_a_discount_line_alone_is_no_purchase(factory: UnitOfWorkFactory) -> None:
@@ -229,7 +285,7 @@ def test_h3_08_an_undated_purchase_is_paid_after_its_linked_discount(
             Unit.KG,
         ),
     )
-    assert summaries == (ProductSummary(eggs, 1, LastPurchase(None, STORE_NAME, cad(paid))),)
+    assert summaries == (ProductSummary(eggs, 1, LastPurchase(None, STORE_NAME, cad(paid)), ()),)
 
 
 def test_h3_08_a_discount_at_the_same_position_on_another_receipt_is_not_applied(

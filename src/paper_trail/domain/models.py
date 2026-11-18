@@ -329,12 +329,29 @@ class LastPurchase:
 
 
 @dataclass(frozen=True, slots=True)
+class PricePoint:
+    """One dated ITEM line of a product, for its price trend: when and where it was bought, how
+    much of it (``unit``: None is unknown) and what was paid."""
+
+    purchased_on: date
+    store_name: str
+    quantity: Decimal
+    paid: Money
+    unit: Unit | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProductSummary:
-    """A product as listed: how many ITEM lines name it and the newest of them."""
+    """A product as listed: how many ITEM lines name it, the newest of them, and its newest
+    dated lines (at most ``RECENT_PRICE_POINTS``), newest first."""
 
     product: Product
     times_bought: int
     last_purchase: LastPurchase
+    recent: tuple[PricePoint, ...] = ()
+
+
+RECENT_PRICE_POINTS = 12
 
 
 @dataclass(frozen=True, slots=True)

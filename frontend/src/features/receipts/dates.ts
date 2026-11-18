@@ -37,6 +37,11 @@ export function formatMonthName(isoDate: string, locale?: string): string {
   return format(isoDate, { month: "long" }, locale);
 }
 
+/** The month's short name, e.g. `Nov`. */
+export function formatShortMonth(isoDate: string, locale?: string): string {
+  return format(isoDate, { month: "short" }, locale);
+}
+
 /** The short month and day, e.g. `Nov 5`. */
 export function formatMonthDay(isoDate: string, locale?: string): string {
   return format(isoDate, { month: "short", day: "numeric" }, locale);

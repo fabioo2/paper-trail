@@ -24,9 +24,22 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
+/** The products list's filter chip: one category, one store, or the products to check. */
 export interface ProductsSearch {
   /** Open the list on the products whose details were guessed. */
   needsALook?: boolean;
+  category?: string;
+  /** A store as displayed (`displayStoreName`). */
+  store?: string;
+}
+
+function productsSearch(search: Record<string, unknown>): ProductsSearch {
+  if (search.needsALook === true) return { needsALook: true };
+  if (typeof search.category === "string") {
+    return { category: search.category };
+  }
+  if (typeof search.store === "string") return { store: search.store };
+  return {};
 }
 
 export interface ResultsSearch {
@@ -63,8 +76,7 @@ const pageRoutes = [
     getParentRoute: () => rootRoute,
     path: "/products",
     component: ProductsPage,
-    validateSearch: (search: Record<string, unknown>): ProductsSearch =>
-      search.needsALook === true ? { needsALook: true } : {},
+    validateSearch: productsSearch,
   }),
   createRoute({
     getParentRoute: () => rootRoute,

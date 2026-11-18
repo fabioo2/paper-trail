@@ -4,7 +4,7 @@ import { delay, http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
 import { formatMoney } from "@/features/receipts/money";
-import { productSummary } from "@/test/fixtures/products";
+import { pricePoint, productSummary } from "@/test/fixtures/products";
 import { cad } from "@/test/fixtures/receipts";
 import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
@@ -12,8 +12,26 @@ import { renderApp } from "@/test/render";
 import { textOf } from "@/test/text";
 
 const SKELETON = '[data-slot="skeleton"]';
+const COSTCO = "COSTCO WHOLESALE #1234";
+const METRO = "METRO #77";
 
-const eggs = productSummary();
+const eggs = productSummary({
+  times_bought: 3,
+  last_purchase: {
+    purchased_on: "2026-11-01",
+    store_name: COSTCO,
+    paid: cad(1199),
+  },
+  recent: [
+    pricePoint({ paid: cad(1199) }),
+    pricePoint({ purchased_on: "2026-10-01", paid: cad(1599) }),
+    pricePoint({
+      purchased_on: "2026-09-01",
+      store_name: METRO,
+      paid: cad(1599),
+    }),
+  ],
+});
 const milk = productSummary({
   id: 6,
   canonical_name: "Natrel 2% Milk",
@@ -26,10 +44,68 @@ const milk = productSummary({
   confirmed: true,
   times_bought: 1,
   last_purchase: {
-    purchased_on: null,
-    store_name: "Farm Boy",
-    paid: cad(649),
+    purchased_on: "2026-11-02",
+    store_name: COSTCO,
+    paid: cad(609),
   },
+  recent: [pricePoint({ purchased_on: "2026-11-02", paid: cad(609) })],
+});
+const kiwi = productSummary({
+  id: 7,
+  canonical_name: "Gold Kiwi",
+  brand: null,
+  size_value: null,
+  size_unit: null,
+  category: "produce",
+  tags: [],
+  times_bought: 2,
+  last_purchase: {
+    purchased_on: "2026-11-03",
+    store_name: METRO,
+    paid: cad(168),
+  },
+  recent: [
+    pricePoint({ store_name: METRO, paid: cad(168) }),
+    pricePoint({ store_name: METRO, paid: cad(155) }),
+  ],
+});
+const pepper = productSummary({
+  id: 8,
+  canonical_name: "Orange Pepper",
+  brand: null,
+  size_value: null,
+  size_unit: null,
+  category: null,
+  tags: [],
+  field_sources: {},
+  times_bought: 2,
+  last_purchase: {
+    purchased_on: "2026-11-03",
+    store_name: METRO,
+    paid: cad(226),
+  },
+  recent: [
+    pricePoint({
+      store_name: METRO,
+      quantity: "0.452",
+      unit: "kg",
+      paid: cad(226),
+    }),
+    pricePoint({
+      store_name: METRO,
+      quantity: "0.5",
+      unit: "kg",
+      paid: cad(250),
+    }),
+  ],
+});
+const undated = productSummary({
+  id: 9,
+  canonical_name: "Undated Bread",
+  category: "pantry",
+  times_bought: 2,
+  last_purchase: { purchased_on: null, store_name: METRO, paid: cad(399) },
+  recent: [],
 });
 
 const serverError: ProblemDetail = {
@@ -42,12 +118,27 @@ const serverError: ProblemDetail = {
 };
 
 function serveProducts(): void {
-  server.use(http.get("/api/products", () => HttpResponse.json([eggs, milk])));
+  server.use(
+    http.get("/api/products", () =>
+      HttpResponse.json([kiwi, eggs, milk, pepper, undated]),
+    ),
+  );
 }
 
-async function productLinks(): Promise<HTMLElement[]> {
+async function productRows(): Promise<HTMLElement[]> {
   const main = await screen.findByRole("main");
-  return within(main).findAllByRole("link", { name: /eggs|milk/i });
+  const list = await within(main).findByRole("list");
+  return within(list).getAllByRole("link");
+}
+
+function names(rows: HTMLElement[]): string[] {
+  return rows.map(
+    (row) => row.querySelector("p span.truncate")?.textContent ?? "",
+  );
+}
+
+function chips(): HTMLElement {
+  return screen.getByRole("group", { name: "Filter products" });
 }
 
 describe("Products tab", () => {
@@ -79,93 +170,157 @@ describe("Products tab", () => {
     );
   });
 
-  it("lists each product with brand, size, category, how often and where it was last bought, and a dot for AI guesses", async () => {
+  it("shows each product's store, count, unit price, last price, trend and change against its average", async () => {
     serveProducts();
 
     renderApp("/products");
 
-    const [eggsRow, milkRow] = await productLinks();
-    if (!eggsRow || !milkRow) throw new Error("expected two product rows");
-    expect(eggsRow).toHaveAttribute("href", "/products/5");
-    for (const part of [
-      "Kirkland Organic Eggs",
-      "Kirkland Signature · 24 each",
-      `Bought 2× · last ${formatMoney(cad(899))} at Costco`,
-      "Dairy & eggs",
-    ])
-      expect(textOf(eggsRow)).toContain(part);
-    for (const part of [
-      "Natrel · 4 l",
-      `Bought 1× · last ${formatMoney(cad(649))} at Farm Boy`,
-      "Pantry",
-    ])
-      expect(textOf(milkRow)).toContain(part);
+    const rows = await productRows();
+    expect(rows[1]).toHaveAttribute("href", "/products/5");
+    expect(rows.map(textOf)).toEqual([
+      `Gold KiwiMetro · 2×${formatMoney(cad(168))}↑up 8%`,
+      `Kirkland Organic EggsCostco · 3×${formatMoney(cad(1199))}↓down 25%`,
+      `Natrel 2% MilkCostco · 1× · ${formatMoney(cad(152))}/L${formatMoney(cad(609))}first time`,
+      `Orange PepperMetro · 2× · ${formatMoney(cad(500))}/kg${formatMoney(cad(226))}steady`,
+      `Undated BreadMetro · 2×${formatMoney(cad(399))}`,
+    ]);
     expect(
-      within(eggsRow).getByRole("img", { name: "Has AI guesses" }),
-    ).toBeInTheDocument();
-    expect(within(milkRow).queryByRole("img")).toBeNull();
-    expect(textOf(eggsRow)).not.toContain("Suggested");
+      rows.map((row) => row.querySelector("[data-sparkline]") !== null),
+    ).toEqual([true, true, false, true, false]);
     expect(
-      [eggsRow, milkRow].map((row) =>
+      rows.map(
+        (row) =>
+          within(row).queryByRole("img", { name: "Has AI guesses" }) !== null,
+      ),
+    ).toEqual([true, true, false, false, true]);
+    expect(
+      rows.map((row) =>
         row.querySelector("[data-category]")?.getAttribute("style"),
       ),
     ).toEqual([
+      "background-color: var(--cat-produce);",
       "background-color: var(--cat-dairy-eggs);",
       "background-color: var(--cat-pantry);",
+      undefined,
+      "background-color: var(--cat-pantry);",
     ]);
+  });
+
+  it("offers a chip for every category and store present, and the count to check", async () => {
+    serveProducts();
+
+    renderApp("/products");
+    await productRows();
+
+    expect(within(chips()).getAllByRole("button").map(textOf)).toEqual([
+      "All",
+      "Produce",
+      "Dairy & eggs",
+      "Pantry",
+      "Costco",
+      "Metro",
+      "To check4",
+    ]);
+    expect(
+      within(chips()).getByRole("button", { name: "All", pressed: true }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "a category",
+      "Pantry",
+      { category: "pantry" },
+      ["Natrel 2% Milk", "Undated Bread"],
+    ],
+    [
+      "a store, counting earlier purchases there",
+      "Metro",
+      { store: "Metro" },
+      ["Gold Kiwi", "Kirkland Organic Eggs", "Orange Pepper", "Undated Bread"],
+    ],
+    [
+      "the products to check",
+      /^To check/,
+      { needsALook: true },
+      ["Gold Kiwi", "Kirkland Organic Eggs", "Orange Pepper", "Undated Bread"],
+    ],
+  ])("filters by %s, kept in the URL", async (_, chip, search, expected) => {
+    serveProducts();
+    const user = userEvent.setup();
+    const { router } = renderApp("/products");
+    await productRows();
+
+    await user.click(within(chips()).getByRole("button", { name: chip }));
+
+    expect(names(await productRows())).toEqual(expected);
+    expect(router.state.location.search).toEqual(search);
+    expect(
+      within(chips()).getByRole("button", { name: chip, pressed: true }),
+    ).toBeInTheDocument();
+
+    await user.click(within(chips()).getByRole("button", { name: "All" }));
+    expect(await productRows()).toHaveLength(5);
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it.each([
+    ["/products?category=produce", ["Gold Kiwi"]],
+    ["/products?store=Costco", ["Kirkland Organic Eggs", "Natrel 2% Milk"]],
+    [
+      "/products?needsALook=true",
+      ["Gold Kiwi", "Kirkland Organic Eggs", "Orange Pepper", "Undated Bread"],
+    ],
+  ])("opens %s on its filter", async (path, expected) => {
+    serveProducts();
+
+    renderApp(path);
+
+    expect(names(await productRows())).toEqual(expected);
   });
 
   it.each([
     ["a name", "eggs", "Kirkland Organic Eggs"],
     ["a brand", "NATREL", "Natrel 2% Milk"],
     ["a tag", "lactose", "Natrel 2% Milk"],
-  ])("filters by %s", async (_, query, name) => {
+  ])("searches by %s", async (_, query, name) => {
     serveProducts();
     const user = userEvent.setup();
     renderApp("/products");
-    await productLinks();
+    await productRows();
 
     await user.type(
       screen.getByRole("searchbox", { name: "Search products" }),
       query,
     );
 
-    const rows = within(screen.getByRole("main")).getAllByRole("link");
-    expect(rows.map(textOf)).toEqual([expect.stringContaining(name)]);
+    expect(names(await productRows())).toEqual([name]);
   });
 
-  it("says so when nothing matches the search", async () => {
+  it("combines the search with a chip, and says so when nothing matches", async () => {
     serveProducts();
     const user = userEvent.setup();
     renderApp("/products");
-    await productLinks();
+    await productRows();
+    await user.click(within(chips()).getByRole("button", { name: "Costco" }));
 
     await user.type(
       screen.getByRole("searchbox", { name: "Search products" }),
-      "zucchini",
+      "e",
     );
+    expect(names(await productRows())).toEqual([
+      "Kirkland Organic Eggs",
+      "Natrel 2% Milk",
+    ]);
 
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search products" }),
+      "ggs",
+    );
+    await user.click(within(chips()).getByRole("button", { name: "Pantry" }));
     expect(
       screen.getByRole("heading", { name: "No matching products" }),
     ).toBeInTheDocument();
-  });
-
-  it("Needs a look shows only the unconfirmed products, with their count", async () => {
-    serveProducts();
-    const user = userEvent.setup();
-    renderApp("/products");
-    await productLinks();
-
-    const toggle = screen.getByRole("button", { name: /needs a look/i });
-    expect(textOf(toggle)).toBe("Needs a look1");
-    await user.click(toggle);
-
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(await productLinks()).toHaveLength(1);
-    expect(screen.queryByRole("link", { name: /milk/i })).toBeNull();
-
-    await user.click(toggle);
-    expect(await productLinks()).toHaveLength(2);
   });
 
   it("shows an error toast with a retry action when loading fails", async () => {
@@ -188,6 +343,6 @@ describe("Products tab", () => {
     fail = false;
     await user.click(retry);
 
-    expect(await productLinks()).toHaveLength(2);
+    expect(await productRows()).toHaveLength(2);
   });
 });
