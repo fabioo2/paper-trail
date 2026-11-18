@@ -36,6 +36,7 @@ export function line(overrides: Partial<ReviewLineBody> = {}): ReviewLineBody {
     line_total_cents: 999,
     category: "dairy_eggs",
     applies_to: null,
+    unit: null,
     ...overrides,
   };
 }
@@ -67,6 +68,7 @@ export function reviewDraft(
         quantity: "2",
         unit_price_cents: 329,
         line_total_cents: 658,
+        unit: "each",
       }),
     ],
     ...overrides,

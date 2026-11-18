@@ -8,7 +8,7 @@ can ever take the same job.
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 
-from sqlalchemy import Connection, and_, func, insert, or_, select, update
+from sqlalchemy import ColumnElement, Connection, and_, case, func, insert, or_, select, update
 
 from paper_trail.adapters.sqlite.mappers import job_from_row
 from paper_trail.adapters.sqlite.schema import jobs
@@ -62,7 +62,7 @@ class SqliteJobQueue:
             .where(
                 or_(
                     and_(jobs.c.status == JobStatus.PENDING, jobs.c.available_at <= now),
-                    and_(jobs.c.status == JobStatus.RUNNING, jobs.c.lease_expires_at < now),
+                    and_(_abandoned(now), jobs.c.attempts + 1 < jobs.c.max_attempts),
                 )
             )
             .order_by(jobs.c.available_at, jobs.c.id)
@@ -75,6 +75,10 @@ class SqliteJobQueue:
                 .where(jobs.c.id == next_job)
                 .values(
                     status=JobStatus.RUNNING,
+                    attempts=case(
+                        (jobs.c.status == JobStatus.RUNNING, jobs.c.attempts + 1),
+                        else_=jobs.c.attempts,
+                    ),
                     locked_by=worker_id,
                     lease_expires_at=now + lease,
                     updated_at=now,
@@ -85,6 +89,43 @@ class SqliteJobQueue:
             .one_or_none()
         )
         return None if row is None else job_from_row(row)
+
+    def abandoned(self) -> list[Job]:
+        rows = (
+            self._connection.execute(
+                select(jobs).where(_exhausted(self._clock.now())).order_by(jobs.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [job_from_row(row) for row in rows]
+
+    def fail_abandoned(self, job_id: int, error: str) -> Job:
+        now = self._clock.now()
+        row = (
+            self._connection.execute(
+                update(jobs)
+                .where(jobs.c.id == job_id, _exhausted(now))
+                .values(
+                    status=JobStatus.FAILED,
+                    attempts=jobs.c.attempts + 1,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    last_error=error,
+                    updated_at=now,
+                )
+                .returning(jobs)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            if self.get(job_id) is None:
+                msg = f"job {job_id} does not exist"
+                raise NotFoundError(msg)
+            msg = f"job {job_id} is not abandoned with its last attempt used up"
+            raise ConflictError(msg)
+        return job_from_row(row)
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:
         self._owned(job_id, worker_id)
@@ -123,6 +164,19 @@ class SqliteJobQueue:
             .limit(1)
         )
         return self._connection.execute(active).first() is not None
+
+    def latest(self, kind: JobKind, receipt_id: int) -> Job | None:
+        row = (
+            self._connection.execute(
+                select(jobs)
+                .where(jobs.c.kind == kind, jobs.c.receipt_id == receipt_id)
+                .order_by(jobs.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else job_from_row(row)
 
     def pending_count(self) -> int:
         count: int = self._connection.execute(
@@ -169,3 +223,13 @@ class SqliteJobQueue:
             .one()
         )
         return job_from_row(row)
+
+
+def _abandoned(now: datetime) -> ColumnElement[bool]:
+    """A RUNNING job whose worker's lease ran out: that worker died (or lost the job)."""
+    return and_(jobs.c.status == JobStatus.RUNNING, jobs.c.lease_expires_at < now)
+
+
+def _exhausted(now: datetime) -> ColumnElement[bool]:
+    """An abandoned job whose dead worker used up its last attempt."""
+    return and_(_abandoned(now), jobs.c.attempts + 1 >= jobs.c.max_attempts)

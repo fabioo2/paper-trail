@@ -6,21 +6,31 @@ Pinned: 202 ``{id, status, stage}`` for a new photo; 200 with the same receipt a
 for the same photo again; a 413 problem for a file above ``UPLOAD__MAX_BYTES`` (refused from its
 Content-Length before reading, or as the body streams in); a 415 problem, with nothing stored,
 for a file that is not an image or has more pixels than ``UPLOAD__MAX_PIXELS``; a 422 problem
-without the ``file`` field.
+without the ``file`` field. A FAILED receipt's detail says why in one word, never the error
+text; ``POST /api/receipts/{id}/retry`` queues it again (202 with the upload body), 404 for an
+unknown receipt and 409 when it cannot be retried; the same photo of a FAILED receipt again
+answers 200 with that receipt and queues nothing (hardening H2-03, H2-04, H2-06, H2-11).
 """
 
 from collections.abc import Callable, Iterable, Iterator
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
 from paper_trail.bootstrap import Container, build_container, dispose
-from paper_trail.domain.enums import JobKind, JobStatus
+from paper_trail.domain.enums import (
+    FailureReason,
+    JobKind,
+    JobStatus,
+    ProcessingStage,
+    ReceiptStatus,
+)
 from paper_trail.interfaces.web.app import MULTIPART_OVERHEAD_BYTES, create_app
 from tests.images import png_bytes
 from tests.storage import stored_state
-from tests.support import CopyMigrated, MakeSettings
+from tests.support import CopyMigrated, MakeSettings, require_id
 
 PROBLEM_JSON = "application/problem+json"
 URL = "/api/receipts"
@@ -151,3 +161,76 @@ def test_an_upload_above_the_byte_limit_is_a_413_problem(
     assert body["detail"].startswith("The upload is larger than the limit of")
     state = stored_state(small_limit.engine)
     assert (state.receipts, state.jobs) == ({}, {})
+
+
+# --- H2-03, H2-04, H2-06, H2-11: why a receipt failed, and trying it again ------------------
+
+LEAKY_ERROR = "sk-ant-api03-SECRET at /data/images/ab/cd.jpg Traceback (most recent call last):"
+
+
+def _failed(container: Container, reason: FailureReason | None) -> None:
+    """The uploaded receipt 1 FAILED with ``reason``, its job FAILED with a leaky error text."""
+    with container.uow_factory() as uow:
+        job = uow.jobs.claim("worker-1", timedelta(minutes=5))
+        assert job is not None
+        uow.jobs.fail(require_id(job.id), "worker-1", LEAKY_ERROR, retry_at=None)
+        uow.receipts.update_status(
+            1, ReceiptStatus.FAILED, ProcessingStage.FAILED, failure_reason=reason
+        )
+        uow.commit()
+
+
+@pytest.mark.parametrize(
+    ("reason", "shown"),
+    [(FailureReason.BUDGET_REACHED, "budget_reached"), (None, "unknown")],
+    ids=["stored", "failed-before-reasons"],
+)
+def test_h2_03_a_failed_receipt_says_why_and_nothing_more(
+    migrated_client: TestClient,
+    migrated_container: Container,
+    reason: FailureReason | None,
+    shown: str,
+) -> None:
+    _upload(migrated_client, png_bytes())
+    processing = migrated_client.get(f"{URL}/1").json()
+    _failed(migrated_container, reason)
+
+    response = migrated_client.get(f"{URL}/1")
+
+    assert processing["failure_reason"] is None
+    assert response.json()["failure_reason"] == shown
+    for leaked in ("sk-ant", "/data/images", "Traceback"):
+        assert leaked not in response.text
+
+
+def test_h2_04_h2_11_a_failed_receipt_is_retried_once_and_a_duplicate_does_not_retry_it(
+    migrated_client: TestClient, migrated_container: Container
+) -> None:
+    _upload(migrated_client, png_bytes())
+    _failed(migrated_container, FailureReason.CLAUDE_UNAVAILABLE)
+
+    duplicate = _upload(migrated_client, png_bytes())
+    jobs_after_duplicate = _queued(migrated_container)
+    retried = migrated_client.post(f"{URL}/1/retry")
+    again = migrated_client.post(f"{URL}/1/retry")
+
+    assert duplicate == (200, {"id": 1, "status": "failed", "stage": "failed"})
+    assert jobs_after_duplicate == [(JobKind.PROCESS_RECEIPT, 1, JobStatus.FAILED)]
+    assert (retried.status_code, retried.json()) == (
+        202,
+        {"id": 1, "status": "processing", "stage": "queued"},
+    )
+    assert migrated_client.get(f"{URL}/1").json()["failure_reason"] is None
+    assert again.status_code == 409
+    assert again.headers["content-type"].startswith(PROBLEM_JSON)
+    assert _queued(migrated_container) == [
+        (JobKind.PROCESS_RECEIPT, 1, JobStatus.FAILED),
+        (JobKind.PROCESS_RECEIPT, 1, JobStatus.PENDING),
+    ]
+
+
+def test_h2_06_retrying_an_unknown_receipt_is_a_404_problem(migrated_client: TestClient) -> None:
+    response = migrated_client.post(f"{URL}/424242/retry")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "receipt 424242 does not exist"

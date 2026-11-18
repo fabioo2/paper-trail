@@ -29,8 +29,20 @@ class JobQueue(Protocol):
 
     def claim(self, worker_id: str, lease: timedelta) -> Job | None:
         """Atomically take the job with the earliest available_at (then lowest id) among
-        PENDING jobs with available_at <= now and RUNNING jobs whose lease expired before now.
-        It becomes RUNNING, locked by ``worker_id`` until now + ``lease``. None if idle."""
+        PENDING jobs with available_at <= now and RUNNING jobs whose lease expired before now
+        with an attempt left after the one their dead worker used up. It becomes RUNNING,
+        locked by ``worker_id`` until now + ``lease``; taking back an expired one counts that
+        attempt. None if idle."""
+        ...
+
+    def abandoned(self) -> list[Job]:
+        """RUNNING jobs whose lease expired before now and whose dead worker used up their last
+        attempt (``claim`` never takes them), by id."""
+        ...
+
+    def fail_abandoned(self, job_id: int, error: str) -> Job:
+        """One of ``abandoned``: FAILED with ``error``, that attempt counted. ConflictError when
+        it is not (any more) abandoned, NotFoundError for an unknown id."""
         ...
 
     def extend_lease(self, job_id: int, worker_id: str, lease: timedelta) -> None:
@@ -52,6 +64,10 @@ class JobQueue(Protocol):
 
     def has_active(self, kind: JobKind, receipt_id: int) -> bool:
         """Whether a job of ``kind`` for the receipt is PENDING or RUNNING."""
+        ...
+
+    def latest(self, kind: JobKind, receipt_id: int) -> Job | None:
+        """The receipt's newest job of ``kind`` (highest id), whatever its status; None if none."""
         ...
 
     def pending_count(self) -> int:

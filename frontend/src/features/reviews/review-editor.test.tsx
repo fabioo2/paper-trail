@@ -337,6 +337,7 @@ describe("Review editor", () => {
               line_total_cents: 350,
               category: null,
               applies_to: null,
+              unit: null,
             },
           ],
         },
@@ -344,17 +345,22 @@ describe("Review editor", () => {
     ]);
   });
 
-  it("lets a person answer an open review whose receipt failed", async () => {
+  it("sends a person to Try again instead of answering a review whose receipt failed", async () => {
     const requests = serveReview(review({ receipt_status: "failed" }));
-    const user = userEvent.setup();
+
     renderApp("/review/7");
-    await form();
 
-    await user.click(screen.getByRole("button", { name: "Accept as read" }));
-
-    await waitFor(() => {
-      expect(requests.answers).toEqual([{ accept: true, force: false }]);
-    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "This receipt can't be reviewed now",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open receipt" })).toHaveAttribute(
+      "href",
+      `/receipts/${String(review().receipt_id)}`,
+    );
+    expect(screen.queryByRole("button", { name: "Accept as read" })).toBeNull();
+    expect(requests.answers).toEqual([]);
   });
 
   it("says a review was already answered", async () => {

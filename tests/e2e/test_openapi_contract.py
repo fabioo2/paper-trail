@@ -130,3 +130,31 @@ def test_tc_106_applies_to_position_is_a_required_nullable_integer(app: FastAPI)
         {"type": "integer"},
         {"type": "null"},
     ]
+
+
+def test_h2_12_h3_10_retry_failure_reason_and_unit_are_in_the_contract(app: FastAPI) -> None:
+    spec = app.openapi()
+    schemas = spec["components"]["schemas"]
+    retry = spec["paths"]["/api/receipts/{receipt_id}/retry"]["post"]
+    nullable = {
+        name: (schemas[model]["required"], schemas[model]["properties"][name]["anyOf"])
+        for model, name in (("ReceiptDetailOut", "failure_reason"), ("ProductPurchaseOut", "unit"))
+    }
+
+    assert retry["operationId"] == "retryReceipt"
+    assert {"202", "404", "409"} <= set(retry["responses"])
+    assert retry["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ReceiptUploadOut"
+    }
+    for name, (required, any_of) in nullable.items():
+        assert name in required
+        assert {"type": "null"} in any_of
+    assert schemas["FailureReason"]["enum"] == [
+        "budget_reached",
+        "claude_unavailable",
+        "no_api_key",
+        "unreadable_photo",
+        "stopped_unexpectedly",
+        "unknown",
+    ]
+    assert schemas["LineUnit"]["enum"] == ["each", "kg", "lb"]

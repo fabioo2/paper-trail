@@ -69,3 +69,9 @@ def test_pc_tc_23_product_codes_is_revision_0006_after_0005() -> None:
     """Barcode lookup (R3): migrations/versions/0006_product_codes.py is revision "0006",
     revising "0005" (its no-application-import row comes from the parametrized test above)."""
     assert _revision_ids("0006_product_codes.py") == ("0006", "0005")
+
+
+def test_h3_03_line_units_is_revision_0010_after_0009() -> None:
+    """Hardening H3-03: migrations/versions/0010_line_units_failure_reasons.py is revision
+    "0010", revising "0009"."""
+    assert _revision_ids("0010_line_units_failure_reasons.py") == ("0010", "0009")

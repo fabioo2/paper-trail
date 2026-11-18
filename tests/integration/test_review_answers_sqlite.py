@@ -21,14 +21,19 @@ from datetime import timedelta
 
 import pytest
 
-from paper_trail.application.jobs import ProcessReceiptJobs
+from paper_trail.adapters.sqlite.job_queue import SqliteJobQueue
+from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
+from paper_trail.application.jobs import STOPPED_UNEXPECTEDLY, ProcessReceiptJobs
+from paper_trail.application.process_receipt import RetryReceipt
 from paper_trail.application.receipts import (
+    REVIEW_ANSWER_JOB_ATTEMPTS,
     AnswerReview,
     InconsistentDraftError,
     ListPendingReviews,
 )
 from paper_trail.domain.enums import (
     AgentRole,
+    FailureReason,
     JobKind,
     JobStatus,
     ProcessingStage,
@@ -37,9 +42,10 @@ from paper_trail.domain.enums import (
 )
 from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import Job, JsonValue, ReceiptDraft
+from paper_trail.ports.reader import ReaderUnavailableError
 from paper_trail.ports.tools import ToolDescription, ToolGateway
 from tests.agent_harness import Harness, agent_settings, build_harness
-from tests.extractions import inconsistent_answer
+from tests.extractions import answer, inconsistent_answer
 from tests.factories import MASKED_TEST_PAN, TEST_PAN, cad, receipt_draft, simple_draft
 from tests.fakes.reader import ScriptedReader
 from tests.pans import card_numbers
@@ -247,6 +253,214 @@ def test_a_worker_that_died_after_giving_the_answer_continues_the_run_without_gi
     assert parked.jobs()[0].status is JobStatus.SUCCEEDED
 
 
+def test_h4_04_an_answer_whose_workers_keep_dying_fails_the_receipt_and_try_again_finishes_it() -> (
+    None
+):
+    """The graph took the answer before each worker died: the sweep fails the receipt and
+    leaves the review OPEN; Try again resumes the thread, which completes and closes it."""
+    stop = StopOnce(WorkerKilledError())
+    parked = _park(stop)
+    parked.answer(parked.review_id, _corrected())
+    for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
+        stop.armed = True
+        with pytest.raises(WorkerKilledError):
+            parked.run_job()
+        parked.harness.clock.advance(LEASE + timedelta(seconds=1))
+
+    assert parked.run_job() is False
+
+    job = parked.jobs()[0]
+    assert (job.status, job.attempts, job.last_error) == (
+        JobStatus.FAILED,
+        REVIEW_ANSWER_JOB_ATTEMPTS,
+        STOPPED_UNEXPECTEDLY,
+    )
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
+    reason = parked.harness.receipt(parked.receipt_id).failure_reason
+    assert reason is FailureReason.STOPPED_UNEXPECTEDLY
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+    assert parked.harness.receipt(parked.receipt_id).store_name == "Costco"
+    assert parked.pending() == []
+
+
+def _workers_die(parked: Parked) -> None:
+    """Every worker that takes the queued answer dies before it gives it: its attempts used up."""
+    for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
+        with parked.harness.uow_factory() as uow:
+            assert uow.jobs.claim("dead-worker", LEASE) is not None
+            uow.commit()
+        parked.harness.clock.advance(LEASE + timedelta(seconds=1))
+
+
+def test_h4_04_try_again_before_the_answer_was_taken_gives_the_review_back_to_answer() -> None:
+    parked = _park()
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    assert parked.run_job() is False
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (
+        ReceiptStatus.NEEDS_REVIEW,
+        ProcessingStage.NEEDS_REVIEW,
+        ReviewStatus.OPEN,
+    )
+    assert parked.reader.calls == 1
+    assert parked.pending() == [parked.review_id]
+    with pytest.raises(ConflictError, match="not failed"):
+        RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    parked.answer(parked.review_id, _corrected())
+    assert parked.run_job() is True
+    assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("the receipt could not be failed"), WorkerKilledError()],
+    ids=["recovery-raises", "worker-dies-mid-recovery"],
+)
+def test_h4_04_a_recovery_that_fails_changes_nothing_and_the_next_sweep_recovers(
+    parked: Parked, failure: BaseException
+) -> None:
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    before = (parked.state(), parked.jobs())
+
+    def broken(*_: object, **__: object) -> None:
+        raise failure
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqliteReceiptRepository, "update_status", broken)
+        if isinstance(failure, Exception):
+            assert parked.run_job() is False  # idle: the worker waits a poll, never spins
+        else:
+            with pytest.raises(WorkerKilledError):
+                parked.run_job()
+    after_failure = (parked.state(), parked.jobs())
+
+    assert parked.run_job() is False
+
+    assert after_failure == before
+    job = parked.jobs()[0]
+    assert (job.status, job.last_error) == (JobStatus.FAILED, STOPPED_UNEXPECTEDLY)
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
+
+
+def _answer_taken_then_workers_die(parked: Parked, stop: StopOnce, *, force: bool = False) -> None:
+    """The graph takes the answer, then every worker dies before saving: the sweep fails the
+    receipt as stopped unexpectedly, its review left OPEN."""
+    if force:
+        parked.answer(parked.review_id, None, force=True, reason="  torn receipt ")
+    else:
+        parked.answer(parked.review_id, _corrected())
+    for _ in range(REVIEW_ANSWER_JOB_ATTEMPTS):
+        stop.armed = True
+        with pytest.raises(WorkerKilledError):
+            parked.run_job()
+        parked.harness.clock.advance(LEASE + timedelta(seconds=1))
+    assert parked.run_job() is False
+    assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.OPEN)
+
+
+def test_try_again_completing_a_forced_answer_remembers_why() -> None:
+    stop = StopOnce(WorkerKilledError())
+    parked = _park(stop)
+    _answer_taken_then_workers_die(parked, stop, force=True)
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+    correction = parked.harness.latest_correction(f"receipt:{parked.receipt_id}.arithmetic")
+    assert correction is not None
+    assert correction.new_value == "torn receipt"
+
+
+def test_cli_resume_decides_as_try_again_does() -> None:
+    """``process --resume`` of a FAILED receipt with an OPEN review: the thread that took the
+    answer completes and closes it; one still waiting for it gives it back to the person."""
+    stop = StopOnce(WorkerKilledError())
+    taken = _park(stop)
+    _answer_taken_then_workers_die(taken, stop)
+    waiting = _park()
+    waiting.answer(waiting.review_id, _corrected())
+    _workers_die(waiting)
+    assert waiting.run_job() is False
+
+    resumed = taken.harness.resume(taken.receipt_id)
+    with pytest.raises(ConflictError, match="waits for review"):
+        waiting.harness.resume(waiting.receipt_id)
+
+    assert resumed.graph is not None
+    assert taken.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
+    assert waiting.state() == (
+        ReceiptStatus.NEEDS_REVIEW,
+        ProcessingStage.NEEDS_REVIEW,
+        ReviewStatus.OPEN,
+    )
+    assert waiting.pending() == [waiting.review_id]
+
+
+def test_try_again_reading_the_photo_afresh_dismisses_the_stale_review(parked: Parked) -> None:
+    parked.harness.runner.reset(parked.receipt_id)
+    with parked.harness.uow_factory() as uow:
+        uow.receipts.update_status(parked.receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED)
+        uow.commit()
+    parked.reader.script(answer())
+
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+
+    assert parked.state() == (
+        ReceiptStatus.COMPLETED,
+        ProcessingStage.DONE,
+        ReviewStatus.DISMISSED,
+    )
+    with parked.harness.uow_factory(read_only=True) as uow:
+        assert uow.reviews.find_open(parked.receipt_id) is None
+
+
+def test_h4_04_a_stale_sweeper_changes_nothing_after_a_new_answer_is_queued(
+    parked: Parked,
+) -> None:
+    parked.answer(parked.review_id, _corrected())
+    _workers_die(parked)
+    with parked.harness.uow_factory(read_only=True) as uow:
+        stale = uow.jobs.abandoned()
+    assert parked.run_job() is False
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+    parked.answer(parked.review_id, _corrected())
+    before = (parked.state(), parked.jobs())
+    late = ProcessReceiptJobs(
+        parked.harness.uow_factory,
+        parked.harness.process,
+        parked.harness.tracer,
+        worker_id="late-sweeper",
+        lease=LEASE,
+        resolve_review=parked.harness.resolve,
+    )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqliteJobQueue, "abandoned", lambda _: stale)
+        patch.setattr(SqliteJobQueue, "claim", lambda *_: None)
+        assert late() is False
+
+    assert before[0] == (ReceiptStatus.PROCESSING, ProcessingStage.QUEUED, ReviewStatus.OPEN)
+    assert [job.status for job in before[1]] == [
+        JobStatus.FAILED,
+        JobStatus.SUCCEEDED,
+        JobStatus.PENDING,
+    ]
+    assert (parked.state(), parked.jobs()) == before
+
+
 def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked: Parked) -> None:
     parked.answer(parked.review_id, _corrected())
     parked.harness.runner.resume(parked.receipt_id, _corrected(), attribute_discounts=False)
@@ -258,8 +472,18 @@ def test_a_worker_that_died_after_the_run_finished_only_closes_the_review(parked
     assert parked.jobs()[0].status is JobStatus.SUCCEEDED
 
 
-def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_failed_run() -> None:
-    stop = StopOnce(RuntimeError("matching failed"))
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (RuntimeError("matching failed"), FailureReason.UNKNOWN),
+        (ReaderUnavailableError("matching failed"), FailureReason.CLAUDE_UNAVAILABLE),
+    ],
+    ids=["unknown", "claude-unavailable"],
+)
+def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_failed_run(
+    error: Exception, reason: FailureReason
+) -> None:
+    stop = StopOnce(error)
     parked = _park(stop)
     parked.answer(parked.review_id, _corrected())
     stop.armed = True
@@ -268,6 +492,7 @@ def test_a_run_that_fails_after_the_answer_was_saved_is_continued_like_any_faile
 
     assert parked.jobs()[0].last_error == "matching failed"
     assert parked.state() == (ReceiptStatus.FAILED, ProcessingStage.FAILED, ReviewStatus.RESOLVED)
+    assert parked.harness.receipt(parked.receipt_id).failure_reason is reason
     resumed = parked.harness.resume(parked.receipt_id).graph
     assert resumed is not None
     assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
@@ -351,16 +576,26 @@ def test_giving_back_a_failed_answer_never_demotes_a_receipt_completed_meanwhile
     assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.OPEN)
 
 
-def test_an_open_review_of_a_failed_receipt_is_listed_and_answerable(parked: Parked) -> None:
+def test_an_open_review_of_a_failed_receipt_is_not_answerable_until_try_again(
+    parked: Parked,
+) -> None:
+    """Its graph may already have taken an earlier answer, which a new one would silently
+    replace: the person retries the receipt instead."""
     with parked.harness.uow_factory() as uow:
         uow.receipts.update_status(parked.receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED)
         uow.commit()
-    assert parked.pending() == [parked.review_id]
+    before = (parked.state(), parked.jobs())
 
-    parked.answer(parked.review_id, _corrected())
+    with pytest.raises(ConflictError, match="use Try again on the receipt"):
+        parked.answer(parked.review_id, _corrected())
+
     assert parked.pending() == []
-    parked.run_job()
-
+    assert (parked.state(), parked.jobs()) == before
+    RetryReceipt(parked.harness.uow_factory)(parked.receipt_id)
+    assert parked.run_job() is True
+    assert parked.pending() == [parked.review_id]
+    parked.answer(parked.review_id, _corrected())
+    assert parked.run_job() is True
     assert parked.state() == (ReceiptStatus.COMPLETED, ProcessingStage.DONE, ReviewStatus.RESOLVED)
 
 

@@ -278,8 +278,9 @@ type ShownValue = str | Sequence[str] | None
 
 
 def shown_value(product: Product, key: FieldSourceKey) -> ShownValue:
-    """A field as the product endpoints show it: the size as ``<value> <unit>`` (``24 each``),
-    the category's value, the tags as a tuple; None when empty."""
+    """A field as the product endpoints show it: the size as ``<value> <unit>`` (``24 each``,
+    the value in fixed point as the API writes it), the category's value, the tags as a tuple;
+    None when empty."""
     match key:
         case "canonical_name":
             return product.canonical_name
@@ -289,7 +290,7 @@ def shown_value(product: Product, key: FieldSourceKey) -> ShownValue:
             return (
                 None
                 if product.size_value is None or product.size_unit is None
-                else f"{product.size_value} {product.size_unit}"
+                else f"{product.size_value:f} {product.size_unit}"
             )
         case "category":
             return None if product.category is None else product.category.value

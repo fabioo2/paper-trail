@@ -18,17 +18,13 @@ Pinned:
 """
 
 import contextlib
-import copy
-from collections.abc import Callable
 from typing import Any
 
 import pytest
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from PIL import UnidentifiedImageError
 
 from paper_trail.agents.state import STATE_VERSION
 from paper_trail.domain.enums import MatchSource, ProcessingStage, ReceiptStatus, ReviewStatus
-from paper_trail.domain.errors import ConflictError, NotFoundError
+from paper_trail.domain.errors import ConflictError, NotFoundError, UnsupportedMediaError
 from paper_trail.domain.trace import TraceKind
 from paper_trail.ports.agents import OutdatedCheckpointError
 from paper_trail.ports.reader import ReaderError, ReaderUnavailableError
@@ -40,7 +36,14 @@ from tests.fakes.reader import Reply, ScriptedReader
 from tests.fakes.tools import CrashAfterToolGateway
 from tests.storage import in_unit
 from tests.support import require_id
-from tests.unit.agents.graph_support import config, graph, saved_values, scripted, second
+from tests.unit.agents.graph_support import (
+    config,
+    graph,
+    rewrite_latest,
+    saved_values,
+    scripted,
+    second,
+)
 
 API_DOWN = "cannot reach the Claude API"
 
@@ -49,22 +52,6 @@ def _first(*replies: Reply, max_attempts: int = 2) -> Harness:
     return build_harness(
         ScriptedReader(*replies), settings=agent_settings(max_attempts=max_attempts)
     )
-
-
-def _rewrite_latest(
-    saver: BaseCheckpointSaver[Any], receipt_id: int, change: Callable[[dict[str, Any]], None]
-) -> None:
-    """Replace the thread's latest checkpoint (same id) by one whose values ``change`` edited:
-    what an older version would have saved."""
-    saved = saver.get_tuple(config(receipt_id))
-    assert saved is not None
-    checkpoint = copy.copy(saved.checkpoint)
-    values = dict(checkpoint["channel_values"])
-    change(values)
-    versions = {k: v for k, v in checkpoint["channel_versions"].items() if k in values}
-    checkpoint["channel_values"] = values
-    checkpoint["channel_versions"] = versions
-    saver.put(saved.parent_config or config(receipt_id), checkpoint, saved.metadata, versions)
 
 
 def _at_version_2(values: dict[str, Any]) -> None:
@@ -268,7 +255,7 @@ def test_ce_tc_028_new_threads_carry_state_version_3() -> None:
 def test_ce_tc_028_a_version_2_thread_is_refused_before_anything_runs(paused_after: str) -> None:
     first = build_harness(ScriptedReader(answer()), settings=agent_settings(enrichment=True))
     receipt_id = graph(first.process_image(interrupt_after=paused_after)).receipt_id
-    _rewrite_latest(first.checkpointer, receipt_id, _at_version_2)
+    rewrite_latest(first.checkpointer, receipt_id, _at_version_2)
     checkpoints = list(first.checkpointer.list(config(receipt_id)))
     receipt_before = first.receipt(receipt_id)
     products_before = [first.product(pid) for pid in first.product_ids()]
@@ -298,7 +285,7 @@ def test_ce_tc_028_an_old_threads_review_is_answered_by_a_persons_draft() -> Non
     """Its pending reading is in the old shape, so only a person's corrected draft answers it."""
     first = _first(inconsistent_answer(), max_attempts=1)
     parked = graph(first.process_image())
-    _rewrite_latest(first.checkpointer, parked.receipt_id, _at_version_2)
+    rewrite_latest(first.checkpointer, parked.receipt_id, _at_version_2)
     later = second(first)
     assert later.runner.pending_draft(parked.receipt_id) is None
 
@@ -348,7 +335,7 @@ def test_reprocess_dismisses_the_open_review_of_the_dropped_thread() -> None:
 def test_reprocess_is_the_way_out_of_a_version_2_thread() -> None:
     harness = _first(answer(), answer())
     receipt_id = graph(harness.process_image("photo", interrupt_after="persist")).receipt_id
-    _rewrite_latest(harness.checkpointer, receipt_id, _at_version_2)
+    rewrite_latest(harness.checkpointer, receipt_id, _at_version_2)
 
     again = graph(harness.process_image("photo", reprocess=True))
 
@@ -378,7 +365,7 @@ def test_reprocess_after_a_review_resolved_with_a_persons_draft_reads_again() ->
     "failure",
     [
         ReaderUnavailableError(API_DOWN),
-        UnidentifiedImageError("cannot identify image file"),
+        UnsupportedMediaError("the stored photo cannot be read: UnidentifiedImageError"),
     ],
     ids=["claude-down-R8", "stored-image-corrupt-R16"],
 )
@@ -386,7 +373,7 @@ def test_r8_r16_a_reprocess_that_stops_before_persist_keeps_the_receipts_previou
     failure: Exception,
 ) -> None:
     """The adapter decodes the stored photo before the request, so a corrupt one fails the
-    read with Pillow's error, not a ``ReaderError``."""
+    read with an ``UnsupportedMediaError``, not a ``ReaderError``."""
     harness = _first(answer(), failure)
     receipt_id = graph(harness.process_image("photo")).receipt_id
     before = harness.receipt(receipt_id)

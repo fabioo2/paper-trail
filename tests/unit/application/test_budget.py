@@ -14,10 +14,10 @@ import pytest
 
 from paper_trail.agents.schemas import ReceiptAnswer
 from paper_trail.application.budget import BudgetedReader
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.ports.budget import ClaudeCall
 from paper_trail.ports.reader import (
     BudgetReachedError,
-    ReaderError,
     ReaderOutputError,
     ReaderUnavailableError,
     ReadRequest,
@@ -114,11 +114,12 @@ def _billed_output_error() -> ReaderOutputError:
     [
         (_billed_output_error(), [ClaudeCall(NOW, HAIKU, 1000, 200, Decimal("0.0002"))]),
         (ReaderUnavailableError("the Claude API is unreachable"), []),
+        (UnsupportedMediaError("the stored photo cannot be read"), []),
     ],
-    ids=["billed-failure", "unbilled-failure"],
+    ids=["billed-failure", "unbilled-failure", "undecodable-photo"],
 )
 def test_ce_tc_037_a_failed_read_is_recorded_only_when_billed(
-    error: ReaderError, recorded: list[ClaudeCall]
+    error: Exception, recorded: list[ClaudeCall]
 ) -> None:
     ledger = FakeSpendLedger()
 
@@ -126,3 +127,14 @@ def test_ce_tc_037_a_failed_read_is_recorded_only_when_billed(
         _budgeted(ScriptedReader(error), ledger).read(_request(), ReceiptAnswer)
 
     assert (raised.value, ledger.calls, ledger.reservations) == (error, recorded, {})
+
+
+def test_h4_12_reservations_left_open_by_killed_calls_fill_the_budget() -> None:
+    inner = ScriptedReader(answer())
+    ledger = FakeSpendLedger()
+    ledger.reservations = {1: (datetime(2026, 11, 1, tzinfo=UTC), CAP)}
+
+    with pytest.raises(BudgetReachedError, match=r"spent 5\.00 of 5\.00 USD"):
+        _budgeted(inner, ledger).read(_request(), ReceiptAnswer)
+
+    assert inner.calls == 0

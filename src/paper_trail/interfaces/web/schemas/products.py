@@ -17,7 +17,12 @@ from paper_trail.domain.models import (
     is_confirmed,
     require_id,
 )
-from paper_trail.interfaces.web.schemas.receipts import MoneyOut
+from paper_trail.interfaces.web.schemas.receipts import (
+    LineUnit,
+    MoneyOut,
+    decimal_text,
+    line_unit,
+)
 
 
 class ProductOut(BaseModel):
@@ -41,7 +46,7 @@ class ProductOut(BaseModel):
             id=require_id(product.id),
             canonical_name=product.canonical_name,
             brand=product.brand,
-            size_value=None if product.size_value is None else str(product.size_value),
+            size_value=None if product.size_value is None else decimal_text(product.size_value),
             size_unit=product.size_unit,
             category=product.category,
             tags=list(product.tags),
@@ -81,13 +86,15 @@ class ProductSummaryOut(ProductOut):
 
 
 class ProductPurchaseOut(BaseModel):
-    """One purchase of a product: ``unit_price`` is the regular price of one unit,
-    ``discount`` (<= 0) the line's linked discount and ``paid`` the line total after it."""
+    """One purchase of a product: ``unit_price`` is the regular price of one ``unit`` (null:
+    unknown, compared as each), ``discount`` (<= 0) the line's linked discount and ``paid`` the
+    line total after it."""
 
     receipt_id: int
     purchased_on: date | None
     store_name: str
     quantity: str  # the exact decimal, e.g. "0.452"
+    unit: LineUnit | None
     unit_price: MoneyOut
     discount: MoneyOut
     paid: MoneyOut
@@ -98,7 +105,8 @@ class ProductPurchaseOut(BaseModel):
             receipt_id=purchase.receipt_id,
             purchased_on=purchase.purchased_on,
             store_name=purchase.store_name,
-            quantity=str(purchase.quantity),
+            quantity=decimal_text(purchase.quantity),
+            unit=line_unit(purchase.unit),
             unit_price=MoneyOut.from_domain(purchase.unit_price),
             discount=MoneyOut.from_domain(purchase.discount),
             paid=MoneyOut.from_domain(purchase.paid),

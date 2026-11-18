@@ -7,6 +7,8 @@ import {
 
 import { ApiError, apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
+import { summaryKeys } from "@/features/home/api";
+import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
 export type ReceiptSummaryOut = Schemas["ReceiptSummaryOut"];
@@ -14,6 +16,7 @@ export type ReceiptDetailOut = Schemas["ReceiptDetailOut"];
 export type LineItemOut = Schemas["LineItemOut"];
 export type ReceiptStatus = Schemas["ReceiptStatus"];
 export type ReceiptUploadOut = Schemas["ReceiptUploadOut"];
+export type FailureReason = Schemas["FailureReason"];
 
 export const RECEIPT_POLL_INTERVAL_MS = 2_000;
 /** Retries of one poll: three failures in a row stop polling. */
@@ -40,7 +43,10 @@ export function useReceiptList() {
   });
 }
 
-/** One receipt with its lines and arithmetic report (`getReceipt`). */
+/**
+ * One receipt with its lines and arithmetic report (`getReceipt`), polled while it is being
+ * read (after Try again, say) so its result shows without a refresh.
+ */
 export function useReceipt(id: number) {
   return useQuery({
     queryKey: receiptKeys.detail(id),
@@ -50,6 +56,10 @@ export function useReceipt(id: number) {
           params: { path: { receipt_id: id } },
         }),
       ),
+    refetchInterval: (query) =>
+      query.state.data?.status === "processing"
+        ? RECEIPT_POLL_INTERVAL_MS
+        : false,
   });
 }
 
@@ -80,6 +90,37 @@ export function useUploadReceipt() {
     mutationFn: uploadReceipt,
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: receiptKeys.list() }),
+  });
+}
+
+/**
+ * Queue a FAILED receipt for the worker again (`retryReceipt`). On success the cached receipt
+ * takes the answer's status at once; either way the receipt, the list, Home's summary (its
+ * processing count) and searches are refetched: on a 409 the receipt may already be processing.
+ */
+export function useRetryReceipt(id: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        apiClient.POST("/api/receipts/{receipt_id}/retry", {
+          params: { path: { receipt_id: id } },
+        }),
+      ),
+    onSuccess: ({ status, stage }) => {
+      queryClient.setQueryData<ReceiptDetailOut>(
+        receiptKeys.detail(id),
+        (receipt) =>
+          receipt && { ...receipt, status, stage, failure_reason: null },
+      );
+    },
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: receiptKeys.detail(id) }),
+        queryClient.invalidateQueries({ queryKey: receiptKeys.list() }),
+        queryClient.invalidateQueries({ queryKey: summaryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: searchKeys.all }),
+      ]),
   });
 }
 

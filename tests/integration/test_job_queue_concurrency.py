@@ -10,7 +10,9 @@ from datetime import timedelta
 
 from sqlalchemy import Engine
 
-from paper_trail.domain.enums import JobKind
+from paper_trail.application.process_receipt import RetryReceipt
+from paper_trail.domain.enums import JobKind, ProcessingStage, ReceiptStatus
+from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import Job
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from tests.factories import receipt
@@ -66,3 +68,67 @@ def test_s1_ac_14_concurrent_claims_never_return_the_same_job(migrated_engine: E
         assert all(job.locked_by == worker_id for job in jobs)
     with uow_factory() as uow:
         assert uow.jobs.pending_count() == 0
+
+
+def test_h2_07_two_retries_at_once_queue_one_job(migrated_engine: Engine) -> None:
+    """Hardening H2-07: "Try again" tapped twice; one retry wins, the other is a conflict."""
+    uow_factory = sqlite_uow_factory(migrated_engine, FakeClock())
+    failed = receipt(
+        status=ReceiptStatus.FAILED, stage=ProcessingStage.FAILED, image_path="ab/cd/abcd.jpg"
+    )
+    receipt_id = require_id(in_unit(uow_factory, lambda uow: uow.receipts.add(failed)).id)
+    retry = RetryReceipt(uow_factory)
+    outcomes: list[str] = []
+    start = threading.Barrier(2)
+
+    def tap() -> None:
+        start.wait()
+        try:
+            retry(receipt_id)
+            outcomes.append("queued")
+        except ConflictError:
+            outcomes.append("conflict")
+
+    threads = [threading.Thread(target=tap) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert sorted(outcomes) == ["conflict", "queued"]
+    with uow_factory() as uow:
+        assert uow.jobs.pending_count() == 1
+
+
+def test_h4_06_two_workers_taking_back_one_expired_job_count_one_attempt(
+    migrated_engine: Engine,
+) -> None:
+    clock = FakeClock()
+    uow_factory = sqlite_uow_factory(migrated_engine, clock)
+
+    def enqueue(uow: UnitOfWork) -> Job:
+        receipt_id = require_id(uow.receipts.add(receipt()).id)
+        return uow.jobs.enqueue(JobKind.PROCESS_RECEIPT, receipt_id, max_attempts=3)
+
+    job = in_unit(uow_factory, enqueue)
+    assert in_unit(uow_factory, lambda uow: uow.jobs.claim("dead-worker", LEASE)) is not None
+    clock.advance(LEASE + timedelta(seconds=1))
+    claimed: list[Job | None] = []
+    start = threading.Barrier(WORKERS)
+
+    def work(worker_id: str) -> None:
+        start.wait()
+        claimed.append(in_unit(uow_factory, lambda uow: uow.jobs.claim(worker_id, LEASE)))
+
+    threads = [threading.Thread(target=work, args=(f"worker-{n}",)) for n in range(WORKERS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    taken = [found for found in claimed if found is not None]
+    assert len(taken) == 1
+    with uow_factory(read_only=True) as uow:
+        stored = uow.jobs.get(require_id(job.id))
+    assert stored is not None
+    assert (stored.attempts, stored.locked_by) == (1, taken[0].locked_by)

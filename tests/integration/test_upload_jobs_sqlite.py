@@ -9,19 +9,38 @@ claimed again once its lease expires and continues the thread, while a running j
 lease keeps it from a second worker; any other error fails the receipt and the job; the trace
 events of a receipt are dropped after its job. An upload whose transaction fails leaves no
 receipt; the CLI racing an upload of the same photo reports a duplicate.
+
+Hardening: a person retries a FAILED receipt (``RetryReceipt``, H2-04 to H2-10): one job, which
+continues its thread or reads its photo again, as often as the person asks; only a FAILED
+receipt with a photo and no job waiting is retried. A job whose workers keep dying is failed
+once its attempts are used up, its receipt FAILED as stopped unexpectedly in the same
+transaction (H4-03 to H4-05).
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
+from paper_trail.adapters.sqlite.receipt_repository import SqliteReceiptRepository
 from paper_trail.application.budget import BudgetedReader
-from paper_trail.application.jobs import ProcessReceiptJobs
-from paper_trail.application.process_receipt import ReceiptSource, UploadReceipt
-from paper_trail.domain.enums import JobKind, JobStatus, ProcessingStage, ReceiptStatus
+from paper_trail.application.jobs import STOPPED_UNEXPECTEDLY, ProcessReceiptJobs
+from paper_trail.application.process_receipt import (
+    UPLOAD_JOB_ATTEMPTS,
+    ReceiptSource,
+    RetryReceipt,
+    UploadReceipt,
+)
+from paper_trail.domain.enums import (
+    FailureReason,
+    JobKind,
+    JobStatus,
+    ProcessingStage,
+    ReceiptStatus,
+)
+from paper_trail.domain.errors import ConflictError
 from paper_trail.domain.models import Job, Receipt
 from paper_trail.ports.reader import ReaderUnavailableError, ReadRequest, ReadResult
 from tests.agent_harness import Harness, build_harness
@@ -32,6 +51,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.images import FakeImageStore, fake_png
 from tests.fakes.reader import ScriptedReader
 from tests.support import require_id
+from tests.unit.agents.graph_support import rewrite_latest
 
 WORKER = "worker-1"
 LEASE = timedelta(minutes=30)
@@ -59,6 +79,24 @@ class Queue:
     def settled(self, job_id: int = 1) -> tuple[JobStatus, int, str | None, str | None]:
         job = self.job(job_id)
         return job.status, job.attempts, job.last_error, job.locked_by
+
+    def failed(self, receipt_id: int) -> tuple[ReceiptStatus, FailureReason | None]:
+        receipt = self.harness.receipt(receipt_id)
+        return receipt.status, receipt.failure_reason
+
+    def job_count(self) -> int:
+        count = 0
+        with self.harness.uow_factory(read_only=True) as uow:
+            while uow.jobs.get(count + 1) is not None:
+                count += 1
+        return count
+
+    def die_running(self, worker: str = "dead-worker") -> None:
+        """A worker takes the next job and dies with it; its lease then runs out."""
+        with self.harness.uow_factory() as uow:
+            assert uow.jobs.claim(worker, LEASE) is not None
+            uow.commit()
+        self.harness.clock.advance(LEASE + timedelta(seconds=1))
 
 
 class SlowClaude:
@@ -200,7 +238,7 @@ def test_the_job_of_a_worker_that_died_is_claimed_again_and_continues_the_thread
     assert queue.run_job() is True
 
     assert queue.state(receipt_id) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
-    assert queue.settled() == (JobStatus.SUCCEEDED, 0, None, None)
+    assert queue.settled() == (JobStatus.SUCCEEDED, 1, None, None)  # the dead worker's attempt
     assert reader.calls == 1
 
 
@@ -305,3 +343,293 @@ def test_the_cli_racing_an_upload_of_the_same_photo_reports_a_duplicate() -> Non
 
     assert (outcome.receipt_id, outcome.duplicate, outcome.graph) == (1, True, None)
     assert reader.calls == 0
+
+
+# --- H2-04 to H2-10: a person retries a FAILED receipt ----------------------------------------
+
+
+def _failed_upload(reader: ScriptedReader) -> tuple[Queue, int]:
+    """An uploaded receipt whose read failed: Claude was down."""
+    reader.script(ReaderUnavailableError("Claude is down"))
+    queue = _queue(reader)
+    receipt_id = queue.uploaded()
+    assert queue.run_job() is True
+    assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.CLAUDE_UNAVAILABLE)
+    return queue, receipt_id
+
+
+def test_h2_04_a_retry_queues_one_job_and_sets_the_receipt_processing() -> None:
+    queue, receipt_id = _failed_upload(ScriptedReader())
+
+    retried = RetryReceipt(queue.harness.uow_factory)(receipt_id)
+
+    assert (retried.status, retried.stage, retried.failure_reason) == (
+        ReceiptStatus.PROCESSING,
+        ProcessingStage.QUEUED,
+        None,
+    )
+    assert retried == queue.harness.receipt(receipt_id)
+    assert queue.job_count() == 2
+    second = queue.job(2)
+    assert (second.kind, second.receipt_id, second.status, second.max_attempts) == (
+        JobKind.PROCESS_RECEIPT,
+        receipt_id,
+        JobStatus.PENDING,
+        UPLOAD_JOB_ATTEMPTS,
+    )
+
+
+def _set_status(queue: Queue, status: ReceiptStatus) -> Callable[[int], None]:
+    def change(receipt_id: int) -> None:
+        with queue.harness.uow_factory() as uow:
+            uow.receipts.update_status(receipt_id, status, ProcessingStage.DONE)
+            uow.commit()
+
+    return change
+
+
+def _pending_job(queue: Queue) -> Callable[[int], None]:
+    def enqueue(receipt_id: int) -> None:
+        with queue.harness.uow_factory() as uow:
+            uow.jobs.enqueue(JobKind.PROCESS_RECEIPT, receipt_id, max_attempts=1)
+            uow.commit()
+
+    return enqueue
+
+
+def _running_job(queue: Queue) -> Callable[[int], None]:
+    def claim(receipt_id: int) -> None:
+        _pending_job(queue)(receipt_id)
+        assert _claim_as_other_worker(queue) is not None
+
+    return claim
+
+
+def _photo_removed(queue: Queue) -> Callable[[int], None]:
+    """A FAILED receipt without a stored photo, e.g. one imported from JSON."""
+
+    def remove(receipt_id: int) -> None:
+        with queue.harness.uow_factory() as uow:
+            stored = uow.receipts.get(receipt_id)
+            assert stored is not None
+            uow.receipts.replace_contents(replace(stored, image_path=None))
+            uow.commit()
+
+    return remove
+
+
+@pytest.mark.parametrize(
+    ("arrange", "message"),
+    [
+        (lambda queue: _set_status(queue, ReceiptStatus.PROCESSING), "is processing"),
+        (lambda queue: _set_status(queue, ReceiptStatus.NEEDS_REVIEW), "is needs_review"),
+        (lambda queue: _set_status(queue, ReceiptStatus.COMPLETED), "is completed"),
+        (_pending_job, "already being processed"),
+        (_running_job, "already being processed"),
+        (_photo_removed, "no stored photo"),
+    ],
+    ids=["processing", "needs-review", "completed", "pending-job", "running-job", "no-photo"],
+)
+def test_h2_05_a_retry_is_refused_unless_failed_with_no_job_waiting(
+    arrange: Callable[[Queue], Callable[[int], None]], message: str
+) -> None:
+    queue, receipt_id = _failed_upload(ScriptedReader())
+    arrange(queue)(receipt_id)
+    before, jobs = queue.harness.receipt(receipt_id), queue.job_count()
+
+    with pytest.raises(ConflictError, match=message):
+        RetryReceipt(queue.harness.uow_factory)(receipt_id)
+
+    assert (queue.harness.receipt(receipt_id), queue.job_count()) == (before, jobs)
+
+
+def test_h2_08_a_retry_whose_transaction_fails_changes_nothing() -> None:
+    queue, receipt_id = _failed_upload(ScriptedReader())
+    before = queue.harness.receipt(receipt_id)
+
+    def broken(*_: object, **__: object) -> None:
+        msg = "the transaction fails"
+        raise RuntimeError(msg)
+
+    with (
+        pytest.MonkeyPatch.context() as patch,
+        pytest.raises(RuntimeError, match="the transaction fails"),
+    ):
+        patch.setattr(SqliteReceiptRepository, "update_status", broken)
+        RetryReceipt(queue.harness.uow_factory)(receipt_id)
+
+    assert (queue.harness.receipt(receipt_id), queue.job_count()) == (before, 1)
+
+
+def test_h2_09_a_retry_continues_the_thread_without_reading_again() -> None:
+    reader = ScriptedReader(answer())
+    queue = _queue(reader)
+    receipt_id = queue.uploaded()
+    image_path = queue.harness.receipt(receipt_id).image_path
+    assert image_path is not None
+    queue.harness.runner.start(
+        receipt_id, source_name="costco.jpg", image_path=image_path, interrupt_after="extract"
+    )
+    queue.die_running()
+    queue.die_running()
+    assert queue.run_job() is False
+    assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.STOPPED_UNEXPECTEDLY)
+
+    RetryReceipt(queue.harness.uow_factory)(receipt_id)
+    assert queue.run_job() is True
+
+    assert queue.failed(receipt_id) == (ReceiptStatus.COMPLETED, None)
+    assert queue.settled(2) == (JobStatus.SUCCEEDED, 0, None, None)
+    assert reader.calls == 1
+
+
+def test_h2_09_a_retry_without_a_checkpoint_reads_the_stored_photo_again() -> None:
+    reader = ScriptedReader(answer())
+    queue = _queue(reader)
+    receipt_id = queue.uploaded()
+    queue.die_running()
+    queue.die_running()
+    assert queue.run_job() is False
+    assert reader.calls == 0
+
+    RetryReceipt(queue.harness.uow_factory)(receipt_id)
+    assert queue.run_job() is True
+
+    assert queue.failed(receipt_id) == (ReceiptStatus.COMPLETED, None)
+    assert reader.calls == 1
+    assert len(queue.harness.images.files) == 1
+    with queue.harness.uow_factory(read_only=True) as uow:
+        assert uow.receipts.get(receipt_id + 1) is None
+
+
+def _at_version_2(values: dict[str, object]) -> None:
+    values["state_version"] = 2
+
+
+def test_h2_09_a_retry_of_a_thread_an_older_version_saved_reads_the_photo_again() -> None:
+    reader = ScriptedReader(answer(), answer())
+    queue = _queue(reader)
+    receipt_id = queue.uploaded()
+    image_path = queue.harness.receipt(receipt_id).image_path
+    assert image_path is not None
+    queue.harness.runner.start(
+        receipt_id, source_name="costco.jpg", image_path=image_path, interrupt_after="extract"
+    )
+    rewrite_latest(queue.harness.checkpointer, receipt_id, _at_version_2)
+    queue.die_running()
+    queue.die_running()
+    assert queue.run_job() is False
+
+    RetryReceipt(queue.harness.uow_factory)(receipt_id)
+    assert queue.run_job() is True
+
+    assert queue.failed(receipt_id) == (ReceiptStatus.COMPLETED, None)
+    assert queue.settled(2) == (JobStatus.SUCCEEDED, 0, None, None)
+    assert reader.calls == 2
+
+
+def test_h2_10_a_retry_that_fails_again_keeps_its_reason_and_can_be_retried() -> None:
+    clock = FakeClock(NOW)
+    claude = ScriptedReader()
+    queue = _queue(BudgetedReader(claude, FakeSpendLedger(), clock, Decimal(0)), clock)
+    receipt_id = queue.uploaded()
+    retry = RetryReceipt(queue.harness.uow_factory)
+
+    for _ in range(2):
+        assert queue.run_job() is True
+        assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.BUDGET_REACHED)
+        retry(receipt_id)
+
+    assert queue.harness.receipt(receipt_id).status is ReceiptStatus.PROCESSING
+    assert queue.job_count() == 3
+    assert claude.calls == 0
+
+
+# --- H4-03 to H4-05: a job whose workers keep dying ------------------------------------------
+
+
+def test_h4_03_an_exhausted_job_fails_its_receipt_as_stopped_unexpectedly() -> None:
+    queue = _queue(ScriptedReader(answer()))
+    receipt_id = queue.uploaded()
+    for _ in range(UPLOAD_JOB_ATTEMPTS):
+        queue.die_running()
+
+    assert queue.run_job() is False
+
+    assert queue.settled() == (JobStatus.FAILED, UPLOAD_JOB_ATTEMPTS, STOPPED_UNEXPECTEDLY, None)
+    assert queue.state(receipt_id) == (ReceiptStatus.FAILED, ProcessingStage.FAILED)
+    assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.STOPPED_UNEXPECTEDLY)
+    RetryReceipt(queue.harness.uow_factory)(receipt_id)
+    assert queue.run_job() is True
+    assert queue.state(receipt_id) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
+
+
+def test_h4_03_the_job_and_its_receipt_fail_in_one_transaction() -> None:
+    queue = _queue(ScriptedReader(answer()))
+    receipt_id = queue.uploaded()
+    for _ in range(UPLOAD_JOB_ATTEMPTS):
+        queue.die_running()
+
+    def broken(*_: object, **__: object) -> None:
+        msg = "the transaction fails"
+        raise RuntimeError(msg)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqliteReceiptRepository, "update_status", broken)
+        assert queue.run_job() is False
+
+    assert queue.settled()[0] is JobStatus.RUNNING
+    assert queue.state(receipt_id) == (ReceiptStatus.PROCESSING, ProcessingStage.READING)
+    assert queue.run_job() is False
+    assert queue.settled()[0] is JobStatus.FAILED
+    assert queue.failed(receipt_id) == (ReceiptStatus.FAILED, FailureReason.STOPPED_UNEXPECTEDLY)
+
+
+def test_h4_04_an_exhausted_job_does_not_hold_up_the_next_one() -> None:
+    queue = _queue(ScriptedReader(answer()))
+    lost = queue.uploaded("lost")
+    for _ in range(UPLOAD_JOB_ATTEMPTS):
+        queue.die_running()
+    waiting = queue.uploaded("waiting")
+
+    assert queue.run_job() is True
+
+    assert queue.failed(lost) == (ReceiptStatus.FAILED, FailureReason.STOPPED_UNEXPECTEDLY)
+    assert queue.state(waiting) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
+    assert queue.settled(2) == (JobStatus.SUCCEEDED, 0, None, None)
+
+
+def test_h4_05_a_late_worker_cannot_settle_a_job_failed_as_exhausted() -> None:
+    claude = SlowClaude(ScriptedReader(answer()))
+    queue = _queue(claude)
+    receipt_id = queue.uploaded()
+    clock = queue.harness.clock
+    other = ProcessReceiptJobs(
+        queue.harness.uow_factory,
+        queue.harness.process,
+        queue.harness.tracer,
+        worker_id="other-worker",
+        lease=LEASE,
+        resolve_review=queue.harness.resolve,
+    )
+
+    def stalled_read() -> None:
+        clock.advance(LEASE + timedelta(seconds=1))
+        assert _claim_as_other_worker(queue) is not None
+        clock.advance(LEASE + timedelta(seconds=1))
+        assert other() is False
+        assert queue.failed(receipt_id) == (
+            ReceiptStatus.FAILED,
+            FailureReason.STOPPED_UNEXPECTEDLY,
+        )
+
+    claude.during = stalled_read
+    assert queue.run_job() is True
+
+    status, attempts, error, _ = queue.settled()
+    assert (status, attempts, error) == (
+        JobStatus.FAILED,
+        UPLOAD_JOB_ATTEMPTS,
+        STOPPED_UNEXPECTEDLY,
+    )
+    assert queue.failed(receipt_id) == (ReceiptStatus.COMPLETED, None)

@@ -38,9 +38,11 @@ from PIL import Image, ImageOps
 from pydantic import TypeAdapter, ValidationError
 
 from paper_trail.config import ClaudeSettings
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.ports.reader import (
     ReaderError,
+    ReaderKeyError,
     ReaderOutputError,
     ReaderRefusedError,
     ReaderTruncatedError,
@@ -93,6 +95,15 @@ def prepare_image(image: bytes) -> bytes:
         upright.thumbnail((edge, edge), Image.Resampling.LANCZOS)
 
 
+def _decoded(image: bytes) -> bytes:
+    """``prepare_image``; a stored photo Pillow cannot decode is an UnsupportedMediaError."""
+    try:
+        return prepare_image(image)
+    except (OSError, Image.DecompressionBombError) as error:
+        msg = f"the stored photo cannot be read: {type(error).__name__}"
+        raise UnsupportedMediaError(msg) from error
+
+
 def _jpeg(image: Image.Image, quality: int) -> bytes:
     out = io.BytesIO()
     image.save(out, format="JPEG", quality=quality)
@@ -115,7 +126,7 @@ class AnthropicReader:
     def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         adapter = TypeAdapter(schema)
         self._sdk()  # no key: nothing is prepared or sent
-        image = None if request.image is None else prepare_image(request.image)
+        image = None if request.image is None else _decoded(request.image)
         sent = None if image is None else hashlib.sha256(image).hexdigest()
         try:
             response = self._create(request, image, adapter)
@@ -171,7 +182,7 @@ class AnthropicReader:
                 f"the Claude API refused the key in {KEY_VARIABLE} ({error.status_code}"
                 f" {_api_error(error)})"
             )
-            raise ReaderUnavailableError(msg) from None
+            raise ReaderKeyError(msg) from None
         except APIStatusError as error:
             msg = f"the Claude API answered {error.status_code}: {_api_error(error)}"
             retryable = error.status_code in RETRYABLE_STATUSES or error.status_code >= _SERVER
@@ -187,13 +198,13 @@ class AnthropicReader:
     def check(self) -> None:
         """ReaderUnavailableError when there is no key to call with (nothing is sent)."""
         if self._client is None and self._settings.api_key is None:
-            raise ReaderUnavailableError(_NO_KEY)
+            raise ReaderKeyError(_NO_KEY)
 
     def _sdk(self) -> Anthropic:
         if self._client is None:
             key = self._settings.api_key
             if key is None:
-                raise ReaderUnavailableError(_NO_KEY)
+                raise ReaderKeyError(_NO_KEY)
             self._client = Anthropic(
                 api_key=key.get_secret_value(),
                 timeout=self._settings.timeout_s,

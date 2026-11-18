@@ -11,15 +11,16 @@ when the spend and the open reservations have reached the cap, ``BudgetReachedEr
 and no request is made. Concurrent processes are admitted one at a time. After the attempt its
 reservation becomes its real cost (a failed but billed attempt included); it is released only
 when the attempt was certainly not billed (an error status, a refused connection, nothing
-sent). An attempt that may have been billed without saying what it cost (a timeout, a broken
-connection, a crash) is charged at its ceiling, so the month can overshoot the cap by one
-attempt's ceiling at most.
+sent, a photo that cannot be decoded). An attempt that may have been billed without saying
+what it cost (a timeout, a broken connection, a crash) is charged at its ceiling, so the month
+can overshoot the cap by one attempt's ceiling at most.
 """
 
 import time
 from collections.abc import Callable
 from decimal import Decimal
 
+from paper_trail.domain.errors import UnsupportedMediaError
 from paper_trail.domain.rules.budget import (
     budget_reached,
     call_ceiling_usd,
@@ -98,6 +99,9 @@ class BudgetedReader:
                 self._charge_ceiling(reservation, request.model, ceiling)
             else:
                 self._ledger.release(reservation)
+            raise
+        except UnsupportedMediaError:
+            self._ledger.release(reservation)  # the photo could not be decoded: nothing was sent
             raise
         except BaseException:
             self._charge_ceiling(reservation, request.model, ceiling)

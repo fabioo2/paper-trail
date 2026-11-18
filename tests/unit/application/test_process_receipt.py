@@ -15,10 +15,23 @@ Pinned (docs/tests/agent-core-A.md):
 
 import pytest
 
-from paper_trail.application.process_receipt import ProcessOutcome, ReceiptSource
-from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
-from paper_trail.domain.errors import UnsupportedMediaError
+from paper_trail.application.process_receipt import (
+    ProcessingStoppedError,
+    ProcessOutcome,
+    ReceiptSource,
+    failure_reason,
+)
+from paper_trail.domain.enums import FailureReason, ProcessingStage, ReceiptStatus
+from paper_trail.domain.errors import ConflictError, UnsupportedMediaError
 from paper_trail.domain.paging import PageRequest
+from paper_trail.ports.reader import (
+    BudgetReachedError,
+    ReaderKeyError,
+    ReaderOutputError,
+    ReaderRefusedError,
+    ReaderTruncatedError,
+    ReaderUnavailableError,
+)
 from tests.agent_harness import build_harness
 from tests.extractions import NOW, answer
 from tests.fakes.reader import ScriptedReader
@@ -92,3 +105,46 @@ def test_a_non_image_creates_no_receipt() -> None:
 
     with harness.uow_factory(read_only=True) as uow:
         assert uow.receipts.list(PageRequest(limit=10)).items == ()
+
+
+def _stopped(cause: BudgetReachedError) -> ProcessingStoppedError:
+    """A stopped run as ``ProcessReceiptFile`` raises it: from its cause."""
+    try:
+        raise ProcessingStoppedError(1, cause) from cause
+    except ProcessingStoppedError as stopped:
+        return stopped
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (BudgetReachedError("monthly Claude budget reached"), FailureReason.BUDGET_REACHED),
+        (ReaderKeyError("no Claude API key"), FailureReason.NO_API_KEY),
+        (ReaderUnavailableError("the Claude API answered 529"), FailureReason.CLAUDE_UNAVAILABLE),
+        (ReaderRefusedError("declined"), FailureReason.UNKNOWN),
+        (ReaderTruncatedError("cut off"), FailureReason.UNKNOWN),
+        (ReaderOutputError("not the schema"), FailureReason.UNKNOWN),
+        (_stopped(BudgetReachedError("reached")), FailureReason.BUDGET_REACHED),
+        (UnsupportedMediaError("not an image"), FailureReason.UNREADABLE_PHOTO),
+        (TimeoutError("timed out"), FailureReason.UNKNOWN),
+        (ConnectionError("reset"), FailureReason.UNKNOWN),
+        (ConflictError("receipt 1 has no stored photo"), FailureReason.UNKNOWN),
+        (RuntimeError("boom"), FailureReason.UNKNOWN),
+    ],
+    ids=[
+        "budget",
+        "no-key",
+        "api-error",
+        "refused",
+        "truncated",
+        "malformed",
+        "stopped-wraps-its-cause",
+        "unsupported-photo",
+        "timeout",
+        "connection",
+        "conflict",
+        "anything-else",
+    ],
+)
+def test_h2_01_each_failure_maps_to_its_reason(error: Exception, reason: FailureReason) -> None:
+    assert failure_reason(error) is reason

@@ -31,7 +31,7 @@ from paper_trail.application.catalog import (
 from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.health import CheckReadiness
 from paper_trail.application.prices import BackfillPrices
-from paper_trail.application.process_receipt import UploadReceipt
+from paper_trail.application.process_receipt import RetryReceipt, UploadReceipt
 from paper_trail.application.products import (
     GetProduct,
     GetProducts,
@@ -70,6 +70,7 @@ class Container:
     get_receipt_image: GetReceiptImage
     list_receipts: ListReceipts
     upload_receipt: UploadReceipt
+    retry_receipt: RetryReceipt
     correct_line_item: CorrectLineItem
     get_product: GetProduct
     get_products: GetProducts
@@ -123,6 +124,7 @@ def build_container(settings: Settings) -> Container:
         get_receipt_image=GetReceiptImage(uow_factory, image_store(settings)),
         list_receipts=ListReceipts(uow_factory),
         upload_receipt=UploadReceipt(image_store(settings), uow_factory, clock),
+        retry_receipt=RetryReceipt(uow_factory),
         correct_line_item=CorrectLineItem(uow_factory, clock),
         get_product=GetProduct(uow_factory),
         get_products=GetProducts(uow_factory),

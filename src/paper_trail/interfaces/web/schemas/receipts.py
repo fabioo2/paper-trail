@@ -2,20 +2,37 @@
 
 from collections.abc import Mapping
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
 from paper_trail.domain.enums import (
     Category,
+    FailureReason,
     LineKind,
     MatchSource,
     ProcessingStage,
     ReceiptStatus,
+    Unit,
 )
 from paper_trail.domain.models import LineItem, Product, Receipt, ReceiptSummary, require_id
 from paper_trail.domain.money import Money
 from paper_trail.domain.paging import Page
 from paper_trail.domain.rules.arithmetic import ArithmeticIssue, ArithmeticReport, IssueCode
+
+# What a line is sold by (``LINE_UNITS``); null: unknown, compared as each.
+type LineUnit = Literal[Unit.EACH, Unit.KG, Unit.LB]
+
+
+def decimal_text(value: Decimal) -> str:
+    """An exact decimal written out in fixed point ("10", never "1E+1"), as clients parse it."""
+    return format(value, "f")
+
+
+def line_unit(unit: Unit | None) -> LineUnit | None:
+    """A line's unit, which ``LineItem`` keeps to ``LINE_UNITS``."""
+    return cast("LineUnit | None", unit)
 
 
 class MoneyOut(BaseModel):
@@ -106,7 +123,7 @@ class LineItemOut(BaseModel):
             kind=item.kind,
             raw_text=item.raw_text,
             description=item.description,
-            quantity=str(item.quantity),
+            quantity=decimal_text(item.quantity),
             unit_price=MoneyOut.from_optional(item.unit_price),
             line_total=MoneyOut.from_domain(item.line_total),
             product_id=item.product_id,
@@ -153,6 +170,7 @@ class ReceiptDetailOut(ReceiptSummaryOut):
     tax: MoneyOut | None
     payment_last4: str | None
     has_image: bool
+    failure_reason: FailureReason | None  # why it FAILED; null unless FAILED
     items: list[LineItemOut]
     arithmetic: ArithmeticReportOut
 
@@ -178,6 +196,7 @@ class ReceiptDetailOut(ReceiptSummaryOut):
             tax=MoneyOut.from_optional(receipt.tax),
             payment_last4=receipt.payment_last4,
             has_image=receipt.image_path is not None,
+            failure_reason=_failure_reason(receipt),
             items=[
                 LineItemOut.from_domain(
                     item, None if item.product_id is None else products.get(item.product_id)
@@ -186,3 +205,10 @@ class ReceiptDetailOut(ReceiptSummaryOut):
             ],
             arithmetic=ArithmeticReportOut.from_domain(report),
         )
+
+
+def _failure_reason(receipt: Receipt) -> FailureReason | None:
+    """A FAILED receipt's reason; one that failed before reasons were kept is UNKNOWN."""
+    if receipt.status is not ReceiptStatus.FAILED:
+        return None
+    return receipt.failure_reason or FailureReason.UNKNOWN

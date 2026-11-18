@@ -147,6 +147,37 @@ describe("Product detail", () => {
     expect(textOf(await purchasesSection())).toContain(summary);
   });
 
+  it("shows weighed prices per kg or lb, and the summary in the newest purchase's unit", async () => {
+    serveProduct([
+      productPurchase({
+        receipt_id: 21,
+        quantity: "0.5",
+        unit: "kg",
+        unit_price: cad(441),
+        paid: cad(220),
+      }),
+      productPurchase({
+        receipt_id: 20,
+        purchased_on: "2026-10-30",
+        quantity: "2",
+        unit: "lb",
+        unit_price: cad(200),
+        paid: cad(400),
+      }),
+    ]);
+
+    renderApp("/products/5");
+
+    const section = await purchasesSection();
+    expect(textOf(section)).toContain(
+      `Lowest ${formatMoney(cad(440))}/kg · average ${formatMoney(cad(440))}/kg`,
+    );
+    expect(within(section).getAllByRole("link").map(textOf)).toEqual([
+      `${formatDate("2026-11-01")} · Costco0.5 kg · ${formatMoney(cad(440))}/kg${formatMoney(cad(220))}`,
+      `${formatDate("2026-10-30")} · Costco2 lb · ${formatMoney(cad(200))}/lb${formatMoney(cad(400))}`,
+    ]);
+  });
+
   it("keeps Cancel disabled while a save is in flight", async () => {
     serveProduct(purchases);
     let release: () => void = () => undefined;

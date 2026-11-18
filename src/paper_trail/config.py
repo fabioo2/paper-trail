@@ -3,9 +3,11 @@
 ``Settings`` is constructed once, in the CLI entry point, and passed down explicitly.
 """
 
+import ipaddress
+import re
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AnyHttpUrl,
@@ -17,11 +19,12 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from paper_trail.domain.rules.budget import MODEL_PRICES
 
 DATABASE_FILENAME = "paper_trail.db"
+_BARE_HOST = re.compile(r"[A-Za-z0-9.-]+")
 CATALOG_DIRNAME = "catalog"
 PLU_FILENAME = "plu.csv"
 
@@ -33,7 +36,40 @@ class WorkerSettings(BaseModel):
 
     poll_interval_s: float = Field(default=1.0, ge=0.1, le=60.0)
     heartbeat_interval_s: float = Field(default=10.0, gt=0)
-    shutdown_grace_s: float = Field(default=8.0, gt=0)
+    # Long enough for an in-flight Claude read to finish on a redeploy.
+    shutdown_grace_s: float = Field(default=90.0, gt=0)
+
+
+class WebSettings(BaseModel):
+    """The web app (``PAPER_TRAIL_WEB__*``, ADR-0020). ``allowed_hosts``: the host names or IPs
+    the app is reached by besides ``localhost``, ``127.0.0.1``, ``::1`` and ``web``, as a comma
+    list (e.g. ``192.168.0.187,fabio-server``); no scheme, port or wildcard. An IPv6 address may
+    be written with or without brackets and is kept in its compressed form without them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _comma_list(cls, value: object) -> object:
+        if isinstance(value, str):
+            return tuple(host.strip() for host in value.split(",") if host.strip())
+        return value
+
+    @field_validator("allowed_hosts", mode="after")
+    @classmethod
+    def _bare_hosts(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
+        bare = []
+        for host in hosts:
+            bracketed = host.startswith("[") and host.endswith("]")
+            ipv6 = _ipv6(host[1:-1] if bracketed else host)
+            if ipv6 is None and (bracketed or not _BARE_HOST.fullmatch(host)):
+                variable = env_var_name(("web", "allowed_hosts"))
+                msg = f"{variable}: {host!r} is not a bare host name or IP (no scheme, port or *)"
+                raise ValueError(msg)
+            bare.append(ipv6 or host.lower())
+        return tuple(bare)
 
 
 class UploadSettings(BaseModel):
@@ -162,6 +198,7 @@ class Settings(BaseSettings):
     static_dir: Path = Path("/app/static")
     build_sha: str | None = None
     worker: WorkerSettings = WorkerSettings()
+    web: WebSettings = WebSettings()
     upload: UploadSettings = UploadSettings()
     # The SDK's own variable, without the PAPER_TRAIL_ prefix; moved into ``claude.api_key``.
     anthropic_api_key: SecretStr | None = Field(
@@ -213,6 +250,15 @@ class Settings(BaseSettings):
             )
             raise ValueError(msg)
         return self
+
+
+def _ipv6(host: str) -> str | None:
+    """``host`` as a compressed IPv6 address, or None when it is not one."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return address.compressed if isinstance(address, ipaddress.IPv6Address) else None
 
 
 def env_var_name(location: tuple[str | int, ...]) -> str:

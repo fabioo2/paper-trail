@@ -5,8 +5,10 @@
 Pinned: only products with an ITEM line are listed (a DISCOUNT line naming the product is no
 purchase), by name ignoring case; ``times_bought`` agrees with the stored ITEM lines; the last
 purchase is the newest dated line (the higher receipt id on the same day), paid after its
-linked discount, and an undated line (its line total) only when no line is dated. A product's
-purchases are its ITEM lines in that same order, as many as ``times_bought``.
+linked discount, and an undated line only when no line is dated. A product's purchases are its
+ITEM lines in that same order, as many as ``times_bought``, each with its unit. A line without a
+price observation (an undated receipt) is paid after the DISCOUNT line linked to it on its own
+receipt, in both views (hardening H3-08, H3-09).
 """
 
 from collections.abc import Iterator
@@ -19,17 +21,18 @@ from sqlalchemy import Engine, event
 
 from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.application.products import ListProductPurchases, ListProducts
-from paper_trail.domain.enums import MatchSource
+from paper_trail.domain.enums import MatchSource, Unit
 from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
     LastPurchase,
+    LineItem,
     Product,
     ProductPurchase,
     ProductSummary,
     Receipt,
 )
 from paper_trail.ports.unit_of_work import UnitOfWorkFactory
-from tests.factories import cad, discount_line, item_line, product
+from tests.factories import STORE_NAME, cad, discount_line, item_line, product
 from tests.fakes.clock import FakeClock
 from tests.storage import in_unit, seed_purchase, sqlite_uow_factory
 from tests.support import CopyMigrated, require_id
@@ -183,3 +186,80 @@ def test_two_lines_of_one_receipt_are_listed_by_position_descending(
         (receipt.id, cad(999)),
         (receipt.id, cad(899)),
     ]
+
+
+# --- H3-08, H3-09: an undated purchase is paid after its linked discount ---------------------
+
+
+def _undated(
+    factory: UnitOfWorkFactory, pid: int, *extra: LineItem, unit: Unit | None = None
+) -> Receipt:
+    lines = [item_line(0, "EGGS", 899, product_id=pid, match_source=MatchSource.CATALOG, unit=unit)]
+    return seed_purchase(factory, [*lines, *extra], purchased_on=None)
+
+
+@pytest.mark.parametrize(
+    ("extra", "discount", "paid"),
+    [
+        ((), 0, 899),
+        ((discount_line(1, "TPD", -150, 0),), -150, 749),
+        ((discount_line(1, "MEMBER SAVINGS", -150),), 0, 899),
+    ],
+    ids=["no-discount", "linked-discount", "receipt-level-discount"],
+)
+def test_h3_08_an_undated_purchase_is_paid_after_its_linked_discount(
+    factory: UnitOfWorkFactory, extra: tuple[LineItem, ...], discount: int, paid: int
+) -> None:
+    eggs = _add(factory, "Eggs")
+    pid = require_id(eggs.id)
+    undated = _undated(factory, pid, *extra, unit=Unit.KG)
+
+    purchases = ListProductPurchases(factory)(pid)
+    summaries = ListProducts(factory)()
+
+    assert purchases == (
+        ProductPurchase(
+            require_id(undated.id),
+            None,
+            STORE_NAME,
+            Decimal(1),
+            cad(899),
+            cad(discount),
+            cad(paid),
+            Unit.KG,
+        ),
+    )
+    assert summaries == (ProductSummary(eggs, 1, LastPurchase(None, STORE_NAME, cad(paid))),)
+
+
+def test_h3_08_a_discount_at_the_same_position_on_another_receipt_is_not_applied(
+    factory: UnitOfWorkFactory,
+) -> None:
+    eggs = _add(factory, "Eggs")
+    pid = require_id(eggs.id)
+    undated = _undated(factory, pid)
+    seed_purchase(
+        factory,
+        [item_line(0, "MILK", 500), discount_line(1, "TPD", -200, 0)],
+        purchased_on=None,
+    )
+
+    purchases = ListProductPurchases(factory)(pid)
+
+    assert [(p.receipt_id, p.discount, p.paid) for p in purchases] == [
+        (undated.id, cad(0), cad(899))
+    ]
+
+
+def test_h3_09_both_views_agree_on_what_was_paid_dated_and_undated(
+    factory: UnitOfWorkFactory,
+) -> None:
+    dated, undated = _add(factory, "Dated eggs"), _add(factory, "Undated eggs")
+    _bought(factory, dated, COSTCO, date(2026, 11, 3), line_total=1699, discount=400)
+    _undated(factory, require_id(undated.id), discount_line(1, "TPD", -150, 0))
+    _undated(factory, require_id(undated.id), discount_line(1, "TPD", -100, 0))
+
+    for summary in ListProducts(factory)():
+        purchases = ListProductPurchases(factory)(require_id(summary.product.id))
+        assert summary.times_bought == len(purchases)
+        assert summary.last_purchase.paid == purchases[0].paid

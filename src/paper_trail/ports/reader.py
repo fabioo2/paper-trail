@@ -39,6 +39,10 @@ class ReaderUnavailableError(ReaderError):
     The message names ``ANTHROPIC_API_KEY`` when the key is the problem, never the key."""
 
 
+class ReaderKeyError(ReaderUnavailableError):
+    """There is no key, or the API refused it."""
+
+
 class ReaderRefusedError(ReaderError):
     """The model declined to answer (stop reason ``refusal``)."""
 
@@ -79,5 +83,6 @@ class ReadResult[M]:
 class ReceiptReader(Protocol):
     def read[M](self, request: ReadRequest, schema: type[M]) -> ReadResult[M]:
         """The answer validated as ``schema``. Raises a ``ReaderError`` subclass for every
-        failure; no SDK exception escapes."""
+        failure of the call, and ``UnsupportedMediaError`` (nothing sent) for a photo that
+        cannot be decoded; no SDK or imaging exception escapes."""
         ...

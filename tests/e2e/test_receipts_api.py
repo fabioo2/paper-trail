@@ -38,6 +38,7 @@ DETAIL_KEYS = SUMMARY_KEYS | {
     "tax",
     "payment_last4",
     "has_image",
+    "failure_reason",
     "items",
     "arithmetic",
 }

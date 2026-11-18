@@ -12,6 +12,7 @@ import {
 } from "vitest";
 
 import {
+  type FailureReason,
   RECEIPT_POLL_INTERVAL_MS,
   type ReceiptStatus,
 } from "@/features/receipts/api";
@@ -26,6 +27,27 @@ import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
 import { textOf } from "@/test/text";
+
+const FAILURE_COPY: [FailureReason, string][] = [
+  [
+    "budget_reached",
+    "This month's Claude budget is used up. Raise the budget or wait until next month, then try again.",
+  ],
+  [
+    "claude_unavailable",
+    "Claude couldn't read it just now. Try again in a minute.",
+  ],
+  [
+    "no_api_key",
+    "No Claude API key is set on the server. Add ANTHROPIC_API_KEY to .env, then try again.",
+  ],
+  [
+    "unreadable_photo",
+    "The photo couldn't be read. Retake it with the whole receipt flat, in focus and well lit.",
+  ],
+  ["stopped_unexpectedly", "Paper Trail stopped while reading it. Try again."],
+  ["unknown", "Something went wrong while reading it. Try again."],
+];
 
 const PREVIEW_URL = "blob:receipt-preview";
 const THREE_MINUTES_MS = 3 * 60_000;
@@ -88,6 +110,26 @@ function accepted(id = 7): Response {
     { id, status: "processing", stage: "queued" },
     { status: 202 },
   );
+}
+
+function failedDetail(reason: FailureReason): ReceiptDetailOut {
+  return receiptDetail({
+    status: "failed",
+    stage: "failed",
+    failure_reason: reason,
+  });
+}
+
+/** POST /api/receipts/{id}/retry answers with `respond`; returns the paths retried. */
+function serveRetry(respond: () => Response): string[] {
+  const retries: string[] = [];
+  server.use(
+    http.post("/api/receipts/:receiptId/retry", ({ request }) => {
+      retries.push(new URL(request.url).pathname);
+      return respond();
+    }),
+  );
+  return retries;
 }
 
 /** GET /api/receipts/{id} walks through `states`, repeating the last; returns the polled paths. */
@@ -331,14 +373,98 @@ describe("Scan page", () => {
     },
   );
 
-  it("Try again after a failed read goes back to the picker", async () => {
+  it.each<{ reason: FailureReason; button: RegExp }>([
+    { reason: "claude_unavailable", button: /scan another receipt/i },
+    { reason: "unreadable_photo", button: /retake the photo/i },
+  ])(
+    "after a $reason failure, $button goes back to the picker",
+    async ({ reason, button }) => {
+      serveUpload(accepted);
+      serveProgress(failedDetail(reason));
+
+      await pickAndSend(user);
+      await user.click(await screen.findByRole("button", { name: button }));
+
+      expect(await screen.findByLabelText(/take a photo/i)).toBeInTheDocument();
+    },
+  );
+
+  it.each(FAILURE_COPY)(
+    "a %s failure says why and offers Try again",
+    async (reason, message) => {
+      serveUpload(accepted);
+      serveProgress(failedDetail(reason));
+
+      await pickAndSend(user);
+
+      const card = (await heading()).closest("section");
+      if (!card) throw new Error("expected the status card");
+      expect(textOf(card)).toContain(`Couldn't read this receipt${message}`);
+      expect(
+        within(card).getByRole("button", { name: "Try again" }),
+      ).toBeEnabled();
+      expect(
+        within(card).queryByRole("button", { name: "Retake the photo" }) !==
+          null,
+      ).toBe(reason === "unreadable_photo");
+    },
+  );
+
+  it("Try again retries the failed receipt once and follows it again", async () => {
     serveUpload(accepted);
-    serveProgress(receiptDetail({ status: "failed", stage: "failed" }));
+    const polls = serveProgress(
+      failedDetail("budget_reached"),
+      processing,
+      receiptDetail(),
+    );
+    const retries = serveRetry(() => accepted());
 
     await pickAndSend(user);
-    await user.click(await screen.findByRole("button", { name: /try again/i }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await user.dblClick(retry);
 
-    expect(await screen.findByLabelText(/take a photo/i)).toBeInTheDocument();
+    expect(textOf(await heading())).toMatch(/reading your receipt/i);
+    await advance(RECEIPT_POLL_INTERVAL_MS * 2);
+    expect(textOf(await heading())).toMatch(/saved/i);
+    expect(retries).toEqual(["/api/receipts/7/retry"]);
+    expect(polls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("Try again long after the failure gets a fresh 3 minutes and polls again", async () => {
+    serveUpload(accepted);
+    const polls = serveProgress(
+      failedDetail("claude_unavailable"),
+      processing,
+      receiptDetail(),
+    );
+    serveRetry(() => accepted());
+
+    await pickAndSend(user);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await advance(THREE_MINUTES_MS + 1_000);
+    await user.click(retry);
+
+    expect(textOf(await heading())).toMatch(/reading your receipt/i);
+    await advance(RECEIPT_POLL_INTERVAL_MS * 2);
+    expect(textOf(await heading())).toMatch(/saved/i);
+    expect(polls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a photo of a failed receipt sent again offers Try again", async () => {
+    serveUpload(() =>
+      HttpResponse.json(
+        { id: 7, status: "failed", stage: "failed" },
+        { status: 200 },
+      ),
+    );
+    serveProgress(failedDetail("stopped_unexpectedly"));
+
+    await pickAndSend(user);
+
+    expect(textOf(await heading())).toMatch(/couldn['’]t read/i);
+    expect(
+      await screen.findByRole("button", { name: "Try again" }),
+    ).toBeEnabled();
   });
 
   it("a photo sent before links to its existing receipt without polling", async () => {

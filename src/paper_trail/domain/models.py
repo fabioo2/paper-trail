@@ -15,6 +15,7 @@ from paper_trail.domain.enums import (
     CodeScheme,
     CodeSource,
     CorrectionKind,
+    FailureReason,
     FieldSource,
     JobKind,
     JobStatus,
@@ -36,6 +37,7 @@ from paper_trail.domain.money import Money
 type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 
 _LAST4 = re.compile(r"[0-9]{4}")
+LINE_UNITS = frozenset({Unit.EACH, Unit.KG, Unit.LB})  # what a line is sold by
 
 
 def require_id(entity_id: int | None) -> int:
@@ -76,11 +78,15 @@ class LineItem:
     id: int | None = None
     match_source: MatchSource | None = None  # how product_id was found (agent core C)
     applies_to_position: int | None = None
+    unit: Unit | None = None  # EACH, KG or LB as read; None: unknown, compared as EACH
 
     def __post_init__(self) -> None:
         if not self.quantity.is_finite() or self.quantity <= 0:
             msg = f"line {self.position + 1}: quantity must be positive, got {self.quantity}"
             raise InvalidQuantityError(msg)
+        if self.unit is not None and self.unit not in LINE_UNITS:
+            msg = f"line {self.position + 1}: a line is sold by each, kg or lb, not {self.unit}"
+            raise DomainValidationError(msg)
         target = self.applies_to_position
         if target is None:
             return
@@ -195,6 +201,7 @@ class Receipt:
     created_at: datetime
     updated_at: datetime
     image_sha256: str | None = None  # of the stored image; one receipt per image
+    failure_reason: FailureReason | None = None  # set while FAILED
 
     def __post_init__(self) -> None:
         _check_payment_last4(self.payment_last4)
@@ -313,7 +320,8 @@ def is_confirmed(product: Product) -> bool:
 @dataclass(frozen=True, slots=True)
 class LastPurchase:
     """A product's newest ITEM line: its receipt's date and store, and what was paid (the line's
-    price observation, or its line total when the receipt has no date and so no observation)."""
+    price observation, or, when the receipt has no date and so no observation, its line total
+    with its linked discount line)."""
 
     purchased_on: date | None
     store_name: str
@@ -332,7 +340,8 @@ class ProductSummary:
 @dataclass(frozen=True, slots=True)
 class ProductPurchase:
     """One ITEM line naming a product: its receipt's date and store, and the line's price
-    observation (an undated receipt has none: its line's own prices, no discount)."""
+    observation (an undated receipt has none: its line's own prices and its linked discount
+    line)."""
 
     receipt_id: int
     purchased_on: date | None
@@ -341,6 +350,7 @@ class ProductPurchase:
     unit_price: Money
     discount: Money
     paid: Money
+    unit: Unit | None = None  # the line's; None: unknown
 
 
 @dataclass(frozen=True, slots=True)

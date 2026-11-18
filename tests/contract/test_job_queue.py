@@ -4,7 +4,10 @@ The race between two claiming workers needs real connections and lives in
 ``tests/integration/test_job_queue_concurrency.py``.
 
 Pinned (docs/tests/stage1.md): ``claim`` takes the candidate with the earliest available_at
-(then lowest id), does not count an attempt, and leases until now + lease; ownership means
+(then lowest id), counts no attempt for a PENDING job but one for a RUNNING job whose lease
+expired (its dead worker used it, hardening H4-01), and leases until now + lease; a job whose
+dead workers used up its last attempt is never claimed again but listed by ``abandoned``
+and FAILED by ``fail_abandoned`` (H4-02); ownership means
 RUNNING and locked by the caller (an expired lease is still owned until another worker claims
 the job); finishing a job clears locked_by and lease_expires_at; unknown ids raise NotFoundError.
 """
@@ -361,3 +364,85 @@ def test_s1_ac_10_pending_count(uow_factory: UnitOfWorkFactory, fake_clock: Fake
     assert _claim(uow_factory) is not None
 
     assert in_unit(uow_factory, lambda uow: uow.jobs.pending_count()) == 2
+
+
+# --- H4-01, H4-02: a job whose worker dies uses up its attempts --------------------------------
+
+
+def _expire(fake_clock: FakeClock) -> None:
+    fake_clock.advance(LEASE + timedelta(seconds=1))
+
+
+def _abandoned(uow_factory: UnitOfWorkFactory) -> list[Job]:
+    with uow_factory(read_only=True) as uow:
+        return uow.jobs.abandoned()
+
+
+@pytest.mark.parametrize(
+    ("max_attempts", "lease_expired", "taken"),
+    [(3, False, False), (3, True, True), (2, True, True), (1, True, False)],
+    ids=["live-lease", "expired", "expired-last-attempt-left", "expired-no-attempt-left"],
+)
+def test_h4_01_taking_back_an_expired_job_counts_one_attempt_while_one_is_left(
+    uow_factory: UnitOfWorkFactory,
+    fake_clock: FakeClock,
+    max_attempts: int,
+    lease_expired: bool,
+    taken: bool,
+) -> None:
+    job = _enqueue(uow_factory, max_attempts=max_attempts)
+    claimed = _claim(uow_factory)
+    assert claimed is not None
+    assert claimed.attempts == 0
+    if lease_expired:
+        _expire(fake_clock)
+    pending = _enqueue(uow_factory)
+    before = _get(uow_factory, job)
+
+    retaken = _claim(uow_factory, OTHER)
+
+    if taken:
+        assert retaken is not None
+        assert (retaken.id, retaken.attempts, retaken.locked_by) == (job.id, 1, OTHER)
+        assert _get(uow_factory, pending).status is JobStatus.PENDING
+    else:
+        assert retaken is not None
+        assert retaken.id == pending.id
+        assert _get(uow_factory, job) == before
+    assert [require_id(lost.id) for lost in _abandoned(uow_factory)] == (
+        [job.id] if lease_expired and not taken else []
+    )
+
+
+@pytest.mark.parametrize("max_attempts", [1, 2, 3])
+def test_h4_02_a_job_whose_worker_always_dies_is_handed_out_max_attempts_times_then_failed(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock, max_attempts: int
+) -> None:
+    job = _enqueue(uow_factory, max_attempts=max_attempts)
+    hand_outs = 0
+    for _ in range(max_attempts + 2):
+        if _claim(uow_factory) is not None:
+            hand_outs += 1
+        _expire(fake_clock)
+    lost = _abandoned(uow_factory)
+
+    failed = in_unit(
+        uow_factory,
+        lambda uow: uow.jobs.fail_abandoned(require_id(job.id), "stopped unexpectedly"),
+    )
+
+    assert hand_outs == max_attempts
+    assert [require_id(found.id) for found in lost] == [job.id]
+    assert (failed.status, failed.attempts, failed.last_error, failed.locked_by) == (
+        JobStatus.FAILED,
+        max_attempts,
+        "stopped unexpectedly",
+        None,
+    )
+    assert _get(uow_factory, job) == failed
+    _expire(fake_clock)
+    assert (_claim(uow_factory), _abandoned(uow_factory)) == (None, [])
+    with pytest.raises(ConflictError):
+        in_unit(uow_factory, lambda uow: uow.jobs.fail_abandoned(require_id(job.id), "again"))
+    with pytest.raises(NotFoundError):
+        in_unit(uow_factory, lambda uow: uow.jobs.fail_abandoned(424242, "x"))
