@@ -6,6 +6,8 @@ from decimal import Decimal
 
 import pytest
 
+from paper_trail.application.catalog import shown_value
+from paper_trail.domain.enums import Unit
 from paper_trail.domain.models import ProductPurchase
 from paper_trail.interfaces.web.schemas.products import ProductOut, ProductPurchaseOut
 from paper_trail.interfaces.web.schemas.receipts import LineItemOut
@@ -27,3 +29,13 @@ def test_every_decimal_in_a_body_is_written_in_fixed_point(value: Decimal, text:
         ProductPurchaseOut.from_domain(purchase).quantity,
         ProductOut.from_domain(product(id=1, size_value=value)).size_value,
     ] == [text] * 4
+
+
+def test_a_size_compared_with_what_was_shown_is_the_size_the_api_wrote() -> None:
+    """``ConfirmProduct`` compares the ``expected`` size a client sends back with
+    ``shown_value``: both must write the value in fixed point, or the check would always fail."""
+    shown = ProductOut.from_domain(product(id=1, size_value=Decimal("1E+1"), size_unit=Unit.G))
+
+    assert shown_value(product(size_value=Decimal("1E+1"), size_unit=Unit.G), "size") == (
+        f"{shown.size_value} g"
+    )
