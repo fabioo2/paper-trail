@@ -534,7 +534,10 @@ def test_a_review_resolved_meanwhile_fails_its_queued_answer_and_keeps_the_recei
     parked: Parked,
 ) -> None:
     parked.answer(parked.review_id, _corrected())
-    parked.harness.resolve(parked.review_id, _corrected())
+    with parked.harness.uow_factory() as uow:
+        uow.reviews.resolve(parked.review_id)
+        uow.receipts.update_status(parked.receipt_id, ReceiptStatus.COMPLETED, ProcessingStage.DONE)
+        uow.commit()
 
     assert parked.run_job() is True
 

@@ -5,6 +5,7 @@
 
 import ipaddress
 import re
+from datetime import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal, Self
@@ -79,6 +80,16 @@ class UploadSettings(BaseModel):
 
     max_bytes: int = Field(default=15_000_000, gt=0)
     max_pixels: int = Field(default=40_000_000, gt=0)  # decompression-bomb guard
+
+
+class BackupSettings(BaseModel):
+    """The worker's nightly database backup (``PAPER_TRAIL_BACKUP__*``): at ``at`` local time,
+    into ``<DATA_DIR>/backups``, keeping the newest ``keep``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    at: time = time(3, 30)
+    keep: int = Field(default=14, ge=1)
 
 
 class ClaudeSettings(BaseModel):
@@ -200,6 +211,7 @@ class Settings(BaseSettings):
     worker: WorkerSettings = WorkerSettings()
     web: WebSettings = WebSettings()
     upload: UploadSettings = UploadSettings()
+    backup: BackupSettings = BackupSettings()
     # The SDK's own variable, without the PAPER_TRAIL_ prefix; moved into ``claude.api_key``.
     anthropic_api_key: SecretStr | None = Field(
         default=None, validation_alias="ANTHROPIC_API_KEY", exclude=True, repr=False

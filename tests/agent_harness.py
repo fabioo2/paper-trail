@@ -8,8 +8,9 @@ production constructors are named in exactly one test module:
   tools' catalog is ``CompositeCatalog(StoreCatalog(uow_factory), catalog)``
 - ``LangGraphReceiptRunner(AgentDeps(...), checkpointer)``: applies the tracing decorators itself;
   slice D adds ``AgentDeps.images`` (the image store the vision attempt reads the photo from)
-- ``ProcessReceiptFile(image_store, uow_factory, runner, tracer, clock)``
-- ``ResolveReview(uow_factory, runner, record_receipt, clock)``
+- ``ProcessReceiptFile(image_store, uow_factory, runner, tracer, clock, hold=hold)``
+- ``ResolveReview(uow_factory, runner, record_receipt, clock, hold=hold)``, both holding the
+  receipt with ``receipt_hold(uow_factory)`` (``ReceiptHold``) while they run it
 - ``CorrectLineItem(uow_factory, clock)`` (slice C)
 
 Claude is always a ``ScriptedReader`` (claude-extraction plan R3: no test calls the API); the
@@ -40,6 +41,7 @@ from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
 from paper_trail.application.corrections import CorrectLineItem
 from paper_trail.application.enrichment import ProductEnricher, Throttle
+from paper_trail.application.holds import ReceiptHold
 from paper_trail.application.process_receipt import (
     ProcessOutcome,
     ProcessReceiptFile,
@@ -81,7 +83,14 @@ RETRY_MODEL = "claude-opus-5-5"
 TOOL_TRANSPORTS = ("inprocess", "mcp")
 MCP_TIMEOUT_S = 10.0
 
+CLI_HOLDER = "cli-test"
+
 type GatewayFactory = Callable[[ToolRegistry], ToolGateway]
+
+
+def receipt_hold(uow_factory: UnitOfWorkFactory) -> ReceiptHold:
+    """The CLI's hold on a receipt it runs, as ``bootstrap.agents.receipt_hold`` builds it."""
+    return ReceiptHold(uow_factory, holder=CLI_HOLDER, renew_every_s=10.0)
 
 
 def mcp_gateway(base_url: str) -> ToolGateway:
@@ -335,8 +344,10 @@ def build_harness(  # noqa: PLR0913 - a test builder: keyword-only overrides wit
         deps=deps,
         checkpointer=checkpointer,
         runner=runner,
-        process=ProcessReceiptFile(images, uow_factory, runner, tracer, clock),
-        resolve=ResolveReview(uow_factory, runner, record, clock),
+        process=ProcessReceiptFile(
+            images, uow_factory, runner, tracer, clock, hold=receipt_hold(uow_factory)
+        ),
+        resolve=ResolveReview(uow_factory, runner, record, clock, hold=receipt_hold(uow_factory)),
         record=record,
         correct=CorrectLineItem(uow_factory, clock),
     )

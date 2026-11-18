@@ -446,3 +446,80 @@ def test_h4_02_a_job_whose_worker_always_dies_is_handed_out_max_attempts_times_t
         in_unit(uow_factory, lambda uow: uow.jobs.fail_abandoned(require_id(job.id), "again"))
     with pytest.raises(NotFoundError):
         in_unit(uow_factory, lambda uow: uow.jobs.fail_abandoned(424242, "x"))
+
+
+def _hold(uow_factory: UnitOfWorkFactory, receipt_id: int) -> Job:
+    return in_unit(uow_factory, lambda uow: uow.jobs.hold(receipt_id, "cli-1", LEASE))
+
+
+def test_a_hold_is_a_running_single_attempt_job_of_its_holder(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
+) -> None:
+    receipt_id = _receipt_id(uow_factory)
+    now = fake_clock.now()
+
+    held = _hold(uow_factory, receipt_id)
+
+    assert held == Job(
+        id=held.id,
+        kind=JobKind.PROCESS_RECEIPT,
+        receipt_id=receipt_id,
+        status=JobStatus.RUNNING,
+        attempts=0,
+        max_attempts=1,
+        available_at=now,
+        locked_by="cli-1",
+        lease_expires_at=now + LEASE,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+        payload=None,
+    )
+    assert _get(uow_factory, held) == held
+
+
+@pytest.mark.parametrize(
+    ("kind", "state", "refused"),
+    [
+        (JobKind.PROCESS_RECEIPT, JobStatus.PENDING, True),
+        (JobKind.RESOLVE_REVIEW, JobStatus.PENDING, True),
+        (JobKind.PROCESS_RECEIPT, JobStatus.RUNNING, True),
+        (JobKind.RESOLVE_REVIEW, JobStatus.RUNNING, True),
+        (JobKind.PROCESS_RECEIPT, JobStatus.SUCCEEDED, False),
+        (JobKind.RESOLVE_REVIEW, JobStatus.FAILED, False),
+    ],
+)
+def test_a_receipt_is_held_only_while_it_has_no_job_waiting_or_running(
+    uow_factory: UnitOfWorkFactory, kind: JobKind, state: JobStatus, *, refused: bool
+) -> None:
+    receipt_id = _receipt_id(uow_factory)
+    job = in_unit(uow_factory, lambda uow: uow.jobs.enqueue(kind, receipt_id, max_attempts=1))
+    if state is not JobStatus.PENDING:
+        assert _claim(uow_factory) is not None
+    if state is JobStatus.SUCCEEDED:
+        _run(uow_factory, lambda uow: uow.jobs.complete(require_id(job.id), WORKER))
+    if state is JobStatus.FAILED:
+        _fail(uow_factory, job, "boom", None)
+
+    if refused:
+        with pytest.raises(ConflictError, match=f"receipt {receipt_id} is already being processed"):
+            _hold(uow_factory, receipt_id)
+        with uow_factory(read_only=True) as uow:
+            assert uow.jobs.get(require_id(job.id) + 1) is None
+    else:
+        assert _hold(uow_factory, receipt_id).locked_by == "cli-1"
+    assert _get(uow_factory, job).status is state
+
+
+def test_a_held_receipt_is_never_claimed_and_its_lapsed_hold_is_abandoned(
+    uow_factory: UnitOfWorkFactory, fake_clock: FakeClock
+) -> None:
+    held = _hold(uow_factory, _receipt_id(uow_factory))
+    while_held = (_claim(uow_factory), _abandoned(uow_factory))
+    with pytest.raises(ConflictError):
+        _hold(uow_factory, held.receipt_id)
+    _expire(fake_clock)
+
+    assert while_held == (None, [])
+    assert _claim(uow_factory) is None
+    assert [require_id(job.id) for job in _abandoned(uow_factory)] == [held.id]

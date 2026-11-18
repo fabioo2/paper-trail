@@ -337,7 +337,8 @@ summary to `/data/runs/<run>/summary.json`.
   `--verbose` (print the feedback and Claude's answers), `--no-color`.
 - Exit codes: 0 every receipt completed, was parked for review or paused, 1 `--resume` has
   nothing to resume (unknown receipt, finished run, or a review waiting: use `review resolve`),
-  2 a usage error, 3 a receipt failed, 4 a Claude read stopped the batch (the API failed or
+  or `--resume`, `--reprocess` or `review resolve` met a receipt the worker (or another command)
+  is processing: the message names its job; try again once it has finished. 2 a usage error, 3 a receipt failed, 4 a Claude read stopped the batch (the API failed or
   refused, the answer was cut off, there is no key, or the monthly budget is reached): the
   receipt is `failed` and keeps its checkpoint, and the output prints the
   `paper-trail process --resume <id>` command that continues it.
@@ -689,6 +690,7 @@ make process RUN_NAME=e3-mcp ARGS="--transport mcp"
 | `make restart` | Restart `web` and `worker` |
 | `make logs` / `make ps` | Follow the logs / show the containers and their health |
 | `make migrate` | Apply the migrations baked into the built image (`make build migrate` after adding one) |
+| `make backup` | Back up the database now (see [Backups and restoring](#backups-and-restoring)) |
 | `make revision m="..."` | Create a hand-written migration (`id=0002` sets the revision id) |
 | `make shell` / `make fe-shell` | A shell in the Python / frontend dev container |
 | `make lock` | Re-resolve Python dependencies into `uv.lock` |
@@ -754,6 +756,8 @@ The app:
   `__PLU_PATH` (default `<data dir>/catalog/plu.csv`).
 - `PAPER_TRAIL_UPLOAD__MAX_BYTES` (default `15000000`) and `__MAX_PIXELS` (default `40000000`):
   larger uploads are refused.
+- `PAPER_TRAIL_BACKUP__AT` (default `03:30`, local time) and `__KEEP` (default `14`): the
+  nightly backup (see [Backups and restoring](#backups-and-restoring)).
 - `PAPER_TRAIL_WORKER__SHUTDOWN_GRACE_S` (default `90`): how long a running step may take to
   finish after the worker is asked to stop; keep the worker's `stop_grace_period` in
   `compose.yaml` (100 s) above it. `__POLL_INTERVAL_S` (default `1`) and
@@ -763,9 +767,36 @@ The app:
   `PAPER_TRAIL_MCP__TIMEOUT_S` (default `330`) must be above `PAPER_TRAIL_CLAUDE__TIMEOUT_S`.
 - `PAPER_TRAIL_LOG_LEVEL` (default `INFO`) and `PAPER_TRAIL_LOG_FORMAT` (`json`, or `console`).
 
+## Backups and restoring
+
+Every night at `PAPER_TRAIL_BACKUP__AT` (default `03:30`, local time) the worker copies the
+database to `/data/backups/paper_trail-YYYYMMDD.db` on the data volume and keeps the newest
+`PAPER_TRAIL_BACKUP__KEEP` (default `14`). A worker that was stopped at that time makes the
+day's backup as soon as it runs again. The copy is taken online (the app keeps working), checked
+with SQLite's `integrity_check`, and only then given its name, so every file there is a whole,
+checked database; the worker logs `backup.written` or `backup.failed`. `make backup` makes
+one now (replacing today's). The receipt photos (`/data/images`) are not in it, and nothing is
+copied off the server: the backups live on the same volume as the database, so copy
+`/data/backups` to another disk yourself if you want them to survive that disk.
+
+To restore one, stop the stack, move the database aside (with its `-wal` and `-shm` files, if
+any), copy the backup in its place and start the stack again:
+
+```bash
+make down
+docker compose run --rm --entrypoint sh cli -c 'cd /data \
+  && for f in paper_trail.db paper_trail.db-wal paper_trail.db-shm; do \
+       if [ -e "$f" ]; then mv "$f" "before-restore-$f"; fi; done \
+  && cp backups/paper_trail-20261118.db paper_trail.db'
+make up
+```
+
+Receipts recorded after that backup are gone from the database, but their photos are still in
+`/data/images`: upload them again.
+
 ## Upgrading
 
-Back up the database (`/data/paper_trail.db`), then `git pull` and `make build up`: the `migrate`
+Back up the database (`make backup`), then `git pull` and `make build up`: the `migrate`
 service applies any new migration before `web` and `worker` start.
 
 ### From the local-model version
@@ -778,7 +809,7 @@ this order:
    saved by the old version cannot be resumed by the new one (`process --resume` refuses it);
    after the upgrade its only ways out are answering its review with a corrected file
    (`review resolve ID --file F`) or reading the photo again (`process PHOTO --reprocess`).
-2. **Back up the database** (`/data/paper_trail.db`): migration 0007 drops the product vectors,
+2. **Back up the database** (`make backup`): migration 0007 drops the product vectors,
    which cannot be recovered, and turns any receipt still `waiting_for_gpu` into `failed`.
 3. `make build migrate`, then `make up`.
 

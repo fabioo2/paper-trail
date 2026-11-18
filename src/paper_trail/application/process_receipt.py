@@ -18,6 +18,7 @@ from pathlib import PurePosixPath
 
 import structlog
 
+from paper_trail.application.holds import ReceiptHold
 from paper_trail.application.payloads import ReviewAnswerPayload
 from paper_trail.application.receipts import remember_forced_reason
 from paper_trail.domain.enums import (
@@ -194,7 +195,7 @@ def new_receipt(image: StoredImage, now: datetime) -> Receipt:
 
 
 class ProcessReceiptFile:
-    def __init__(  # noqa: PLR0913 - the ports it works with, and the optional reader check
+    def __init__(  # noqa: PLR0913 - the ports it works with, the hold and the reader check
         self,
         image_store: ImageStore,
         uow_factory: UnitOfWorkFactory,
@@ -202,9 +203,11 @@ class ProcessReceiptFile:
         tracer: Tracer,
         clock: Clock,
         *,
+        hold: ReceiptHold,
         reader_check: Callable[[], None] | None = None,
     ) -> None:
-        """``reader_check`` raises a ``ReaderError`` when no read could be made now (no key,
+        """``hold`` keeps the worker off a stored receipt that ``resume`` or ``reprocess`` runs
+        here. ``reader_check`` raises a ``ReaderError`` when no read could be made now (no key,
         the budget reached), without making one: ``reprocess`` asks it before it changes the
         receipt."""
         self._image_store = image_store
@@ -212,6 +215,7 @@ class ProcessReceiptFile:
         self._runner = runner
         self._tracer = tracer
         self._clock = clock
+        self._hold = hold
         self._reader_check = reader_check
 
     def __call__(
@@ -228,7 +232,8 @@ class ProcessReceiptFile:
 
         An image already stored is a duplicate, unless ``reprocess``: then Claude reads its
         stored photo again on a new thread, and its OPEN review is dismissed. With
-        ``interrupt_after`` the run pauses after that node, its checkpoint kept."""
+        ``interrupt_after`` the run pauses after that node, its checkpoint kept. Reprocessing a
+        receipt that has a job waiting or running is a ConflictError, changing nothing."""
         image = self._image_store.save(source.image)
         existing = self._find(image.sha256)
         if existing is not None and not reprocess:
@@ -258,23 +263,25 @@ class ProcessReceiptFile:
         read or a crash); failures as for ``__call__``. NotFoundError for an unknown receipt;
         ConflictError when its thread waits for its OPEN review (``review resolve`` answers
         that; a FAILED receipt is set NEEDS_REVIEW again first, as a retry does) or has nothing
-        to resume. A receipt marked FAILED by a crash after its matches were saved is
-        COMPLETED again when the resumed run finishes, closing a review the run had taken."""
+        to resume, or while it has a job waiting or running (``hold``). A receipt marked FAILED by
+        a crash after its matches were saved is COMPLETED again when the resumed run finishes,
+        closing a review the run had taken."""
         with self._uow_factory(read_only=True) as uow:
             receipt = uow.receipts.get(receipt_id)
         if receipt is None:
             msg = f"receipt {receipt_id} does not exist"
             raise NotFoundError(msg)
-        review = self._waits_for_review(receipt_id)
-        if review is not None:
-            msg = (
-                f"receipt {receipt_id} waits for review #{review.id}:"
-                f" answer it with `paper-trail review resolve {review.id}`"
-            )
-            raise ConflictError(msg)
-        outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
-        if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
-            self._completed(receipt_id)
+        with self._hold(receipt_id):
+            review = self._waits_for_review(receipt_id)
+            if review is not None:
+                msg = (
+                    f"receipt {receipt_id} waits for review #{review.id}:"
+                    f" answer it with `paper-trail review resolve {review.id}`"
+                )
+                raise ConflictError(msg)
+            outcome = self._run(receipt_id, lambda: self._runner.resume(receipt_id))
+            if outcome.graph is not None and outcome.graph.status is ReceiptStatus.COMPLETED:
+                self._completed(receipt_id)
         return outcome
 
     def process_stored(self, receipt: Receipt) -> ProcessOutcome:
@@ -335,6 +342,7 @@ class ProcessReceiptFile:
                 raise ProcessingStoppedError(receipt_id, error) from error
         previous: tuple[ReceiptStatus, ProcessingStage] | None = (receipt.status, receipt.stage)
         with self._uow_factory() as uow:
+            held = self._hold.take(uow, receipt_id)
             review = uow.reviews.find_open(receipt_id)
             if review is not None:
                 uow.reviews.dismiss(require_id(review.id))
@@ -343,18 +351,19 @@ class ProcessReceiptFile:
                 receipt_id, ReceiptStatus.PROCESSING, ProcessingStage.READING
             )
             uow.commit()
-        self._runner.reset(receipt_id)
-        log.info("receipt.reprocessing", receipt_id=receipt_id)
-        return self._run(
-            receipt_id,
-            lambda: self._runner.start(
+        with self._hold.keep(held):
+            self._runner.reset(receipt_id)
+            log.info("receipt.reprocessing", receipt_id=receipt_id)
+            return self._run(
                 receipt_id,
-                source_name=source_name,
-                image_path=image_path,
-                interrupt_after=interrupt_after,
-            ),
-            restore=previous,
-        )
+                lambda: self._runner.start(
+                    receipt_id,
+                    source_name=source_name,
+                    image_path=image_path,
+                    interrupt_after=interrupt_after,
+                ),
+                restore=previous,
+            )
 
     def _run(
         self,

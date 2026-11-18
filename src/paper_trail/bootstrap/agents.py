@@ -4,6 +4,8 @@ Only the agent commands (``process``, ``review``, ``items``, ``tools``, ``mcp``,
 import this module, so LangGraph, the MCP SDK and the Anthropic SDK load only for them.
 """
 
+import os
+import socket
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ from paper_trail.agents.prompts import PromptLibrary
 from paper_trail.agents.runner import LangGraphReceiptRunner
 from paper_trail.application.budget import BudgetedReader
 from paper_trail.application.enrichment import EnrichCatalog, ProductEnricher
+from paper_trail.application.holds import ReceiptHold
 from paper_trail.application.process_receipt import ProcessReceiptFile
 from paper_trail.application.receipts import (
     AnswerReview,
@@ -95,6 +98,16 @@ def run_config(settings: Settings) -> RunConfig:
         enrichment=settings.graph.enrichment,
         catalog=settings.catalog.enabled,
         transport=settings.tools.transport,
+    )
+
+
+def receipt_hold(container: Container) -> ReceiptHold:
+    """What keeps the worker off a receipt this process runs itself, renewed every heartbeat
+    interval like the worker's own jobs."""
+    return ReceiptHold(
+        container.uow_factory,
+        holder=f"cli-{socket.gethostname()}-{os.getpid()}",
+        renew_every_s=container.settings.worker.heartbeat_interval_s,
     )
 
 
@@ -269,6 +282,7 @@ def agent_container(
         )
         config = run_config(settings)
         clock, uow_factory = container.clock, container.uow_factory
+        hold = receipt_hold(container)
         yield AgentContainer(
             container=container,
             run=run,
@@ -282,9 +296,12 @@ def agent_container(
                 runner,
                 tracer,
                 clock,
+                hold=hold,
                 reader_check=claude.check,
             ),
-            resolve_review=ResolveReview(uow_factory, runner, container.record_receipt, clock),
+            resolve_review=ResolveReview(
+                uow_factory, runner, container.record_receipt, clock, hold=hold
+            ),
             list_open_reviews=ListOpenReviews(uow_factory),
             get_review=GetReview(uow_factory),
         )
@@ -302,7 +319,13 @@ def review_services(container: Container) -> Iterator[ReviewServices]:
         deps = _agent_deps(container, InMemoryTracer(container.clock), tools, claude.reader)
         runner = LangGraphReceiptRunner(deps, checkpointer)
         uow_factory = container.uow_factory
-        resolve = ResolveReview(uow_factory, runner, container.record_receipt, container.clock)
+        resolve = ResolveReview(
+            uow_factory,
+            runner,
+            container.record_receipt,
+            container.clock,
+            hold=receipt_hold(container),
+        )
         yield ReviewServices(
             list_reviews=ListPendingReviews(uow_factory, runner),
             get_review=GetPendingReview(uow_factory, runner),

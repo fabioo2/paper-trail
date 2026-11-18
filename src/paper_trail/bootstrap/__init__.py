@@ -7,6 +7,8 @@ the commands that run no agent never pay for importing them (CLI start-up).
 """
 
 from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
 
 from sqlalchemy import Engine
 
@@ -14,6 +16,7 @@ from paper_trail.adapters.catalog.composite import CompositeCatalog
 from paper_trail.adapters.catalog.plu import PluCatalog
 from paper_trail.adapters.clock import SystemClock
 from paper_trail.adapters.filesystem.image_store import FilesystemImageStore
+from paper_trail.adapters.sqlite.backup import DatabaseBackup, backup_path, write_backup
 from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.adapters.sqlite.health import DatabaseHealthProbe
 from paper_trail.adapters.sqlite.migrations import current_revision, head_revision, upgrade_to_head
@@ -56,6 +59,7 @@ from paper_trail.ports.unit_of_work import UnitOfWorkFactory
 
 IMAGES_DIRNAME = "images"
 RUNS_DIRNAME = "runs"
+BACKUPS_DIRNAME = "backups"
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,3 +174,21 @@ def database_is_current(container: Container) -> bool:
     return container.settings.database_path.is_file() and (
         database_revision(container) == head_revision()
     )
+
+
+def backup_database(container: Container, day: date) -> DatabaseBackup:
+    """An online, integrity-checked copy of the database as ``<DATA_DIR>/backups/
+    paper_trail-YYYYMMDD.db`` for ``day`` (replacing that day's), keeping the newest
+    ``BACKUP__KEEP`` (``paper-trail db backup``, and the worker every night)."""
+    settings = container.settings
+    return write_backup(
+        settings.database_path,
+        settings.data_dir / BACKUPS_DIRNAME,
+        day,
+        keep=settings.backup.keep,
+    )
+
+
+def database_backup_path(container: Container, day: date) -> Path:
+    """Where ``backup_database`` puts the backup of ``day``."""
+    return backup_path(container.settings.data_dir / BACKUPS_DIRNAME, day)

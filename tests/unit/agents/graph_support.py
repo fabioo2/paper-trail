@@ -18,7 +18,7 @@ from paper_trail.domain.enums import AgentRole
 from paper_trail.domain.models import JsonValue
 from paper_trail.domain.trace import TraceEvent, TraceKind
 from paper_trail.ports.agents import GraphOutcome
-from tests.agent_harness import Harness, build_harness
+from tests.agent_harness import Harness, build_harness, receipt_hold
 from tests.fakes.reader import Reply, ScriptedReader
 from tests.fakes.trace import FakeTracer
 from tests.support import require_id
@@ -115,9 +115,20 @@ def raw_traced(harness: Harness) -> Harness:
         deps=deps,
         runner=runner,
         process=ProcessReceiptFile(
-            harness.images, harness.uow_factory, runner, tracer, harness.clock
+            harness.images,
+            harness.uow_factory,
+            runner,
+            tracer,
+            harness.clock,
+            hold=receipt_hold(harness.uow_factory),
         ),
-        resolve=ResolveReview(harness.uow_factory, runner, harness.record, harness.clock),
+        resolve=ResolveReview(
+            harness.uow_factory,
+            runner,
+            harness.record,
+            harness.clock,
+            hold=receipt_hold(harness.uow_factory),
+        ),
     )
 
 

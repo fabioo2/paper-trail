@@ -26,6 +26,7 @@ LIGHT_COMMANDS = (
     ("db", "--help"),
     ("db", "upgrade"),
     ("db", "current"),
+    ("db", "backup"),
     ("worker", "--check-heartbeat"),
     ("version",),
 )
