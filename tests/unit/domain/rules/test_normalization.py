@@ -108,10 +108,16 @@ def test_s1_ac_06_property_alias_has_no_outer_or_double_whitespace(text: str) ->
         ("METRO Store 123", "metro"),
         ("  Shoppers   Drug Mart #1081 ", "shoppers drug mart"),
         ("Farm Boy Ltd", "farm boy"),
+        ("Costco Wholesale Windsor #534", "costco"),
+        ("Real Canadian Superstore Tecumseh Rd", "real canadian superstore"),
+        ("METRO PLUS", "metro"),
+        ("Metropolitan Market", "metropolitan market"),
+        ("Corner Store Windsor", "corner store windsor"),
     ],
 )
 def test_s1_ac_06_store_names_normalize_to_their_key(raw: str, expected: str) -> None:
-    """S1-AC-06: store numbers and legal or format suffixes are dropped."""
+    """S1-AC-06: store numbers and legal or format suffixes are dropped; a name that starts
+    with a known chain, word for word, is that chain."""
     assert normalize_store_name(raw) == expected
 
 

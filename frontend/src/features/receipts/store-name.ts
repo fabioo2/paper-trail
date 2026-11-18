@@ -11,6 +11,25 @@ const SUFFIXES = new Set([
   "corp.",
 ]);
 
+/** Chains whose branches print more after the name, e.g. "Costco Wholesale Windsor #534";
+ * the same list as the server's `KNOWN_CHAINS`. */
+const CHAINS = new Set([
+  "costco",
+  "walmart",
+  "metro",
+  "loblaws",
+  "real canadian superstore",
+  "no frills",
+  "food basics",
+  "freshco",
+  "sobeys",
+  "zehrs",
+  "iga",
+  "farm boy",
+  "giant tiger",
+  "shoppers drug mart",
+]);
+
 /** Names whose usual spelling title case can't produce. */
 const SPELLINGS: Record<string, string> = {
   iga: "IGA",
@@ -29,11 +48,17 @@ function titleCase(word: string): string {
 
 /**
  * The store as people say it, for display only: "COSTCO WHOLESALE #1234" is "Costco",
- * "metro" is "Metro". Store numbers and format suffixes go and every word is title-cased;
- * the stored name is never changed.
+ * "metro" is "Metro". A name that starts with a known chain is that chain; otherwise store
+ * numbers and format suffixes go. Every word is title-cased; the stored name is never changed.
  */
 export function displayStoreName(name: string): string {
   const words = name.trim().split(/\s+/);
+  for (let end = 1; end < words.length; end++) {
+    if (CHAINS.has(words.slice(0, end).join(" ").toLowerCase())) {
+      words.splice(end);
+      break;
+    }
+  }
   while (words.length > 1) {
     const last = words.at(-1)?.toLowerCase() ?? "";
     if (STORE_NUMBER.test(last)) {

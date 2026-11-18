@@ -230,7 +230,7 @@ function ProductFields({
       return;
     }
     confirm.reset();
-    update.mutate(cleared);
+    update.mutate({ ...cleared, expected: shownValues(product, [key]) });
   };
   const save = (body: ProductUpdateIn) => {
     confirm.reset();
@@ -382,7 +382,8 @@ function sentenceList(words: string[]): string {
   return `The ${text}`;
 }
 
-/** The name or category typed or picked over a rejected guess. */
+/** The name or category typed or picked over a rejected guess; saved against the value shown
+ * when editing began. */
 function FieldEdit({
   field,
   label,
@@ -402,11 +403,12 @@ function FieldEdit({
   const [category, setCategory] = useState<Category | "">(
     product.category ?? "",
   );
+  const [expected] = useState(() => shownValues(product, [field]));
   const categories = useCategories();
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
-    if (field === "canonical_name") onSave({ canonical_name: name });
-    else if (category !== "") onSave({ category });
+    if (field === "canonical_name") onSave({ canonical_name: name, expected });
+    else if (category !== "") onSave({ category, expected });
   };
   const blank =
     field === "canonical_name" ? name.trim() === "" : category === "";

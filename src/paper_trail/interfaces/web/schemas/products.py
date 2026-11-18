@@ -139,7 +139,8 @@ class ProductPurchaseOut(BaseModel):
 
 class ProductUpdateIn(BaseModel):
     """The fields a person changed; a missing or null field is left as it is. ``size`` is text
-    like ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field."""
+    like ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.
+    ``expected`` is what the person saw, as for ``ProductConfirmIn``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +151,7 @@ class ProductUpdateIn(BaseModel):
     tags: list[Annotated[str, Field(max_length=MAX_TAG_CHARS)]] | None = Field(
         default=None, max_length=MAX_TAGS
     )
+    expected: dict[FieldSourceKey, str | list[str] | None] | None = None
 
     def to_edit(self) -> ProductEdit:
         return ProductEdit(

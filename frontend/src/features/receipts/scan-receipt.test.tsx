@@ -22,7 +22,10 @@ import {
   cad,
   receiptDetail,
   type ReceiptDetailOut,
+  receiptPage,
+  receiptSummary,
 } from "@/test/fixtures/receipts";
+import { reviewSummary } from "@/test/fixtures/reviews";
 import type { ProblemDetail } from "@/test/msw/handlers";
 import { server } from "@/test/msw/server";
 import { renderApp } from "@/test/render";
@@ -572,6 +575,42 @@ describe("Scan page", () => {
     expect(polls).toHaveLength(9);
   });
 
+  it("Try again after lost connection follows the receipt again, wherever the person goes", async () => {
+    serveUpload(accepted);
+    const polls = servePolls(
+      () => HttpResponse.json(processing),
+      () => problem(500, "Internal Server Error"),
+      () => HttpResponse.error(),
+      () => problem(500, "Internal Server Error"),
+      () => HttpResponse.json(processing),
+      () => HttpResponse.json(processing),
+      () => HttpResponse.json(receiptDetail({ status: "needs_review" })),
+    );
+    server.use(
+      http.get("/api/reviews", () =>
+        HttpResponse.json(polls.length >= 7 ? [reviewSummary()] : []),
+      ),
+    );
+
+    const { router } = renderApp("/scan");
+    await user.upload(await screen.findByLabelText(/take a photo/i), photo());
+    await user.click(await screen.findByRole("button", { name: /send/i }));
+    await advance(RECEIPT_POLL_INTERVAL_MS * 3);
+    expect(textOf(await heading())).toMatch(/lost connection/i);
+    await advance(RECEIPT_POLL_INTERVAL_MS * 5);
+    expect(polls).toHaveLength(4);
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(textOf(await heading())).toMatch(/reading/i);
+    await act(() => router.navigate({ to: "/review" }));
+    expect(await screen.findByText("Nothing to review")).toBeInTheDocument();
+    await advance(RECEIPT_POLL_INTERVAL_MS * 3);
+
+    expect(
+      await screen.findByRole("link", { name: /costco/i }),
+    ).toHaveAttribute("href", "/review/7");
+  });
+
   it("gives up after 3 minutes and points to Receipts", async () => {
     serveUpload(accepted);
     const polls = serveProgress(processing);
@@ -590,9 +629,21 @@ describe("Scan page", () => {
     expect(polls).toHaveLength(pollsAtTimeout);
   });
 
-  it("leaving the page mid-poll stops polling", async () => {
+  it("leaving the page mid-reading follows the receipt until it settles, refetches, then stops polling", async () => {
     serveUpload(accepted);
-    const polls = serveProgress(processing);
+    const polls = serveProgress(
+      processing,
+      processing,
+      processing,
+      receiptDetail({ id: 7 }),
+    );
+    server.use(
+      http.get("/api/receipts", () =>
+        HttpResponse.json(
+          receiptPage(polls.length >= 4 ? [receiptSummary({ id: 7 })] : []),
+        ),
+      ),
+    );
 
     const { router } = renderApp("/scan");
     await user.upload(await screen.findByLabelText(/take a photo/i), photo());
@@ -601,10 +652,15 @@ describe("Scan page", () => {
 
     await act(() => router.navigate({ to: "/receipts" }));
     await screen.findByRole("heading", { name: /no receipts yet/i });
-    const pollsAtLeave = polls.length;
+    await advance(RECEIPT_POLL_INTERVAL_MS * 4);
 
+    expect(
+      (await screen.findAllByRole("link")).some(
+        (link) => link.getAttribute("href") === "/receipts/7",
+      ),
+    ).toBe(true);
+    const pollsAtSettle = polls.length;
     await advance(RECEIPT_POLL_INTERVAL_MS * 5);
-
-    expect(polls).toHaveLength(pollsAtLeave);
+    expect(polls).toHaveLength(pollsAtSettle);
   });
 });

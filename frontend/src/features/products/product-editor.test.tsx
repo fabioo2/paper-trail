@@ -107,7 +107,11 @@ describe("Product editor", () => {
 
     expect(await screen.findByText("Product saved")).toBeInTheDocument();
     expect(requests.patches).toEqual([
-      { size: "12 each", tags: ["eggs", "organic"] },
+      {
+        size: "12 each",
+        tags: ["eggs", "organic"],
+        expected: { size: "24 each", tags: ["organic", "free-run"] },
+      },
     ]);
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/products");
@@ -117,7 +121,7 @@ describe("Product editor", () => {
     });
   });
 
-  it("sends only what the person changed when the product refreshes underneath", async () => {
+  it("sends only what the person changed, against the values shown when editing began, when the product refreshes underneath", async () => {
     serveProduct();
     const user = userEvent.setup();
     const { queryClient } = renderApp("/products/5");
@@ -125,12 +129,16 @@ describe("Product editor", () => {
 
     await user.clear(screen.getByLabelText(/^size/i));
     await user.type(screen.getByLabelText(/^size/i), "12 each");
-    const refreshed = serveProduct(product({ brand: "Costco" }));
+    const refreshed = serveProduct(
+      product({ brand: "Costco", size_value: "18" }),
+    );
     await queryClient.refetchQueries({ queryKey: ["products"] });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(refreshed.patches).toEqual([{ size: "12 each" }]);
+      expect(refreshed.patches).toEqual([
+        { size: "12 each", expected: { size: "24 each" } },
+      ]);
     });
   });
 

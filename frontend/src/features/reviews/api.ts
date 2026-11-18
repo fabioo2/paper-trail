@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
-import { receiptKeys } from "@/features/receipts/api";
+import { summaryKeys } from "@/features/home/api";
+import { productKeys } from "@/features/products/api";
+import { receiptKeys, watchReading } from "@/features/receipts/api";
 import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
@@ -54,11 +56,15 @@ export function useResolveReview(id: number) {
           body,
         }),
       ),
-    onSuccess: () =>
-      Promise.all([
+    onSuccess: (answer) => {
+      watchReading(queryClient, answer.receipt_id, answer);
+      return Promise.all([
         queryClient.invalidateQueries({ queryKey: reviewKeys.all }),
         queryClient.invalidateQueries({ queryKey: receiptKeys.all }),
+        queryClient.invalidateQueries({ queryKey: productKeys.all }),
+        queryClient.invalidateQueries({ queryKey: summaryKeys.all }),
         queryClient.invalidateQueries({ queryKey: searchKeys.all }),
-      ]),
+      ]);
+    },
   });
 }

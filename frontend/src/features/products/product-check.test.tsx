@@ -78,8 +78,9 @@ function confirmed(sources: Record<string, string>): boolean {
   return ["person", "plu", "off", "upc"].includes(sources.canonical_name ?? "");
 }
 
-/** A stateful backend like the real one: confirm refuses values that changed since they were
- * shown, PATCH writes and clears fields, and the to-check list leaves out confirmed products. */
+/** A stateful backend like the real one: confirm and PATCH refuse values that changed since
+ * they were shown, PATCH writes and clears fields, and the to-check list leaves out confirmed
+ * products. */
 function serveQueue(...products: ProductOut[]): Backend {
   const stored = new Map(products.map((item) => [item.id, item]));
   const backend: Backend = { confirms: [], patches: [], stored };
@@ -88,6 +89,19 @@ function serveQueue(...products: ProductOut[]): Backend {
     if (!found) throw new Error(`no product ${String(id)}`);
     return found;
   };
+  const changed = (
+    before: ProductOut,
+    expected: Partial<Record<Field, unknown>> | null | undefined,
+  ): boolean =>
+    Object.entries(expected ?? {}).some(
+      ([field, value]) =>
+        JSON.stringify(shown(before, field as Field)) !== JSON.stringify(value),
+    );
+  const refused = () =>
+    HttpResponse.json(conflict, {
+      status: 409,
+      headers: { "content-type": "application/problem+json" },
+    });
   server.use(
     http.get("/api/products/to-check", () =>
       HttpResponse.json(
@@ -114,17 +128,7 @@ function serveQueue(...products: ProductOut[]): Backend {
         };
         backend.confirms.push([Number(params.productId), body]);
         const before = find(params.productId);
-        const stale = Object.entries(body.expected ?? {}).some(
-          ([field, value]) =>
-            JSON.stringify(shown(before, field as Field)) !==
-            JSON.stringify(value),
-        );
-        if (stale) {
-          return HttpResponse.json(conflict, {
-            status: 409,
-            headers: { "content-type": "application/problem+json" },
-          });
-        }
+        if (changed(before, body.expected)) return refused();
         const fields =
           body.fields ??
           (["canonical_name", "brand", "size", "category", "tags"] as Field[]);
@@ -141,15 +145,17 @@ function serveQueue(...products: ProductOut[]): Backend {
       },
     ),
     http.patch("/api/products/:productId", async ({ params, request }) => {
-      const body = (await request.json()) as {
+      const { expected, ...body } = (await request.json()) as {
         canonical_name?: string;
         brand?: string;
         size?: string;
         category?: ProductOut["category"];
         tags?: string[];
+        expected?: Partial<Record<Field, unknown>> | null;
       };
-      backend.patches.push([Number(params.productId), body]);
+      backend.patches.push([Number(params.productId), { ...body, expected }]);
       const before = find(params.productId);
+      if (changed(before, expected)) return refused();
       const cleared = new Set<string>();
       const written = new Set<string>();
       for (const [key, value] of Object.entries(body))
@@ -308,6 +314,49 @@ describe("Product checking", () => {
     expect(backend.stored.get(5)?.field_sources.category).toBe("llm");
   });
 
+  it("refuses to clear a rejected value that changed since it was shown, then shows the new one", async () => {
+    const backend = serveQueue(kiwi);
+    const user = userEvent.setup();
+    renderApp("/products/check");
+
+    const brand = await fieldRow("Brand");
+    backend.stored.set(6, { ...kiwi, brand: "Sungold" });
+    await user.click(
+      within(brand).getByRole("button", { name: "Reject brand" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This product changed while you were looking.",
+    );
+    await waitFor(() => {
+      expect(textOf(brand)).toBe("BrandSungoldAI");
+    });
+    expect(backend.stored.get(6)?.brand).toBe("Sungold");
+  });
+
+  it("refuses to save an edited name over one that changed after editing began", async () => {
+    const backend = serveQueue(eggs);
+    const user = userEvent.setup();
+    const { queryClient } = renderApp("/products/check");
+
+    const name = await fieldRow("Name");
+    await user.click(within(name).getByRole("button", { name: "Reject name" }));
+    backend.stored.set(5, { ...eggs, canonical_name: "Large Eggs" });
+    await queryClient.refetchQueries({ queryKey: ["products", "detail", 5] });
+    const input = within(name).getByRole("textbox", { name: "New name" });
+    await user.clear(input);
+    await user.type(input, "Organic Eggs");
+    await user.click(within(name).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This product changed while you were looking.",
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Large Eggs" }),
+    ).toBeInTheDocument();
+    expect(backend.stored.get(5)?.canonical_name).toBe("Large Eggs");
+  });
+
   it.each(["Brand", "Size", "Tags"])(
     "rejecting a guessed %s clears it",
     async (label) => {
@@ -326,8 +375,15 @@ describe("Product checking", () => {
         expect(textOf(row)).toBe(`${label}Not set`);
       });
       expect(within(row).queryByRole("button")).toBeNull();
+      const field = label.toLowerCase() as Field;
       expect(backend.patches).toEqual([
-        [6, label === "Tags" ? { tags: [] } : { [label.toLowerCase()]: "" }],
+        [
+          6,
+          {
+            ...(label === "Tags" ? { tags: [] } : { [field]: "" }),
+            expected: { [field]: shown(kiwi, field) },
+          },
+        ],
       ]);
       expect(backend.confirms).toEqual([]);
     },
@@ -352,7 +408,15 @@ describe("Product checking", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: "Organic Eggs" }),
     ).toBeInTheDocument();
-    expect(backend.patches).toEqual([[5, { canonical_name: "Organic Eggs" }]]);
+    expect(backend.patches).toEqual([
+      [
+        5,
+        {
+          canonical_name: "Organic Eggs",
+          expected: { canonical_name: eggs.canonical_name },
+        },
+      ],
+    ]);
     expect(textOf(name)).toBe("NameOrganic Eggsyou");
   });
 
@@ -374,7 +438,9 @@ describe("Product checking", () => {
     await waitFor(() => {
       expect(textOf(category)).toBe("CategoryPantryyou");
     });
-    expect(backend.patches).toEqual([[5, { category: "pantry" }]]);
+    expect(backend.patches).toEqual([
+      [5, { category: "pantry", expected: { category: "dairy_eggs" } }],
+    ]);
   });
 
   it("keeps a product on screen after its name is accepted while other guesses wait", async () => {

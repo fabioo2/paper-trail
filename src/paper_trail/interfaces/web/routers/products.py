@@ -67,12 +67,13 @@ def list_product_purchases(container: ContainerDep, product_id: int) -> list[Pro
     "/{product_id}",
     operation_id="updateProduct",
     summary="Edit a product",
-    responses=problem_responses(HTTPStatus.NOT_FOUND),
+    responses=problem_responses(HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT),
 )
 def update_product(container: ContainerDep, product_id: int, body: ProductUpdateIn) -> ProductOut:
-    """Write the fields sent and stamp each ``person``; the others are kept. A blank name or
+    """Write the fields sent and stamp each ``person``; the others are kept. A stored value
+    that differs from its ``expected`` one is a 409 problem (nothing written); a blank name or
     an unreadable size is a 422 problem, an unknown id a 404 problem."""
-    return ProductOut.from_domain(container.edit_product(product_id, body.to_edit()))
+    return ProductOut.from_domain(container.edit_product(product_id, body.to_edit(), body.expected))
 
 
 @router.post(

@@ -54,9 +54,11 @@ function changes(before: Fields, after: Fields): ProductUpdateIn {
   return body;
 }
 
-/** One product's fields, for a person to correct or accept. */
+/** One product's fields, for a person to correct or accept; both are refused (409) when the
+ * product changed since the editor opened. */
 export function ProductEditor({ product }: { product: ProductOut }) {
   const [initial] = useState(() => fieldsOf(product));
+  const [shown] = useState(() => shownValues(product));
   const [fields, setFields] = useState(initial);
   const categories = useCategories();
   const update = useUpdateProduct(product.id);
@@ -73,16 +75,22 @@ export function ProductEditor({ product }: { product: ProductOut }) {
   const save = (event: SyntheticEvent) => {
     event.preventDefault();
     confirm.reset();
-    update.mutate(body, {
-      onSuccess: () => {
-        done("Product saved");
+    const expected = Object.fromEntries(
+      Object.entries(shown).filter(([key]) => key in body),
+    );
+    update.mutate(
+      { ...body, expected },
+      {
+        onSuccess: () => {
+          done("Product saved");
+        },
       },
-    });
+    );
   };
   const accept = () => {
     update.reset();
     confirm.mutate(
-      { expected: shownValues(product) },
+      { expected: shown },
       {
         onSuccess: () => {
           done("Product confirmed");

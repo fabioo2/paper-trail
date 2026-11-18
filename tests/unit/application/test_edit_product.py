@@ -3,7 +3,8 @@
 Pinned: every given field is written and stamped ``person``, the others keep their values and
 sources; free text is trimmed and masked, tags lowercased with blanks and repeats dropped; an
 empty brand or size, or no tags, clears the field and its stamp; an unchanged product writes
-nothing; a blank name, an unreadable size or an unknown product writes nothing.
+nothing; a blank name, an unreadable size or an unknown product writes nothing; a field whose
+stored value is no longer the one the person saw refuses the edit.
 """
 
 from dataclasses import replace
@@ -13,7 +14,7 @@ import pytest
 
 from paper_trail.application.catalog import EditProduct, ProductEdit
 from paper_trail.domain.enums import Category, FieldSource, Unit
-from paper_trail.domain.errors import DomainValidationError, NotFoundError
+from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import Product
 from tests.factories import MASKED_TEST_PAN, TEST_PAN, product
 from tests.fakes.clock import FakeClock
@@ -119,3 +120,21 @@ def test_an_invalid_edit_writes_nothing(
 def test_an_unknown_product_is_not_found(database: ScratchDatabase, stored: Product) -> None:
     with pytest.raises(NotFoundError):
         EditProduct(database.uow_factory)(require_id(stored.id) + 1, ProductEdit(name="Eggs"))
+
+
+def test_an_edit_of_values_changed_since_they_were_shown_is_refused(
+    database: ScratchDatabase, stored: Product
+) -> None:
+    commits = database.commits
+    edit = EditProduct(database.uow_factory)
+    product_id = require_id(stored.id)
+
+    with pytest.raises(ConflictError, match="changed since it was shown: brand, size"):
+        edit(product_id, ProductEdit(brand=""), {"brand": "Kirkland", "size": "12 each"})
+    assert database.commits == commits
+    assert database.state.products[product_id] == stored
+
+    edited = edit(product_id, ProductEdit(brand=""), {"brand": stored.brand, "size": "24 each"})
+
+    assert edited == database.state.products[product_id]
+    assert edited.brand is None

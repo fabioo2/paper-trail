@@ -125,7 +125,8 @@ export interface paths {
         head?: never;
         /**
          * Edit a product
-         * @description Write the fields sent and stamp each ``person``; the others are kept. A blank name or
+         * @description Write the fields sent and stamp each ``person``; the others are kept. A stored value
+         *     that differs from its ``expected`` one is a 409 problem (nothing written); a blank name or
          *     an unreadable size is a 422 problem, an unknown id a 404 problem.
          */
         patch: operations["updateProduct"];
@@ -714,6 +715,7 @@ export interface components {
          * ProductUpdateIn
          * @description The fields a person changed; a missing or null field is left as it is. ``size`` is text
          *     like ``500 g``; an empty ``brand`` or ``size``, or no ``tags``, clears the field.
+         *     ``expected`` is what the person saw, as for ``ProductConfirmIn``.
          */
         ProductUpdateIn: {
             /** Brand */
@@ -721,6 +723,10 @@ export interface components {
             /** Canonical Name */
             canonical_name?: string | null;
             category?: components["schemas"]["Category"] | null;
+            /** Expected */
+            expected?: {
+                [key: string]: string | string[] | null;
+            } | null;
             /** Size */
             size?: string | null;
             /** Tags */
@@ -1281,6 +1287,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
