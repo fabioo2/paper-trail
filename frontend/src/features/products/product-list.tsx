@@ -140,7 +140,7 @@ export function ProductList({ filter = {} }: { filter?: ProductsSearch }) {
       <div
         role="group"
         aria-label="Filter products"
-        className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1"
+        className="-mx-4 flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pb-1 [&::-webkit-scrollbar]:hidden"
       >
         <Chip
           on={all}
