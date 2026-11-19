@@ -273,7 +273,7 @@ function ProductFields({
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight break-words">
+        <h1 className="text-lg font-semibold tracking-tight break-words">
           {product.canonical_name}
         </h1>
         <p className="text-sm text-muted-foreground">

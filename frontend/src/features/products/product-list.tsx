@@ -1,22 +1,19 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CloudOff, Package, SearchX } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect } from "react";
 import { toast } from "sonner";
 
 import type { ProductsSearch } from "@/app/router";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
-  hasSuggestion,
   type ProductSummaryOut,
   useCategories,
   useProductList,
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
-import { GuessBadge } from "@/features/products/field-source";
 import { sparklinePoints } from "@/features/products/price-chart";
 import {
   comparablePrices,
@@ -55,12 +52,15 @@ function inFilter(product: ProductSummaryOut, filter: ProductsSearch): boolean {
   return true;
 }
 
-/** The Products tab: every product bought with its price trend, filtered by chip and search. */
+/**
+ * The Products tab: every product bought with its price trend, filtered by chip and by the
+ * header search (`q`).
+ */
 export function ProductList({ filter = {} }: { filter?: ProductsSearch }) {
   const products = useProductList();
   const categories = useCategories();
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const query = filter.q ?? "";
   const { isError, refetch } = products;
 
   useEffect(() => {
@@ -112,7 +112,11 @@ export function ProductList({ filter = {} }: { filter?: ProductsSearch }) {
     (product) => inFilter(product, filter) && matches(product, query),
   );
   const choose = (next: ProductsSearch) => {
-    void navigate({ to: "/products", search: next, replace: true });
+    void navigate({
+      to: "/products",
+      search: filter.q === undefined ? next : { ...next, q: filter.q },
+      replace: true,
+    });
   };
   const all =
     !filter.needsALook &&
@@ -127,16 +131,6 @@ export function ProductList({ filter = {} }: { filter?: ProductsSearch }) {
       <h1 id="products-heading" className="sr-only">
         Products
       </h1>
-      <Input
-        type="search"
-        aria-label="Search products"
-        placeholder="Search by name, brand or tag"
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-        }}
-        className="h-11"
-      />
       <div
         role="group"
         aria-label="Filter products"
@@ -249,13 +243,10 @@ function ProductRow({ product }: { product: ProductSummaryOut }) {
     <Link
       to="/products/$productId"
       params={{ productId: String(product.id) }}
-      className="flex min-h-16 items-center gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex min-h-14 items-center gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <div className="min-w-0 flex-1">
-        <p className="flex items-center gap-2 font-medium">
-          <span className="truncate">{product.canonical_name}</span>
-          {hasSuggestion(product) ? <GuessBadge /> : null}
-        </p>
+        <p className="truncate font-medium">{product.canonical_name}</p>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <CategoryDot category={product.category} />
           <span className="truncate">{details}</span>
@@ -341,7 +332,7 @@ function ProductListSkeleton() {
         {Array.from({ length: SKELETON_ROWS }, (_, index) => (
           <div
             key={index}
-            className="flex min-h-16 items-center justify-between gap-3 px-4 py-3"
+            className="flex min-h-14 items-center justify-between gap-3 px-4 py-2"
           >
             <div className="flex flex-col gap-2">
               <Skeleton className="h-4 w-36" />

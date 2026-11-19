@@ -48,6 +48,7 @@ export function lineItem(overrides: Partial<LineItemOut> = {}): LineItemOut {
     raw_text: "KS ORG EGGS 24CT",
     description: "Kirkland Organic Eggs 24 ct",
     quantity: "1",
+    unit: "each",
     unit_price: cad(899),
     line_total: cad(899),
     product_id: null,

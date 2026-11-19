@@ -79,10 +79,15 @@ export function inRange(points: ChartPoint[], range: Range): ChartPoint[] {
   return from === null ? points : points.filter((point) => point.date >= from);
 }
 
+/** Whether the points draw a line: two dates or more (prices of one day are a single value). */
+export function drawsLine(points: ChartPoint[]): boolean {
+  return new Set(points.map((point) => point.date)).size >= 2;
+}
+
 /** Six months when there is more history than that and they hold a line; else everything. */
 export function defaultRange(points: ChartPoint[]): Range {
   const recent = inRange(points, "6M");
-  return recent.length < points.length && recent.length >= 2 ? "6M" : "All";
+  return recent.length < points.length && drawsLine(recent) ? "6M" : "All";
 }
 
 export interface ChartBox {

@@ -161,6 +161,13 @@ describe("Product detail", () => {
       "two purchases, one undated",
       [productPurchase(), productPurchase({ purchased_on: null })],
     ],
+    [
+      "purchases all on one date",
+      [
+        productPurchase({ paid: cad(899) }),
+        productPurchase({ paid: cad(999) }),
+      ],
+    ],
   ])(
     "shows the store table but no chart or verdict for %s",
     async (_, bought) => {
@@ -296,7 +303,7 @@ describe("Product detail", () => {
     await user.click(within(range).getByRole("button", { name: "1M" }));
     expect(within(section).queryByRole("img")).toBeNull();
     expect(textOf(section)).toContain(
-      "Fewer than two purchases in this range.",
+      "Fewer than two purchase dates in this range.",
     );
     expect(within(section).getAllByRole("row").map(textOf)).toEqual([
       "Per itemLowAvgLast",
@@ -338,8 +345,33 @@ describe("Product detail", () => {
 
     const section = await purchasesSection();
     expect(within(section).getAllByRole("link").map(textOf)).toEqual([
-      `${formatDate("2026-11-01")} · Costco0.5 kg · ${formatMoney(cad(440))}/kg${formatMoney(cad(220))}`,
-      `${formatDate("2026-10-30")} · Costco2 lb · ${formatMoney(cad(200))}/lb${formatMoney(cad(400))}`,
+      `${formatDate("2026-11-01")} · Costco0.5 kg @ ${formatMoney(cad(440))}/kg${formatMoney(cad(220))}`,
+      `${formatDate("2026-10-30")} · Costco2 lb @ ${formatMoney(cad(200))}/lb${formatMoney(cad(400))}`,
+    ]);
+  });
+
+  it("groups identical purchases (same date, store and price) into one ×n row, undated ones only within a receipt", async () => {
+    serveProduct([
+      productPurchase({ receipt_id: 31 }),
+      productPurchase({ receipt_id: 31 }),
+      productPurchase({ receipt_id: 31, discount: cad(-100), paid: cad(799) }),
+      productPurchase({ receipt_id: 31 }),
+      productPurchase({ receipt_id: 30, purchased_on: "2026-10-30" }),
+      productPurchase({ receipt_id: 29, purchased_on: null }),
+      productPurchase({ receipt_id: 29, purchased_on: null }),
+      productPurchase({ receipt_id: 28, purchased_on: null }),
+    ]);
+
+    renderApp("/products/5");
+
+    const section = await purchasesSection();
+    expect(textOf(section)).toContain("Purchases (8)");
+    expect(within(section).getAllByRole("link").map(textOf)).toEqual([
+      `${formatDate("2026-11-01")} · Costco× 3${formatMoney(cad(2697))}`,
+      `${formatDate("2026-11-01")} · Costcosave ${formatMoney(cad(100))}${formatMoney(cad(799))}`,
+      `${formatDate("2026-10-30")} · Costco${formatMoney(cad(899))}`,
+      `Date unknown · Costco× 2${formatMoney(cad(1798))}`,
+      `Date unknown · Costco${formatMoney(cad(899))}`,
     ]);
   });
 

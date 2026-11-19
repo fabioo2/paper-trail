@@ -73,7 +73,7 @@ function ProductView({ product }: { product: ProductOut }) {
     .join(" · ");
 
   return (
-    <article className="flex flex-col gap-6 px-4 py-4">
+    <article className="flex flex-col gap-4 px-4 py-4">
       <Link
         to="/products"
         className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -85,7 +85,7 @@ function ProductView({ product }: { product: ProductOut }) {
         <header className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div>
-              <h1 className="inline text-xl font-semibold tracking-tight break-words">
+              <h1 className="inline text-lg font-semibold tracking-tight break-words">
                 {product.canonical_name}
               </h1>
               {hasSuggestion(product) ? (
@@ -177,9 +177,9 @@ function ProductPurchases({ product }: { product: ProductOut }) {
           </p>
         ) : (
           <ul className="divide-y rounded-xl border bg-card">
-            {rows.map((purchase, index) => (
-              <li key={`${String(purchase.receipt_id)}-${String(index)}`}>
-                <PurchaseRow purchase={purchase} />
+            {groupPurchases(rows).map((group, index) => (
+              <li key={`${String(group.purchase.receipt_id)}-${String(index)}`}>
+                <PurchaseRow group={group} />
               </li>
             ))}
           </ul>
@@ -189,23 +189,53 @@ function ProductPurchases({ product }: { product: ProductOut }) {
   );
 }
 
-function PurchaseRow({ purchase }: { purchase: ProductPurchaseOut }) {
+interface PurchaseGroup {
+  /** The first of the identical purchases, which the row links to. */
+  purchase: ProductPurchaseOut;
+  count: number;
+}
+
+/**
+ * Purchases on the same date at the same store for the same amounts, as one row each; undated
+ * ones only within their own receipt.
+ */
+function groupPurchases(purchases: ProductPurchaseOut[]): PurchaseGroup[] {
+  const groups = new Map<string, PurchaseGroup>();
+  for (const purchase of purchases) {
+    const key = JSON.stringify([
+      purchase.purchased_on ?? `receipt ${String(purchase.receipt_id)}`,
+      purchase.store_name,
+      purchase.quantity,
+      purchase.unit,
+      purchase.paid,
+      purchase.discount,
+    ]);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, { purchase, count: 1 });
+    else group.count += 1;
+  }
+  return [...groups.values()];
+}
+
+function PurchaseRow({ group }: { group: PurchaseGroup }) {
+  const { purchase, count } = group;
   const suffix = unitSuffix(purchase.unit);
+  const pieces = Number(purchase.quantity) * count;
   const notes = [
     suffix
-      ? `${purchase.quantity} ${purchase.unit ?? ""} · ${formatMoney(paidPerUnit(purchase))}${suffix}`
-      : Number(purchase.quantity) === 1
+      ? `${count === 1 ? "" : `${String(count)} × `}${purchase.quantity} ${purchase.unit ?? ""} @ ${formatMoney(paidPerUnit(purchase))}${suffix}`
+      : pieces === 1
         ? null
-        : `× ${purchase.quantity}`,
+        : `× ${String(pieces)}`,
     purchase.discount.amount_cents === 0
       ? null
-      : `save ${formatMoney({ ...purchase.discount, amount_cents: -purchase.discount.amount_cents })}`,
+      : `save ${formatMoney({ ...purchase.discount, amount_cents: -purchase.discount.amount_cents * count })}`,
   ].filter(Boolean);
   return (
     <Link
       to="/receipts/$receiptId"
       params={{ receiptId: String(purchase.receipt_id) }}
-      className="flex min-h-14 items-center justify-between gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex min-h-12 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <div className="min-w-0">
         <p className="truncate text-sm">
@@ -221,7 +251,10 @@ function PurchaseRow({ purchase }: { purchase: ProductPurchaseOut }) {
         ) : null}
       </div>
       <span className="shrink-0 font-medium tabular-nums">
-        {formatMoney(purchase.paid)}
+        {formatMoney({
+          ...purchase.paid,
+          amount_cents: purchase.paid.amount_cents * count,
+        })}
       </span>
     </Link>
   );

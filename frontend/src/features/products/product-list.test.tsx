@@ -132,9 +132,7 @@ async function productRows(): Promise<HTMLElement[]> {
 }
 
 function names(rows: HTMLElement[]): string[] {
-  return rows.map(
-    (row) => row.querySelector("p span.truncate")?.textContent ?? "",
-  );
+  return rows.map((row) => row.querySelector("p")?.textContent ?? "");
 }
 
 function chips(): HTMLElement {
@@ -170,7 +168,7 @@ describe("Products tab", () => {
     );
   });
 
-  it("shows each product's store, count, unit price, last price, trend and change against its average", async () => {
+  it("shows each product's store, count, unit price, last price, trend and change against its average, with the category dot as its only marker", async () => {
     serveProducts();
 
     renderApp("/products");
@@ -178,23 +176,18 @@ describe("Products tab", () => {
     const rows = await productRows();
     expect(rows[1]).toHaveAttribute("href", "/products/5");
     expect(rows.map(textOf)).toEqual([
-      `Gold KiwiAIMetro · 2×${formatMoney(cad(168))}↑up 8%`,
-      `Kirkland Organic EggsAICostco · 3×${formatMoney(cad(1199))}↓down 25%`,
+      `Gold KiwiMetro · 2×${formatMoney(cad(168))}↑up 8%`,
+      `Kirkland Organic EggsCostco · 3×${formatMoney(cad(1199))}↓down 25%`,
       `Natrel 2% MilkCostco · 1× · ${formatMoney(cad(152))}/L${formatMoney(cad(609))}first time`,
       `Orange PepperMetro · 2× · ${formatMoney(cad(500))}/kg${formatMoney(cad(226))}steady`,
-      `Undated BreadAIMetro · 2×${formatMoney(cad(399))}`,
+      `Undated BreadMetro · 2×${formatMoney(cad(399))}`,
     ]);
     expect(
       rows.map((row) => row.querySelector("[data-sparkline]") !== null),
     ).toEqual([true, true, false, true, false]);
     expect(
-      rows.map(
-        (row) =>
-          within(row).queryByRole("img", {
-            name: "Has details Claude guessed",
-          }) !== null,
-      ),
-    ).toEqual([true, true, false, false, true]);
+      screen.queryAllByRole("img", { name: "Has details Claude guessed" }),
+    ).toEqual([]);
     expect(
       rows.map((row) =>
         row.querySelector("[data-category]")?.getAttribute("style"),
@@ -296,13 +289,15 @@ describe("Products tab", () => {
       query,
     );
 
-    expect(names(await productRows())).toEqual([name]);
+    await waitFor(async () => {
+      expect(names(await productRows())).toEqual([name]);
+    });
   });
 
-  it("combines the search with a chip, and says so when nothing matches", async () => {
+  it("combines the header search with a chip in the URL, and says so when nothing matches", async () => {
     serveProducts();
     const user = userEvent.setup();
-    renderApp("/products");
+    const { router } = renderApp("/products");
     await productRows();
     await user.click(within(chips()).getByRole("button", { name: "Costco" }));
 
@@ -310,6 +305,9 @@ describe("Products tab", () => {
       screen.getByRole("searchbox", { name: "Search products" }),
       "e",
     );
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ store: "Costco", q: "e" });
+    });
     expect(names(await productRows())).toEqual([
       "Kirkland Organic Eggs",
       "Natrel 2% Milk",
@@ -321,7 +319,7 @@ describe("Products tab", () => {
     );
     await user.click(within(chips()).getByRole("button", { name: "Pantry" }));
     expect(
-      screen.getByRole("heading", { name: "No matching products" }),
+      await screen.findByRole("heading", { name: "No matching products" }),
     ).toBeInTheDocument();
   });
 

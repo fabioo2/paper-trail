@@ -221,7 +221,7 @@ function ReviewForm({ review }: { review: ReviewOut }) {
         <ArrowLeft aria-hidden="true" className="size-4" />
         Review
       </Link>
-      <h1 className="text-xl font-semibold tracking-tight break-words">
+      <h1 className="text-lg font-semibold tracking-tight break-words">
         {review.draft === null || review.draft.store_name === ""
           ? "Unreadable receipt"
           : review.draft.store_name}

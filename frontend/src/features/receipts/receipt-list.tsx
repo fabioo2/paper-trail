@@ -164,7 +164,7 @@ function ReceiptRow({ receipt }: { receipt: ReceiptSummaryOut }) {
     <Link
       to="/receipts/$receiptId"
       params={{ receiptId: String(receipt.id) }}
-      className="flex min-h-16 items-center justify-between gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex min-h-14 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex w-8 shrink-0 flex-col items-center leading-tight">
@@ -239,7 +239,7 @@ function ReceiptListSkeleton() {
         {Array.from({ length: SKELETON_ROWS }, (_, index) => (
           <div
             key={index}
-            className="flex min-h-16 items-center justify-between gap-3 px-4 py-3"
+            className="flex min-h-14 items-center justify-between gap-3 px-4 py-2"
           >
             <div className="flex flex-col gap-2">
               <Skeleton className="h-4 w-36" />

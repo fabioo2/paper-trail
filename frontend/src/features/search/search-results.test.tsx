@@ -69,7 +69,7 @@ describe("Header search", () => {
     expect(router.state.location.search).toEqual({ q: "kiwi" });
     expect(queries).toEqual(["kiwi"]);
     expect(textOf(products)).toBe(
-      "Products1Gold KiwiProduce · bought 3×$11.99last, Costco",
+      "Products1Gold KiwiProduce · bought 3×Last bought at Costco, Nov 5$11.99",
     );
     expect(
       within(products).getByRole("link", { name: /gold kiwi/i }),
@@ -156,13 +156,43 @@ describe("Header search", () => {
     expect(router.state.location.pathname).toBe("/search");
   });
 
-  it("is not shown on Products, which has its own filter", async () => {
-    renderApp("/products");
-
+  it("filters the list on Products instead of opening results", async () => {
+    const user = userEvent.setup();
+    const queries = serveSearch();
+    const { router } = renderApp("/products");
     await screen.findByRole("heading", { name: "No products yet" });
     expect(
       screen.queryByRole("searchbox", { name: "Search receipts and products" }),
     ).toBeNull();
+
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search products" }),
+      "kiwi",
+    );
+
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ q: "kiwi" });
+    });
+    expect(router.state.location.pathname).toBe("/products");
+    expect(queries).toEqual([]);
+  });
+
+  it("drops what was typed on Products when another page opens before it is sent", async () => {
+    const user = userEvent.setup();
+    const queries = serveSearch();
+    const { router } = renderApp("/products");
+    await screen.findByRole("heading", { name: "No products yet" });
+
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search products" }),
+      "kiwi",
+    );
+    await router.navigate({ to: "/receipts" });
+    await new Promise((resolve) => setTimeout(resolve, SEARCH_DEBOUNCE_MS * 2));
+
+    expect(router.state.location.pathname).toBe("/receipts");
+    expect(await searchField()).toHaveValue("");
+    expect(queries).toEqual([]);
   });
 
   it("shows a product's new name when the search is repeated after an edit", async () => {

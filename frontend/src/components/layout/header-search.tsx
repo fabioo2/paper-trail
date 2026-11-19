@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 export const SEARCH_DEBOUNCE_MS = 300;
 
 /**
- * The search field of the top bar (the Products page keeps its own filter instead): what is
- * typed opens the results at /search and keeps them in step; clearing it there goes back Home.
+ * The search field of the top bar: what is typed opens the results at /search and keeps them in
+ * step; clearing it there goes back Home. On Products it filters the list instead (`q`).
  * The field shows the query of the results on screen, so it clears when they are left and
  * comes back with them (the browser's Back).
  */
@@ -17,14 +17,17 @@ export function HeaderSearch() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const onResults = pathname === "/search";
+  const onProducts = pathname === "/products";
   const { q = "" } = useSearch({ strict: false });
-  const shown = onResults ? q : "";
+  const shown = onResults || onProducts ? q : "";
   const [value, setValue] = useState(shown);
   const [lastShown, setLastShown] = useState(shown);
+  const [lastPath, setLastPath] = useState(pathname);
   // The query this field navigated to itself: typing may have gone on since.
   const [sent, setSent] = useState<string | null>(null);
-  if (lastShown !== shown) {
+  if (lastShown !== shown || lastPath !== pathname) {
     setLastShown(shown);
+    setLastPath(pathname);
     if (shown !== sent) setValue(shown);
     setSent(null);
   }
@@ -34,6 +37,19 @@ export function HeaderSearch() {
   useEffect(() => {
     if (settled) return;
     const timer = setTimeout(() => {
+      if (onProducts) {
+        setSent(text);
+        void navigate({
+          to: "/products",
+          search: (prev) => {
+            const chip = { ...prev };
+            delete chip.q;
+            return text === "" ? chip : { ...chip, q: text };
+          },
+          replace: true,
+        });
+        return;
+      }
       if (text === "") {
         void navigate({ to: "/" });
         return;
@@ -44,9 +60,7 @@ export function HeaderSearch() {
     return () => {
       clearTimeout(timer);
     };
-  }, [settled, text, onResults, navigate]);
-
-  if (pathname === "/products") return null;
+  }, [settled, text, onResults, onProducts, navigate]);
 
   return (
     <form
@@ -54,7 +68,7 @@ export function HeaderSearch() {
       className="relative min-w-0 flex-1"
       onSubmit={(event) => {
         event.preventDefault();
-        if (text === "") return;
+        if (text === "" || onProducts) return;
         setSent(text);
         void navigate({
           to: "/search",
@@ -69,13 +83,15 @@ export function HeaderSearch() {
       />
       <Input
         type="search"
-        aria-label="Search receipts and products"
-        placeholder="Search receipts & products"
+        aria-label={
+          onProducts ? "Search products" : "Search receipts and products"
+        }
+        placeholder={onProducts ? "Search products" : "Search"}
         value={value}
         onChange={(event) => {
           setValue(event.target.value);
         }}
-        className="h-9 pl-8"
+        className="h-11 pl-8"
       />
     </form>
   );

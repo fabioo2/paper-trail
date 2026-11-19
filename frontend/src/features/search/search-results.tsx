@@ -17,7 +17,7 @@ import {
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const ROW =
-  "flex min-h-16 items-center justify-between gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none";
+  "flex min-h-14 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none";
 
 /**
  * `text` with every word that starts like a word of `query` marked, ignoring case: the server
@@ -126,7 +126,7 @@ export function SearchResults({ query }: { query: string }) {
                       </>
                     }
                     amount={formatMoney(last.paid)}
-                    note={`last, ${displayStoreName(last.store_name)}`}
+                    note={`Last bought at ${displayStoreName(last.store_name)}${last.purchased_on === null ? "" : `, ${formatMonthDay(last.purchased_on)}`}`}
                   />
                 </Link>
               </li>
@@ -232,13 +232,11 @@ function ResultRow({
       <div className="min-w-0">
         <p className="truncate font-medium">{title}</p>
         <p className="truncate text-sm text-muted-foreground">{details}</p>
-      </div>
-      <div className="flex shrink-0 flex-col items-end">
-        <span className="font-medium tabular-nums">{amount}</span>
         {note ? (
-          <span className="text-xs text-muted-foreground">{note}</span>
+          <p className="truncate text-xs text-muted-foreground">{note}</p>
         ) : null}
       </div>
+      <span className="shrink-0 font-medium tabular-nums">{amount}</span>
     </>
   );
 }
@@ -250,7 +248,7 @@ function SearchSkeleton() {
         {Array.from({ length: 4 }, (_, index) => (
           <div
             key={index}
-            className="flex min-h-16 items-center justify-between gap-3 px-4 py-3"
+            className="flex min-h-14 items-center justify-between gap-3 px-4 py-2"
           >
             <div className="flex flex-col gap-2">
               <Skeleton className="h-4 w-36" />

@@ -8,7 +8,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col">
       <TopBar />
-      <main className="mx-auto w-full max-w-2xl flex-1 pb-[calc(var(--tab-bar-height)+var(--safe-bottom))]">
+      <main className="mx-auto w-full max-w-2xl flex-1 pb-[calc(var(--tab-bar-height)+var(--safe-bottom)+1.5rem)]">
         {children}
       </main>
       <BottomTabBar />

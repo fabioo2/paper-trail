@@ -59,9 +59,9 @@ export function ReceiptNotFound() {
 
 function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
   const categories = useCategories();
-  const lines = receipt.items.length;
+  const items = receipt.items.filter((line) => line.kind === "item").length;
   return (
-    <article className="flex flex-col gap-6 px-4 py-4">
+    <article className="flex flex-col gap-4 px-4 py-4">
       <Link
         to="/receipts"
         className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -71,7 +71,7 @@ function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
       </Link>
       <header className="flex flex-col gap-1">
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight break-words">
+          <h1 className="text-lg font-semibold tracking-tight break-words">
             {displayStoreName(receipt.store_name)}
           </h1>
           <ReceiptStatusBadge status={receipt.status} />
@@ -80,7 +80,7 @@ function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
           {receipt.purchased_on === null
             ? "Date unknown"
             : formatFullDate(receipt.purchased_on)}{" "}
-          · {lines} {lines === 1 ? "line" : "lines"}
+          · {items} {items === 1 ? "item" : "items"}
         </p>
       </header>
 
@@ -148,24 +148,25 @@ function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
         </section>
       )}
 
-      <ul aria-label="Items" className="divide-y rounded-xl border bg-card">
-        {receiptRows(receipt.items).map((row) => (
-          <li key={row.key}>
-            <LineRow row={row} categories={categories.data} />
-          </li>
-        ))}
-      </ul>
-
-      <dl className="ml-auto grid w-full max-w-xs grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm">
-        <dt className="text-muted-foreground">Subtotal</dt>
-        <dd className="text-right tabular-nums">{money(receipt.subtotal)}</dd>
-        <dt className="text-muted-foreground">Tax</dt>
-        <dd className="text-right tabular-nums">{money(receipt.tax)}</dd>
-        <dt className="font-semibold">Total</dt>
-        <dd className="text-right font-semibold tabular-nums">
-          {money(receipt.total)}
-        </dd>
-      </dl>
+      <div className="divide-y rounded-xl border bg-card">
+        <ul aria-label="Items" className="divide-y">
+          {receiptRows(receipt.items).map((row) => (
+            <li key={row.key}>
+              <LineRow row={row} categories={categories.data} />
+            </li>
+          ))}
+        </ul>
+        <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 px-4 py-3 text-sm">
+          <dt className="text-muted-foreground">Subtotal</dt>
+          <dd className="text-right tabular-nums">{money(receipt.subtotal)}</dd>
+          <dt className="text-muted-foreground">Tax</dt>
+          <dd className="text-right tabular-nums">{money(receipt.tax)}</dd>
+          <dt className="font-semibold">Total</dt>
+          <dd className="text-right font-semibold tabular-nums">
+            {money(receipt.total)}
+          </dd>
+        </dl>
+      </div>
     </article>
   );
 }
@@ -180,9 +181,9 @@ function Tile({
   className?: string;
 }) {
   return (
-    <div className="flex flex-1 flex-col rounded-xl border bg-card px-4 py-3">
+    <div className="flex flex-1 flex-col rounded-xl border bg-card px-4 py-2">
       <span className="text-sm text-muted-foreground">{label}</span>
-      <span className={cn("text-xl font-semibold tabular-nums", className)}>
+      <span className={cn("text-lg font-semibold tabular-nums", className)}>
         {value}
       </span>
     </div>
@@ -201,21 +202,29 @@ function LineRow({
       ? null
       : (categories?.find((option) => option.value === row.category)?.label ??
         row.category);
+  const unit = row.unit === "kg" || row.unit === "lb" ? row.unit : null;
+  const weight = unit === null ? row.quantity : `${row.quantity} ${unit}`;
+  const details = [
+    !row.weighed
+      ? null
+      : row.pricePerUnit === null
+        ? weight
+        : `${weight} @ ${formatMoney(row.pricePerUnit)}${unit === null ? "" : `/${unit}`}`,
+    category ?? row.printed,
+  ].filter(Boolean);
   const content = (
     <>
       <div className="min-w-0">
         <p className="font-medium break-words">
           {row.name}
-          {Number(row.quantity) === 1 ? null : ` ×${row.quantity}`}
+          {!row.weighed && Number(row.quantity) !== 1
+            ? ` ×${row.quantity}`
+            : null}
         </p>
-        {row.printed !== null ? (
-          <p className="truncate font-mono text-xs text-muted-foreground">
-            {row.printed}
-          </p>
-        ) : category !== null ? (
+        {details.length > 0 ? (
           <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <CategoryDot category={row.category} />
-            {category}
+            <span className="truncate">{details.join(" · ")}</span>
           </p>
         ) : null}
       </div>
@@ -232,7 +241,7 @@ function LineRow({
     </>
   );
   const className =
-    "flex min-h-14 items-center justify-between gap-3 px-4 py-3";
+    "flex min-h-12 items-center justify-between gap-3 px-4 py-2";
   return row.productId === null ? (
     <div className={className}>{content}</div>
   ) : (

@@ -572,6 +572,7 @@ export interface components {
             quantity: string;
             /** Raw Text */
             raw_text: string;
+            unit: components["schemas"]["LineUnit"] | null;
             unit_price: components["schemas"]["MoneyOut"] | null;
         };
         /**
