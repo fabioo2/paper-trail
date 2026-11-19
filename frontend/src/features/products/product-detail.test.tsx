@@ -79,6 +79,37 @@ async function purchasesSection(): Promise<HTMLElement> {
 }
 
 describe("Product detail", () => {
+  it("marks a product with guesses by an AI badge right after its name, and not once all are checked", async () => {
+    serveProduct(purchases);
+    renderApp("/products/5");
+
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "Kirkland Organic Eggs",
+    });
+    const badge = screen.getByRole("img", {
+      name: "Has details Claude guessed",
+    });
+    expect(heading.nextElementSibling).toBe(badge);
+    expect(badge).toHaveAttribute("title", "Has details Claude guessed");
+    expect(badge).toHaveTextContent("AI");
+  });
+
+  it("shows no AI badge when nothing is a guess", async () => {
+    serveProduct(purchases, {
+      field_sources: { canonical_name: "person", category: "person" },
+    });
+    renderApp("/products/5");
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Kirkland Organic Eggs",
+    });
+    expect(
+      screen.queryByRole("img", { name: "Has details Claude guessed" }),
+    ).toBeNull();
+  });
+
   it("shows the product once with its purchases newest first, each linking to its receipt", async () => {
     serveProduct(purchases);
 

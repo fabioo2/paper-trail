@@ -178,11 +178,11 @@ describe("Products tab", () => {
     const rows = await productRows();
     expect(rows[1]).toHaveAttribute("href", "/products/5");
     expect(rows.map(textOf)).toEqual([
-      `Gold KiwiMetro · 2×${formatMoney(cad(168))}↑up 8%`,
-      `Kirkland Organic EggsCostco · 3×${formatMoney(cad(1199))}↓down 25%`,
+      `Gold KiwiAIMetro · 2×${formatMoney(cad(168))}↑up 8%`,
+      `Kirkland Organic EggsAICostco · 3×${formatMoney(cad(1199))}↓down 25%`,
       `Natrel 2% MilkCostco · 1× · ${formatMoney(cad(152))}/L${formatMoney(cad(609))}first time`,
       `Orange PepperMetro · 2× · ${formatMoney(cad(500))}/kg${formatMoney(cad(226))}steady`,
-      `Undated BreadMetro · 2×${formatMoney(cad(399))}`,
+      `Undated BreadAIMetro · 2×${formatMoney(cad(399))}`,
     ]);
     expect(
       rows.map((row) => row.querySelector("[data-sparkline]") !== null),
@@ -190,7 +190,9 @@ describe("Products tab", () => {
     expect(
       rows.map(
         (row) =>
-          within(row).queryByRole("img", { name: "Has AI guesses" }) !== null,
+          within(row).queryByRole("img", {
+            name: "Has details Claude guessed",
+          }) !== null,
       ),
     ).toEqual([true, true, false, false, true]);
     expect(
