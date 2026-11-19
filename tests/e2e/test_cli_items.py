@@ -9,19 +9,27 @@ Pinned (docs/tests/agent-core-C.md):
 - Exit codes: 0 corrected; 2 neither or both of ``--product-id``/``--new-product``, or an unknown
   category (Typer); 1 an unknown receipt, line or product, or the main database not migrated
   (the ``db upgrade`` hint).
+- ``paper-trail items merge PRODUCT_ID --into N [--apply] [--run NAME]`` (D7): a dry run shows
+  what would move and that only a backup undoes it; ``--apply`` merges and prints one line.
+  Exit 2 for a product merged into itself or a missing or non-numeric ``--into``; 1 for an
+  unknown product or a job waiting.
 - The terminal row of the ``save_matches`` step counts the sources (``alias 3``).
 - Product codes (PC-TC-75): a new product is stamped ``canonical_name: person``; ``--category``
   with ``--product-id`` writes the product's category with source ``person``.
 """
 
 import json
+import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from typer.testing import Result
 
+from paper_trail.adapters.sqlite.engine import create_engine
 from paper_trail.config import DATABASE_FILENAME
+from paper_trail.domain.enums import JobKind
 from tests.e2e.agent_cli import (
     StartClaude,
     configure_cli,
@@ -32,6 +40,8 @@ from tests.e2e.agent_cli import (
     run_database,
 )
 from tests.extractions import EGGS_ALIAS, answer
+from tests.fakes.clock import FakeClock
+from tests.storage import in_unit, sqlite_uow_factory
 
 RUN = "e2"
 
@@ -160,34 +170,47 @@ def test_correct_with_an_existing_product_and_a_category(two_receipts: Path) -> 
 @pytest.mark.parametrize(
     "args",
     [
-        ("2", "0"),
-        ("2", "0", "--product-id", "1", "--new-product", "Eggs"),
-        ("2", "0", "--product-id", "1", "--category", "groceries"),
+        ("correct", "2", "0"),
+        ("correct", "2", "0", "--product-id", "1", "--new-product", "Eggs"),
+        ("correct", "2", "0", "--product-id", "1", "--category", "groceries"),
+        ("merge", "1"),
+        ("merge", "1", "--into", "abc"),
+        ("merge", "2", "--into", "2", "--apply"),
     ],
-    ids=["neither", "both", "unknown-category"],
+    ids=["neither", "both", "unknown-category", "merge-no-into", "merge-into-text", "merge-itself"],
 )
 def test_usage_errors_are_exit_2(two_receipts: Path, args: tuple[str, ...]) -> None:
-    code, output = _correct(*args)
+    before = _contents(two_receipts)
 
-    assert code == 2, output
-    assert "No such" not in output  # refused by the command, not unknown to the CLI
-    assert rows(two_receipts, "SELECT count(*) FROM corrections") == [(0,)]
+    result = invoke("items", *args, "--run", RUN)
+
+    assert result.exit_code == 2, result.output
+    assert "No such" not in result.output  # refused by the command, not unknown to the CLI
+    assert _contents(two_receipts) == before
 
 
 @pytest.mark.parametrize(
-    "args",
+    ("args", "message"),
     [
-        ("9", "0", "--product-id", "1"),
-        ("2", "9", "--product-id", "1"),
-        ("2", "0", "--product-id", "999"),
+        (("correct", "9", "0", "--product-id", "1"), "receipt 9"),
+        (("correct", "2", "9", "--product-id", "1"), "position 9"),
+        (("correct", "2", "0", "--product-id", "999"), "product 999"),
+        (("merge", "999", "--into", "1", "--apply"), "product 999 does not exist"),
+        (("merge", "1", "--into", "999"), "product 999 does not exist"),
+        (("merge", "1", "--into", "2", "--apply"), "Receipt 1 is being read."),
     ],
-    ids=["receipt", "line", "product"],
+    ids=["receipt", "line", "product", "merge-unknown", "merge-unknown-into", "merge-busy"],
 )
-def test_unknown_things_are_exit_1(two_receipts: Path, args: tuple[str, ...]) -> None:
-    code, output = _correct(*args)
+def test_unknown_things_are_exit_1(two_receipts: Path, args: tuple[str, ...], message: str) -> None:
+    if message.startswith("Receipt 1"):
+        _queue_a_job(two_receipts)
+    before = _contents(two_receipts)
 
-    assert code == 1, output
-    assert rows(two_receipts, "SELECT count(*) FROM corrections") == [(0,)]
+    result = invoke("items", *args, "--run", RUN)
+
+    assert result.exit_code == 1, result.output
+    assert message in result.output
+    assert _contents(two_receipts) == before
 
 
 def test_the_main_database_must_be_migrated(data_dir: Path) -> None:
@@ -197,3 +220,75 @@ def test_the_main_database_must_be_migrated(data_dir: Path) -> None:
 
     assert result.exit_code == 1, result.output
     assert "db upgrade" in result.output
+
+
+def _contents(database: Path) -> list[object]:
+    """Every row a merge or a correction could change."""
+    return [
+        rows(database, f"SELECT * FROM {table} ORDER BY id")  # noqa: S608 - fixed table names
+        for table in (
+            "products",
+            "line_items",
+            "price_observations",
+            "product_codes",
+            "product_aliases",
+            "corrections",
+        )
+    ]
+
+
+def _line_products(database: Path) -> list[int]:
+    return [
+        product_id
+        for (product_id,) in rows(
+            database, "SELECT product_id FROM line_items ORDER BY receipt_id, position"
+        )
+    ]
+
+
+def test_merge_shows_what_would_move_and_writes_nothing_without_apply(two_receipts: Path) -> None:
+    """D7-01: eggs (product 1, named by a person) bought on both receipts, merged into milk
+    (product 2, printed): milk as it is now, and kept under the person's name. A job waiting
+    does not stop a dry run, which writes nothing."""
+    with closing(sqlite3.connect(two_receipts)) as connection, connection:
+        connection.execute(
+            "UPDATE products SET canonical_name = 'My eggs',"
+            ' field_sources = \'{"canonical_name": "person"}\' WHERE id = 1'
+        )
+    _queue_a_job(two_receipts)
+    before = _contents(two_receipts)
+
+    result = invoke("items", "merge", "1", "--into", "2", "--run", RUN)
+
+    assert result.exit_code == 0, result.output
+    names = dict(rows(two_receipts, "SELECT id, canonical_name FROM products"))
+    assert "product 1 My eggs" in result.output
+    assert f"product 2 {names[2]}:\n  kept as: My eggs" in result.output
+    assert "moving: 2 purchases, 0 codes, 1 aliases" in result.output
+    assert "can only be undone by restoring a backup" in result.output
+    assert _contents(two_receipts) == before
+
+
+def test_merge_with_apply_moves_every_purchase(two_receipts: Path) -> None:
+    """D7-02."""
+    names = dict(rows(two_receipts, "SELECT id, canonical_name FROM products"))
+    lines = _line_products(two_receipts)
+
+    result = invoke("items", "merge", "1", "--into", "2", "--apply", "--run", RUN)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        f"product 1 {names[1]} merged into product 2 {names[2]}: 2 purchases moved\n"
+    )
+    assert _line_products(two_receipts) == [2 if pid == 1 else pid for pid in lines]
+    assert [pid for (pid,) in rows(two_receipts, "SELECT id FROM products")] == [2, 3]
+
+
+def _queue_a_job(database: Path) -> None:
+    """Receipt 1 waits to be read."""
+    engine = create_engine(database)
+    in_unit(
+        sqlite_uow_factory(engine, FakeClock()),
+        lambda uow: uow.jobs.enqueue(JobKind.PROCESS_RECEIPT, 1, max_attempts=1),
+    )
+    engine.dispose()

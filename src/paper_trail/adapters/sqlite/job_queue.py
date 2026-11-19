@@ -227,6 +227,16 @@ class SqliteJobQueue:
         ).scalar_one()
         return count
 
+    def active_receipts(self) -> tuple[int, ...]:
+        return tuple(
+            self._connection.execute(
+                select(jobs.c.receipt_id)
+                .where(jobs.c.status.in_((JobStatus.PENDING, JobStatus.RUNNING)))
+                .distinct()
+                .order_by(jobs.c.receipt_id)
+            ).scalars()
+        )
+
     def get(self, job_id: int) -> Job | None:
         row = (
             self._connection.execute(select(jobs).where(jobs.c.id == job_id))

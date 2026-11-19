@@ -158,3 +158,18 @@ def test_h2_12_h3_10_retry_failure_reason_and_unit_are_in_the_contract(app: Fast
         "unknown",
     ]
     assert schemas["LineUnit"]["enum"] == ["each", "kg", "lb"]
+
+
+def test_merge_product_is_in_the_contract(app: FastAPI) -> None:
+    """D6-05: the body, the kept product back and each refusal as a problem."""
+    spec = app.openapi()
+    merge = spec["paths"]["/api/products/{product_id}/merge"]["post"]
+    body = merge["requestBody"]["content"]["application/json"]["schema"]
+
+    assert merge["operationId"] == "mergeProduct"
+    assert spec["components"]["schemas"][body["$ref"].rsplit("/", 1)[1]]["required"] == ["into_id"]
+    assert merge["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ProductOut"
+    }
+    for status in ("404", "409", "422"):
+        assert "application/problem+json" in merge["responses"][status]["content"]

@@ -97,3 +97,11 @@ class SqliteProductCodeRepository:
             )
         )
         return bool(result.rowcount)
+
+    def move_product(self, product_id: int, into_id: int) -> int:
+        result = self._connection.execute(
+            update(product_codes)
+            .where(product_codes.c.product_id == product_id)
+            .values(product_id=into_id)
+        )
+        return result.rowcount

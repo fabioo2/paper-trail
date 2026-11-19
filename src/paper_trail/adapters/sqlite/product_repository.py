@@ -11,6 +11,7 @@ from sqlalchemy import (
     RowMapping,
     Subquery,
     and_,
+    delete,
     func,
     insert,
     or_,
@@ -216,6 +217,20 @@ class SqliteProductRepository:
             .order_by(product_aliases.c.id)
         ).mappings()
         return tuple(alias_from_row(row) for row in rows)
+
+    def move_aliases(self, product_id: int, into_id: int) -> int:
+        result = self._connection.execute(
+            update(product_aliases)
+            .where(product_aliases.c.product_id == product_id)
+            .values(product_id=into_id)
+        )
+        return result.rowcount
+
+    def delete(self, product_id: int) -> None:
+        result = self._connection.execute(delete(products).where(products.c.id == product_id))
+        if not result.rowcount:
+            msg = f"product {product_id} does not exist"
+            raise NotFoundError(msg)
 
     def _alias_row(self, alias: str, store_key: str | None) -> RowMapping | None:
         """The row stored under exactly (alias, store_key); a NULL store key is a key too."""

@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from paper_trail.application.catalog import ProductEdit, TodoRow
 from paper_trail.application.enrichment import MAX_NAME_CHARS, MAX_TAG_CHARS
@@ -191,3 +191,11 @@ class ProductConfirmIn(BaseModel):
 
     fields: list[FieldSourceKey] | None = Field(default=None, min_length=1)
     expected: dict[FieldSourceKey, str | list[str] | None] | None = None
+
+
+class ProductMergeIn(BaseModel):
+    """The product the merged one is the same as: it is kept, the merged one is deleted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    into_id: StrictInt = Field(ge=1)

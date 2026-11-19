@@ -77,7 +77,8 @@ tools_app = typer.Typer(
 )
 app.add_typer(tools_app, name="tools")
 items_app = typer.Typer(
-    help="Receipt lines: correct the product a line is linked to.", no_args_is_help=True
+    help="Receipt lines and products: correct a line's product, merge two products.",
+    no_args_is_help=True,
 )
 app.add_typer(items_app, name="items")
 prices_app = typer.Typer(
@@ -534,6 +535,27 @@ def items_correct(  # noqa: PLR0913 - one parameter per command-line option
         new_product=new_product,
         category=category,
     )
+
+
+@items_app.command("merge")
+def items_merge(
+    product_id: Annotated[int, typer.Argument(metavar="PRODUCT_ID")],
+    *,
+    into: Annotated[
+        int,
+        typer.Option("--into", metavar="N", help="The same product, which is kept."),
+    ],
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Merge (default: show what would move).")
+    ] = False,
+    run: RunOption = None,
+) -> None:
+    """Merge a product into the same one: its purchases, prices, codes and aliases move there."""
+    from paper_trail.interfaces.cli.items import merge_products
+
+    settings = load_settings()
+    configure_agent_logging(settings)
+    merge_products(settings, run, product_id, into, apply=apply)
 
 
 @prices_app.command("backfill")

@@ -41,7 +41,6 @@ from paper_trail.domain.enums import (
     FieldSource,
     Unit,
 )
-from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import (
     OPEN_SOURCES,
     JsonValue,
@@ -54,7 +53,14 @@ from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from paper_trail.tools.inprocess import InProcessToolGateway
 from tests.agent_harness import TOOL_TRANSPORTS, Harness, build_harness, mcp_gateway
 from tests.extractions import C1, L1, L3, L4, LOBLAWS_KEY, PLU_CSV, U1, WALMART_KEY
-from tests.factories import CREATED_AT, MASKED_TEST_PAN, TEST_PAN, at, correction, product
+from tests.factories import (
+    CREATED_AT,
+    MASKED_TEST_PAN,
+    TEST_PAN,
+    at,
+    correction,
+    product,
+)
 from tests.fakes.catalog import FakeCatalog
 from tests.fakes.reader import ScriptedReader
 from tests.mcp_server import serve_mcp
@@ -449,15 +455,16 @@ def test_an_extra_field_is_refused(harness: Harness, gateway: ToolGateway) -> No
     assert _snapshot(harness) == before
 
 
-def test_an_unknown_product_is_not_found_and_nothing_is_written(
+def test_a_product_that_no_longer_exists_is_skipped_and_nothing_is_written(
     harness: Harness, gateway: ToolGateway
 ) -> None:
+    """Cleanup D: a resumed run's description of a product merged away answers no product."""
     product_id = _add(harness, _printed("TST APPLE"))
     before = _snapshot(harness)
 
-    with pytest.raises(NotFoundError, match=f"product {product_id + 100} does not exist"):
-        _describe(gateway, product_id + 100, {"category": "produce"}, {"category": "plu"})
+    described = _describe(gateway, product_id + 100, {"category": "produce"}, {"category": "plu"})
 
+    assert described == {"product": None}
     assert _snapshot(harness) == before
 
 

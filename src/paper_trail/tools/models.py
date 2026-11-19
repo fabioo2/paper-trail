@@ -247,4 +247,4 @@ class DescribeFromCatalogInput(_Model):
 
 
 class DescribeFromCatalogOutput(_Model):
-    product: ProductOut  # as stored
+    product: ProductOut | None  # as stored; None when it no longer exists (nothing written)

@@ -40,6 +40,8 @@ from paper_trail.application.products import (
     GetProducts,
     ListProductPurchases,
     ListProducts,
+    MergeCandidates,
+    MergeProducts,
 )
 from paper_trail.application.receipts import (
     AnswerReview,
@@ -82,6 +84,8 @@ class Container:
     list_product_purchases: ListProductPurchases
     edit_product: EditProduct
     confirm_product: ConfirmProduct
+    merge_products: MergeProducts
+    merge_candidates: MergeCandidates
     backfill_prices: BackfillPrices
     catalog_todo: CatalogTodo
     add_catalog_code: AddCatalogCode
@@ -136,6 +140,8 @@ def build_container(settings: Settings) -> Container:
         list_product_purchases=ListProductPurchases(uow_factory),
         edit_product=EditProduct(uow_factory),
         confirm_product=ConfirmProduct(uow_factory),
+        merge_products=MergeProducts(uow_factory),
+        merge_candidates=MergeCandidates(uow_factory),
         backfill_prices=BackfillPrices(uow_factory),
         catalog_todo=CatalogTodo(uow_factory),
         add_catalog_code=AddCatalogCode(uow_factory, clock),
