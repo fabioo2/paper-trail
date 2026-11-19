@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { FieldSource } from "@/features/products/api";
+import { cn } from "@/lib/utils";
 
 const SOURCE_LABELS: Record<Exclude<FieldSource, "llm">, string> = {
   receipt_text: "printed",
@@ -18,15 +19,7 @@ export function FieldSourceMark({
 }) {
   if (source === undefined) return null;
   if (source === "llm") {
-    return (
-      <Badge
-        variant="outline"
-        className="border-warning px-1.5 py-0 text-[10px]"
-        title="Guessed by Claude"
-      >
-        AI
-      </Badge>
-    );
+    return <GuessBadge label="Guessed by Claude" />;
   }
   return (
     <span className="text-xs font-normal text-muted-foreground">
@@ -35,14 +28,23 @@ export function FieldSourceMark({
   );
 }
 
-/** A small dot on a product with fields Claude guessed and nobody has checked. */
-export function GuessDot() {
+/** The small "AI" marker for Claude's guesses, on a field or on a product that has some. */
+export function GuessBadge({
+  label = "Has details Claude guessed",
+  className,
+}: {
+  label?: string;
+  className?: string;
+}) {
   return (
-    <span
+    <Badge
+      variant="outline"
       role="img"
-      aria-label="Has AI guesses"
-      title="Has AI guesses"
-      className="inline-block size-2 shrink-0 rounded-full bg-warning"
-    />
+      aria-label={label}
+      title={label}
+      className={cn("border-warning px-1.5 py-0 text-[10px]", className)}
+    >
+      AI
+    </Badge>
   );
 }

@@ -5,6 +5,7 @@ import {
   Check,
   CheckCheck,
   CloudOff,
+  Pencil,
   RotateCcw,
   TriangleAlert,
   X,
@@ -16,7 +17,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  type Category,
   type FieldSourceKey,
   productKeys,
   type ProductOut,
@@ -33,6 +33,7 @@ import {
   useUpdateProduct,
 } from "@/features/products/api";
 import { FieldSourceMark } from "@/features/products/field-source";
+import { changes, fieldsOf } from "@/features/products/fields";
 
 const FIELDS: readonly { key: FieldSourceKey; label: string }[] = [
   { key: "canonical_name", label: "Name" },
@@ -232,6 +233,11 @@ function ProductFields({
     confirm.reset();
     update.mutate({ ...cleared, expected: shownValues(product, [key]) });
   };
+  const edit = (key: FieldSourceKey) => {
+    update.reset();
+    confirm.reset();
+    setEditing(key);
+  };
   const save = (body: ProductUpdateIn) => {
     confirm.reset();
     update.mutate(body, {
@@ -285,13 +291,29 @@ function ProductFields({
               <span className="w-20 shrink-0 text-sm text-muted-foreground">
                 {label}
               </span>
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {valueOf(key) || (
-                  <span className="text-muted-foreground">Not set</span>
-                )}
-              </span>
-              <FieldSourceMark source={product.field_sources[key]} />
               {product.field_sources[key] === "llm" && editing !== key ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 h-auto min-w-0 flex-1 justify-start px-2 py-1 font-normal"
+                  aria-label={`${valueOf(key) ? "Edit" : "Add"} ${label.toLowerCase()}`}
+                  disabled={busy}
+                  onClick={() => {
+                    edit(key);
+                  }}
+                >
+                  <span className="truncate">{valueOf(key)}</span>
+                </Button>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {valueOf(key) || (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </span>
+              )}
+              <FieldSourceMark source={product.field_sources[key]} />
+              {editing === key ? null : product.field_sources[key] === "llm" ? (
                 <span className="flex shrink-0 gap-1">
                   <Button
                     type="button"
@@ -320,7 +342,21 @@ function ProductFields({
                     <X aria-hidden="true" />
                   </Button>
                 </span>
-              ) : null}
+              ) : (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="size-8 shrink-0"
+                  aria-label={`${valueOf(key) ? "Edit" : "Add"} ${label.toLowerCase()}`}
+                  disabled={busy}
+                  onClick={() => {
+                    edit(key);
+                  }}
+                >
+                  <Pencil aria-hidden="true" />
+                </Button>
+              )}
             </div>
             {editing === key ? (
               <FieldEdit
@@ -382,8 +418,13 @@ function sentenceList(words: string[]): string {
   return `The ${text}`;
 }
 
-/** The name or category typed or picked over a rejected guess; saved against the value shown
- * when editing began. */
+const PLACEHOLDERS: Partial<Record<FieldSourceKey, string>> = {
+  size: "500 g",
+  tags: "organic, free-run",
+};
+
+/** One field typed or picked by the person, as the editor takes it; saved against the value
+ * shown when editing began. */
 function FieldEdit({
   field,
   label,
@@ -399,42 +440,31 @@ function FieldEdit({
   onSave: (body: ProductUpdateIn) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState(product.canonical_name);
-  const [category, setCategory] = useState<Category | "">(
-    product.category ?? "",
-  );
+  const [initial] = useState(() => fieldsOf(product));
+  const [fields, setFields] = useState(initial);
   const [expected] = useState(() => shownValues(product, [field]));
   const categories = useCategories();
+  const body = changes(initial, fields);
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
-    if (field === "canonical_name") onSave({ canonical_name: name, expected });
-    else if (category !== "") onSave({ category, expected });
+    onSave({ ...body, expected });
+  };
+  const set = (event: { target: { value: string } }) => {
+    setFields((current) => ({ ...current, [field]: event.target.value }));
   };
   const blank =
-    field === "canonical_name" ? name.trim() === "" : category === "";
+    Object.keys(body).length === 0 || fields.canonical_name.trim() === "";
 
   return (
     <form className="flex flex-col gap-2" onSubmit={submit}>
-      {field === "canonical_name" ? (
-        <Input
-          aria-label={`New ${label.toLowerCase()}`}
-          required
-          maxLength={120}
-          value={name}
-          onChange={(event) => {
-            setName(event.target.value);
-          }}
-        />
-      ) : (
+      {field === "category" ? (
         <select
           aria-label={`New ${label.toLowerCase()}`}
-          value={category}
-          onChange={(event) => {
-            setCategory(event.target.value as Category);
-          }}
+          value={fields.category}
+          onChange={set}
           className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
         >
-          {category === "" ? (
+          {fields.category === "" ? (
             <option value="" disabled>
               Not set
             </option>
@@ -445,6 +475,17 @@ function FieldEdit({
             </option>
           ))}
         </select>
+      ) : (
+        <Input
+          aria-label={`New ${label.toLowerCase()}`}
+          required={field === "canonical_name"}
+          maxLength={
+            field === "canonical_name" || field === "brand" ? 120 : undefined
+          }
+          placeholder={PLACEHOLDERS[field]}
+          value={fields[field]}
+          onChange={set}
+        />
       )}
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={busy || blank}>

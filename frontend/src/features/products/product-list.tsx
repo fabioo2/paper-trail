@@ -16,7 +16,7 @@ import {
   useProductList,
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
-import { GuessDot } from "@/features/products/field-source";
+import { GuessBadge } from "@/features/products/field-source";
 import { sparklinePoints } from "@/features/products/price-chart";
 import {
   comparablePrices,
@@ -254,7 +254,7 @@ function ProductRow({ product }: { product: ProductSummaryOut }) {
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 font-medium">
           <span className="truncate">{product.canonical_name}</span>
-          {hasSuggestion(product) ? <GuessDot /> : null}
+          {hasSuggestion(product) ? <GuessBadge /> : null}
         </p>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <CategoryDot category={product.category} />

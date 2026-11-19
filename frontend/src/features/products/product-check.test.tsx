@@ -37,6 +37,27 @@ const milk = product({
   field_sources: { canonical_name: "llm" },
 });
 
+const rice = product({
+  id: 8,
+  canonical_name: "Basmati Rice",
+  brand: null,
+  size_value: null,
+  size_unit: null,
+  category: "pantry",
+  tags: [],
+  field_sources: { canonical_name: "llm", category: "plu" },
+});
+
+const sizeProblem: ProblemDetail = {
+  type: "/problems/validation",
+  title: "Unprocessable Entity",
+  status: 422,
+  detail:
+    "size 'a dozen': give a positive number and one of g, kg, ml, l, each",
+  instance: "/api/products/8",
+  errors: null,
+};
+
 const PRINTED: Record<number, string> = {
   5: "KS ORG EGGS 24CT",
   6: "GOLD KIWI",
@@ -173,8 +194,15 @@ function serveQueue(...products: ProductOut[]): Backend {
         ...before,
         canonical_name: body.canonical_name ?? before.canonical_name,
         brand: body.brand === undefined ? before.brand : body.brand || null,
-        size_value: body.size === "" ? null : before.size_value,
-        size_unit: body.size === "" ? null : before.size_unit,
+        size_value:
+          body.size === undefined
+            ? before.size_value
+            : (body.size.split(" ")[0] ?? "") || null,
+        size_unit:
+          body.size === undefined
+            ? before.size_unit
+            : (((body.size.split(" ")[1] ?? "") ||
+                null) as ProductOut["size_unit"]),
         category: body.category ?? before.category,
         tags: body.tags ?? before.tags,
         field_sources: sources,
@@ -227,7 +255,20 @@ describe("Product checking", () => {
     ]);
     expect(
       rows.map((row) => within(row).queryAllByRole("button").length),
-    ).toEqual([2, 0, 0, 2, 0]);
+    ).toEqual([3, 1, 1, 3, 1]);
+    expect(
+      rows.map((row) =>
+        within(row)
+          .queryAllByRole("button")
+          .map((button) => button.getAttribute("aria-label")),
+      ),
+    ).toEqual([
+      ["Edit name", "Accept name", "Reject name"],
+      ["Edit brand"],
+      ["Add size"],
+      ["Edit category", "Accept category", "Reject category"],
+      ["Edit tags"],
+    ]);
     expect(textOf(main)).toContain(
       "Why these are marked: The name and category were guessed by Claude from the printed text. Fields from a barcode, the PLU list or you are not marked.",
     );
@@ -249,7 +290,11 @@ describe("Product checking", () => {
     expect(backend.confirms).toEqual([
       [5, { fields: ["category"], expected: { category: "dairy_eggs" } }],
     ]);
-    expect(within(category).queryByRole("button")).toBeNull();
+    expect(
+      within(category)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Edit category"]);
     expect(textOf(await fieldRow("Name"))).toMatch(/AI$/);
   });
 
@@ -285,6 +330,7 @@ describe("Product checking", () => {
       expect(
         within(screen.getByRole("listitem", { name: "Category" })).queryByRole(
           "button",
+          { name: "Accept category" },
         ),
       ).toBeNull();
     });
@@ -374,7 +420,9 @@ describe("Product checking", () => {
       await waitFor(() => {
         expect(textOf(row)).toBe(`${label}Not set`);
       });
-      expect(within(row).queryByRole("button")).toBeNull();
+      expect(
+        within(row).getByRole("button", { name: `Add ${label.toLowerCase()}` }),
+      ).toBeEnabled();
       const field = label.toLowerCase() as Field;
       expect(backend.patches).toEqual([
         [
@@ -388,6 +436,138 @@ describe("Product checking", () => {
       expect(backend.confirms).toEqual([]);
     },
   );
+
+  it.each([
+    ["Brand", "Tilda", { brand: "Tilda" }, "BrandTildayou"],
+    ["Size", "2 kg", { size: "2 kg" }, "Size2 kgyou"],
+    ["Tags", " rice, , bulk ", { tags: ["rice", "bulk"] }, "Tagsrice, bulkyou"],
+  ])(
+    "adds a missing %s, saved against the empty value shown",
+    async (label, typed, sent, row) => {
+      const backend = serveQueue(rice);
+      const user = userEvent.setup();
+      renderApp("/products/check");
+
+      const field = await fieldRow(label);
+      const name = label.toLowerCase();
+      await user.click(
+        within(field).getByRole("button", { name: `Add ${name}` }),
+      );
+      const input = within(field).getByRole("textbox", { name: `New ${name}` });
+      expect(
+        within(field).getByRole("button", { name: "Save" }),
+      ).toBeDisabled();
+      await user.type(input, typed);
+      await user.click(within(field).getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        expect(textOf(field)).toBe(row);
+      });
+      expect(
+        within(field).getByRole("button", { name: `Edit ${name}` }),
+      ).toBeInTheDocument();
+      expect(backend.patches).toEqual([
+        [8, { ...sent, expected: { [name]: null } }],
+      ]);
+    },
+  );
+
+  it("keeps an invalid size open with the API's message and saves nothing", async () => {
+    const backend = serveQueue(rice);
+    server.use(
+      http.patch("/api/products/:productId", () =>
+        HttpResponse.json(sizeProblem, {
+          status: 422,
+          headers: { "content-type": "application/problem+json" },
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp("/products/check");
+
+    const size = await fieldRow("Size");
+    await user.click(within(size).getByRole("button", { name: "Add size" }));
+    await user.type(
+      within(size).getByRole("textbox", { name: "New size" }),
+      "a dozen",
+    );
+    await user.click(within(size).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      sizeProblem.detail ?? "",
+    );
+    expect(within(size).getByRole("textbox", { name: "New size" })).toHaveValue(
+      "a dozen",
+    );
+    expect(backend.stored.get(8)?.size_value).toBeNull();
+  });
+
+  it("refuses to add a brand over one set after editing began", async () => {
+    const backend = serveQueue(rice);
+    const user = userEvent.setup();
+    const { queryClient } = renderApp("/products/check");
+
+    const brand = await fieldRow("Brand");
+    await user.click(within(brand).getByRole("button", { name: "Add brand" }));
+    backend.stored.set(8, { ...rice, brand: "Tilda" });
+    await queryClient.refetchQueries({ queryKey: ["products", "detail", 8] });
+    await user.type(
+      within(brand).getByRole("textbox", { name: "New brand" }),
+      "Kohinoor",
+    );
+    await user.click(within(brand).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This product changed while you were looking.",
+    );
+    expect(backend.patches).toEqual([
+      [8, { brand: "Kohinoor", expected: { brand: null } }],
+    ]);
+    expect(backend.stored.get(8)?.brand).toBe("Tilda");
+  });
+
+  it("corrects a guessed brand in one step by tapping its value", async () => {
+    const backend = serveQueue(kiwi);
+    const user = userEvent.setup();
+    renderApp("/products/check");
+
+    const brand = await fieldRow("Brand");
+    await user.click(within(brand).getByRole("button", { name: "Edit brand" }));
+    const input = within(brand).getByRole("textbox", { name: "New brand" });
+    expect(input).toHaveValue("Zespri");
+    await user.clear(input);
+    await user.type(input, "SunGold");
+    await user.click(within(brand).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(textOf(brand)).toBe("BrandSunGoldyou");
+    });
+    expect(backend.patches).toEqual([
+      [6, { brand: "SunGold", expected: { brand: "Zespri" } }],
+    ]);
+    expect(backend.confirms).toEqual([]);
+  });
+
+  it("edits a field nobody guessed, starting from its value", async () => {
+    const backend = serveQueue(eggs);
+    const user = userEvent.setup();
+    renderApp("/products/check");
+
+    const brand = await fieldRow("Brand");
+    await user.click(within(brand).getByRole("button", { name: "Edit brand" }));
+    const input = within(brand).getByRole("textbox", { name: "New brand" });
+    expect(input).toHaveValue("Kirkland Signature");
+    await user.clear(input);
+    await user.type(input, "Kirkland");
+    await user.click(within(brand).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(textOf(brand)).toBe("BrandKirklandyou");
+    });
+    expect(backend.patches).toEqual([
+      [5, { brand: "Kirkland", expected: { brand: "Kirkland Signature" } }],
+    ]);
+  });
 
   it("rejecting the name opens it for editing and saves what the person types", async () => {
     const backend = serveQueue(eggs);

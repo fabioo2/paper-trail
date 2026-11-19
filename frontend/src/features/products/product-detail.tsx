@@ -18,7 +18,7 @@ import {
   useProductPurchases,
 } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
-import { GuessDot } from "@/features/products/field-source";
+import { GuessBadge } from "@/features/products/field-source";
 import { PriceHistory } from "@/features/products/price-history";
 import { paidPerUnit, unitSuffix } from "@/features/products/prices";
 import { ProductEditor } from "@/features/products/product-editor";
@@ -83,11 +83,13 @@ function ProductView({ product }: { product: ProductOut }) {
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
         <header className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold tracking-tight break-words">
+            <div>
+              <h1 className="inline text-xl font-semibold tracking-tight break-words">
                 {product.canonical_name}
               </h1>
-              {hasSuggestion(product) ? <GuessDot /> : null}
+              {hasSuggestion(product) ? (
+                <GuessBadge className="ml-2 align-middle" />
+              ) : null}
             </div>
             {details ? (
               <p className="flex items-center gap-1.5 text-sm text-muted-foreground">

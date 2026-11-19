@@ -5,54 +5,17 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  type Category,
   type FieldSource,
   type ProductOut,
-  type ProductUpdateIn,
   isStale,
   STALE_MESSAGE,
   shownValues,
-  sizeText,
   useCategories,
   useConfirmProduct,
   useUpdateProduct,
 } from "@/features/products/api";
 import { FieldSourceMark } from "@/features/products/field-source";
-
-interface Fields {
-  canonical_name: string;
-  brand: string;
-  size: string;
-  category: Category | "";
-  tags: string;
-}
-
-function fieldsOf(product: ProductOut): Fields {
-  return {
-    canonical_name: product.canonical_name,
-    brand: product.brand ?? "",
-    size: sizeText(product),
-    category: product.category ?? "",
-    tags: product.tags.join(", "),
-  };
-}
-
-/** Only the fields the person changed, as the API takes them. */
-function changes(before: Fields, after: Fields): ProductUpdateIn {
-  const body: ProductUpdateIn = {};
-  if (after.canonical_name !== before.canonical_name)
-    body.canonical_name = after.canonical_name;
-  if (after.brand !== before.brand) body.brand = after.brand;
-  if (after.size !== before.size) body.size = after.size;
-  if (after.category !== before.category && after.category !== "")
-    body.category = after.category;
-  if (after.tags !== before.tags)
-    body.tags = after.tags
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-  return body;
-}
+import { changes, type Fields, fieldsOf } from "@/features/products/fields";
 
 /** One product's fields, for a person to correct or accept; both are refused (409) when the
  * product changed since the editor opened. */
