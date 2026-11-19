@@ -16,7 +16,7 @@ from sqlalchemy import text
 from paper_trail.application.receipts import GetReceipt, ListReceipts, RecordReceipt
 from paper_trail.bootstrap import Container
 from paper_trail.config import Settings
-from paper_trail.domain.enums import Category, LineKind, MatchSource
+from paper_trail.domain.enums import Category, LineKind, MatchSource, Unit
 from paper_trail.domain.models import ItemLink, Receipt
 from tests.factories import cad, line_item, product, receipt_draft, simple_draft
 from tests.support import require_id
@@ -50,6 +50,7 @@ LINE_KEYS = {
     "raw_text",
     "description",
     "quantity",
+    "unit",
     "unit_price",
     "line_total",
     "product_id",
@@ -80,7 +81,8 @@ def weighed(migrated_container: Container) -> Receipt:
     """A completed receipt with a weighed line and a discount (has an image)."""
     items = (
         line_item(position=0, raw_text="BANANAS", description="Bananas", quantity=Decimal("0.452"),
-                  unit_price=cad(1099), line_total=cad(497), category=Category.PRODUCE),
+                  unit=Unit.KG, unit_price=cad(1099), line_total=cad(497),
+                  category=Category.PRODUCE),
         line_item(position=1, kind=LineKind.DISCOUNT, raw_text="TPD", description="Savings",
                   unit_price=None, line_total=cad(-100)),
     )  # fmt: skip
@@ -138,6 +140,7 @@ def test_s1_ac_22_detail_shape(migrated_client: TestClient, weighed: Receipt) ->
         "raw_text": "BANANAS",
         "description": "Bananas",
         "quantity": "0.452",
+        "unit": "kg",
         "unit_price": {"amount_cents": 1099, "currency": "CAD"},
         "line_total": {"amount_cents": 497, "currency": "CAD"},
         "product_id": None,
