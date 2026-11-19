@@ -280,8 +280,8 @@ export interface paths {
         };
         /**
          * Get a receipt
-         * @description One receipt with its lines (and the products they link to) and an arithmetic report
-         *     computed from the current data.
+         * @description One receipt with its lines (and the products they link to), an arithmetic report
+         *     computed from the current data, and the open review it waits for (``review_id``).
          */
         get: operations["getReceipt"];
         put?: never;
@@ -849,6 +849,8 @@ export interface components {
             payment_last4: string | null;
             /** Purchased On */
             purchased_on: string | null;
+            /** Review Id */
+            review_id: number | null;
             savings: components["schemas"]["MoneyOut"];
             stage: components["schemas"]["ProcessingStage"];
             status: components["schemas"]["ReceiptStatus"];

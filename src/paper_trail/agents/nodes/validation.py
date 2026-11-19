@@ -19,6 +19,7 @@ from paper_trail.application.payloads import IssuePayload
 from paper_trail.domain.rules.completeness import check_completeness
 from paper_trail.domain.rules.dates import parse_receipt_date
 from paper_trail.domain.rules.readings import check_reading
+from paper_trail.ports.clock import local_today
 
 
 def validate_node(deps: AgentDeps) -> Node:
@@ -27,7 +28,7 @@ def validate_node(deps: AgentDeps) -> Node:
             return {"valid": False, "issues": []}
         reading = extraction_reading(state)
         date_text = reading.purchased_on
-        today = deps.clock.now().date()
+        today = local_today(deps.clock)
         purchased_on = None if date_text is None else parse_receipt_date(date_text, today)
         found = [
             *check_reading(reading).issues,

@@ -122,7 +122,9 @@ def reading_draft(
     is ``printed_tax`` of the subtotal, total and taxes. ``ocr_text`` is None.
 
     The ITEM line's unit price is its regular price divided by its quantity, so that the stored
-    line multiplies back to its total; None when no such price does (within one cent). The
+    line multiplies back to its total; None when no such price does (within one cent). An item
+    whose printed unit price fails ``LINE_MATH`` keeps that printed price instead, so the draft
+    fails the same check and a person sees (and must fix or force) the conflict. The
     mapping never fails: a discount larger than its item's regular price (which
     ``check_reading`` reports) stays unlinked, at receipt level."""
     store_key = normalize_store_name(reading.store_name)
@@ -229,6 +231,8 @@ def _linkable(item: ReadItem) -> bool:
 
 
 def _unit_price(item: ReadItem) -> Money | None:
+    if item.unit_price is not None and _weighed_mismatch(item, DEFAULT_TOLERANCES) is not None:
+        return item.unit_price
     price = item.regular_price.divided_by(item.quantity)
     off = abs((price.times(item.quantity) - item.regular_price).amount_cents)
     return price if off <= DEFAULT_TOLERANCES.per_line_cents else None
@@ -262,21 +266,31 @@ def _item_issues(
             ' read: copy it as printed, e.g. "2.18", "$2.18/kg" or "3/$10.00"'
         )
         issues.append(ArithmeticIssue(IssueCode.LINE_MATH, message, None, regular, position))
-    if item.unit_price is not None and (item.unit in WEIGHED_UNITS or item.quantity > 1):
-        unit = item.unit_price_exact
-        exact = (Fraction(item.unit_price.amount_cents) if unit is None else unit) * Fraction(
-            item.quantity
+    weighed = _weighed_mismatch(item, tolerances)
+    if item.unit_price is not None and weighed is not None:
+        message = (
+            f"{_named(number, item)}: {item.quantity} {item.unit.value} x"
+            f" {item.unit_price.amount_text} = {weighed.amount_text}, but the regular price"
+            f" is {regular.amount_text} and the price paid {paid.amount_text}"
         )
-        weighed = Money(_rounded(exact), item.unit_price.currency)
-        tolerance = tolerances.per_line_cents
-        if all(_differs(weighed, price, tolerance) for price in (regular, paid)):
-            message = (
-                f"{_named(number, item)}: {item.quantity} {item.unit.value} x"
-                f" {item.unit_price.amount_text} = {weighed.amount_text}, but the regular price"
-                f" is {regular.amount_text} and the price paid {paid.amount_text}"
-            )
-            issues.append(ArithmeticIssue(IssueCode.LINE_MATH, message, weighed, regular, position))
+        issues.append(ArithmeticIssue(IssueCode.LINE_MATH, message, weighed, regular, position))
     return issues
+
+
+def _weighed_mismatch(item: ReadItem, tolerances: Tolerances) -> Money | None:
+    """Quantity x the printed unit price, when it is checked (weighed, or bought more than
+    once) and matches neither the regular nor the paid price; else None."""
+    if item.unit_price is None or not (item.unit in WEIGHED_UNITS or item.quantity > 1):
+        return None
+    unit = item.unit_price_exact
+    exact = (Fraction(item.unit_price.amount_cents) if unit is None else unit) * Fraction(
+        item.quantity
+    )
+    weighed = Money(_rounded(exact), item.unit_price.currency)
+    prices = (item.regular_price, item.price_paid)
+    if all(_differs(weighed, price, tolerances.per_line_cents) for price in prices):
+        return weighed
+    return None
 
 
 def _receipt_issues(reading: ReceiptReading, tolerances: Tolerances) -> list[ArithmeticIssue]:

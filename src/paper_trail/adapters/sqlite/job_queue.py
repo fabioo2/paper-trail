@@ -153,7 +153,14 @@ class SqliteJobQueue:
         self._owned(job_id, worker_id)
         self._finish(job_id, JobStatus.PENDING, available_at=available_at)
 
-    def hold(self, receipt_id: int, holder: str, lease: timedelta) -> Job:
+    def hold(
+        self,
+        receipt_id: int,
+        holder: str,
+        lease: timedelta,
+        *,
+        payload: Mapping[str, JsonValue] | None = None,
+    ) -> Job:
         active = (
             self._connection.execute(
                 select(jobs.c.id, jobs.c.status)
@@ -186,6 +193,7 @@ class SqliteJobQueue:
                     available_at=now,
                     locked_by=holder,
                     lease_expires_at=now + lease,
+                    payload=payload,
                     created_at=now,
                     updated_at=now,
                 )

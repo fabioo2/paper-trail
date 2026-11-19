@@ -387,7 +387,18 @@ function ReceiptProgress({
           description="Paper Trail read the receipt, but some numbers don't add up. Check them before relying on it."
         >
           <ReceiptFacts receipt={receipt} />
-          <ReceiptLink receiptId={receipt.id}>Review receipt</ReceiptLink>
+          {receipt.review_id === null ? (
+            <ReceiptLink receiptId={receipt.id}>Review receipt</ReceiptLink>
+          ) : (
+            <Button asChild size="lg" className="h-12 w-full">
+              <Link
+                to="/review/$reviewId"
+                params={{ reviewId: String(receipt.review_id) }}
+              >
+                Review receipt
+              </Link>
+            </Button>
+          )}
           <ScanAnother onClick={onStartOver} />
         </StatusCard>
       );

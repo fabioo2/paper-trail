@@ -41,6 +41,7 @@ DETAIL_KEYS = SUMMARY_KEYS | {
     "failure_reason",
     "items",
     "arithmetic",
+    "review_id",
 }
 LINE_KEYS = {
     "id",
@@ -152,6 +153,7 @@ def test_s1_ac_22_detail_shape(migrated_client: TestClient, weighed: Receipt) ->
     assert savings["unit_price"] is None
     assert savings["line_total"] == {"amount_cents": -100, "currency": "CAD"}
     assert body["arithmetic"] == {"ok": True, "issues": []}
+    assert body["review_id"] is None
 
 
 def test_s1_ac_22_detail_without_image_or_date(

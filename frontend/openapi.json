@@ -1262,6 +1262,17 @@
             ],
             "title": "Purchased On"
           },
+          "review_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Id"
+          },
           "savings": {
             "$ref": "#/components/schemas/MoneyOut"
           },
@@ -1322,7 +1333,8 @@
           "has_image",
           "failure_reason",
           "items",
-          "arithmetic"
+          "arithmetic",
+          "review_id"
         ],
         "title": "ReceiptDetailOut",
         "type": "object"
@@ -2919,7 +2931,7 @@
     },
     "/api/receipts/{receipt_id}": {
       "get": {
-        "description": "One receipt with its lines (and the products they link to) and an arithmetic report\ncomputed from the current data.",
+        "description": "One receipt with its lines (and the products they link to), an arithmetic report\ncomputed from the current data, and the open review it waits for (``review_id``).",
         "operationId": "getReceipt",
         "parameters": [
           {

@@ -63,3 +63,22 @@ def test_a_date_over_a_year_old_is_reported_as_a_misread() -> None:
 
 def test_a_date_within_a_year_is_complete() -> None:
     assert check_completeness("SUPERSTORE", "25/11/08", date(2025, 11, 8), DAY) == ()
+
+
+@pytest.mark.parametrize(
+    ("purchased_on", "aged", "codes"),
+    [
+        (date(2026, 11, 8), True, [IssueCode.MISSING_DATE]),
+        (date(2026, 11, 8), False, [IssueCode.MISSING_DATE]),
+        (date(2026, 11, 7), True, []),
+        (date(2024, 1, 15), True, [IssueCode.MISSING_DATE]),
+        (date(2024, 1, 15), False, []),
+    ],
+    ids=["future", "future-not-aged", "today", "over-a-year", "over-a-year-not-aged"],
+)
+def test_a_date_after_today_is_never_complete_and_an_old_one_only_where_age_counts(
+    purchased_on: date, aged: bool, codes: list[IssueCode]
+) -> None:
+    issues = check_completeness("Costco", purchased_on.isoformat(), purchased_on, DAY, aged=aged)
+
+    assert [issue.code for issue in issues] == codes

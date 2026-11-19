@@ -33,10 +33,11 @@ from tests.e2e.agent_cli import (
     run_database,
     write_json,
 )
-from tests.extractions import inconsistent_answer
+from tests.extractions import codex_answer, inconsistent_answer
 from tests.fakes.anthropic_server import FakeClaude
 
 RUN = "rv"
+FORCED = ("--force", "--reason", "checked the paper")
 # What the validator says about inconsistent_answer(): the items add up to 25.46.
 SHORT_SUM = "25.46"
 
@@ -121,7 +122,7 @@ def test_ac_a_08_resolve_with_a_corrected_file_resumes_and_completes(
     calls = parked.calls
     corrected = write_json(tmp_path / "corrected.json", CORRECTED)
 
-    code, output = _review("resolve", "1", "--file", str(corrected))
+    code, output = _review("resolve", "1", "--file", str(corrected), *FORCED)
 
     assert code == 0, output
     assert "receipt 1: completed" in output
@@ -235,8 +236,67 @@ def test_ac_a_08_an_invalid_file_names_the_field(
 def test_unknown_and_closed_reviews_exit_1(parked: FakeClaude, tmp_path: Path) -> None:
     corrected = write_json(tmp_path / "corrected.json", CORRECTED)
 
-    assert _review("resolve", "9", "--file", str(corrected))[0] == 1
-    assert _review("resolve", "1", "--file", str(corrected))[0] == 0
-    code, output = _review("resolve", "1", "--file", str(corrected))
+    assert _review("resolve", "9", "--file", str(corrected), *FORCED)[0] == 1
+    assert _review("resolve", "1", "--file", str(corrected), *FORCED)[0] == 0
+    code, output = _review("resolve", "1", "--file", str(corrected), *FORCED)
     assert code == 1, output
     assert _review("show", "9")[0] == 1
+
+
+# --- review gaps: accepting as read, and reviews ``receipts import`` opened ------------------
+
+
+@pytest.mark.parametrize("forced", [False, True], ids=["refused", "forced"])
+def test_a1_accept_of_a_reading_whose_unit_price_does_not_add_up(
+    data_dir: Path, tmp_path: Path, claude: StartClaude, forced: bool
+) -> None:
+    """F-CODEX: 2 x 5.00 printed for 8.00. Without --force the original issue is printed
+    (exit 2, the review stays open); with --force --reason the reading is saved as read."""
+    fake = claude(codex_answer(), codex_answer())
+    assert invoke("process", "--no-color", "--run", RUN, str(photo(tmp_path))).exit_code == 0
+    calls = fake.calls
+    force = ("--force", "--reason", "per pack") if forced else ()
+
+    code, output = _review("resolve", "1", "--accept", *force)
+
+    database = run_database(data_dir, RUN)
+    assert fake.calls == calls
+    if forced:
+        assert code == 0, output
+        assert receipt_status(database, 1) == "completed"
+    else:
+        assert code == 2, output
+        assert "2 each x 5.00 = 10.00" in output
+        assert "--force --reason" in output
+        assert _review_status(data_dir) == "open"
+
+
+def test_i09_resolve_answers_a_review_receipts_import_opened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_dir = configure_cli(monkeypatch, tmp_path, main_migrated=True)
+    wrong = write_json(tmp_path / "wrong.json", dict(CORRECTED, total_cents=2600))
+    corrected = write_json(tmp_path / "corrected.json", CORRECTED)
+    assert invoke("receipts", "import", str(wrong)).exit_code == 0
+
+    result = invoke("review", "resolve", "1", "--file", str(corrected), *FORCED)
+
+    assert result.exit_code == 0, result.output
+    assert "receipt 1: completed" in result.output
+    database = run_database(data_dir, None)
+    assert receipt_status(database, 1) == "completed"
+    assert rows(database, "SELECT status FROM review_items") == [("resolved",)]
+    assert rows(database, "SELECT total_cents FROM receipts") == [(2683,)]
+
+
+def test_review_show_prints_an_imported_review_s_receipt_as_its_reading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configure_cli(monkeypatch, tmp_path, main_migrated=True)
+    wrong = write_json(tmp_path / "wrong.json", dict(CORRECTED, total_cents=2600))
+    assert invoke("receipts", "import", str(wrong)).exit_code == 0
+
+    result = invoke("review", "show", "1")
+
+    assert result.exit_code == 0, result.output
+    assert "pending extraction: COSTCO WHOLESALE #1234 · 3 lines · total 26.00 CAD" in result.output

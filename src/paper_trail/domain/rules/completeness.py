@@ -16,11 +16,16 @@ MAX_AGE_DAYS = 366
 
 
 def check_completeness(
-    store_name: str, date_text: str | None, purchased_on: date | None, today: date | None = None
+    store_name: str,
+    date_text: str | None,
+    purchased_on: date | None,
+    today: date | None = None,
+    *,
+    aged: bool = True,
 ) -> tuple[ArithmeticIssue, ...]:
     """The issues that keep the receipt from being complete: a blank store name, and no
     purchase date (``date_text`` as read, ``purchased_on`` what it parsed to up to today), or,
-    given ``today``, one more than ``MAX_AGE_DAYS`` old."""
+    given ``today``, one after it or (with ``aged``) more than ``MAX_AGE_DAYS`` old."""
     issues = []
     if not store_name.strip():
         message = "no store name was read: copy the store name printed at the top"
@@ -32,7 +37,10 @@ def check_completeness(
             else f'the purchase date "{date_text}" is not a date up to today: {COPY_THE_DATE}'
         )
         issues.append(ArithmeticIssue(IssueCode.MISSING_DATE, message, None, None, None))
-    elif today is not None and today - purchased_on > timedelta(days=MAX_AGE_DAYS):
+    elif today is not None and purchased_on > today:
+        message = f"the purchase date {purchased_on.isoformat()} is after today: {COPY_THE_DATE}"
+        issues.append(ArithmeticIssue(IssueCode.MISSING_DATE, message, None, None, None))
+    elif aged and today is not None and today - purchased_on > timedelta(days=MAX_AGE_DAYS):
         message = (
             f'the purchase date "{date_text}" reads as {purchased_on.isoformat()}, over a year '
             f"ago: {COPY_THE_DATE}"

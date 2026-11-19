@@ -243,7 +243,9 @@ def test_tc_94_a_review_answer_keeps_its_link_and_the_rule_fills_the_rest() -> N
         total=4197,
     )
 
-    harness.resolve(require_id(parked.graph.review_id), answer)
+    harness.resolve(
+        require_id(parked.graph.review_id), answer, force=True, reason="checked the paper"
+    )
 
     stored = harness.receipt(parked.receipt_id)
     assert stored.status is ReceiptStatus.COMPLETED

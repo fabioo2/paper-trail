@@ -13,8 +13,8 @@ receipt's photo is served as JPEG.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -25,10 +25,12 @@ from paper_trail.application.jobs import ProcessReceiptJobs
 from paper_trail.bootstrap import Container, image_store
 from paper_trail.bootstrap.agents import review_services
 from paper_trail.config import Settings
+from paper_trail.domain.enums import JobKind
+from paper_trail.domain.models import ReceiptDraft
 from paper_trail.interfaces.web.app import create_app
 from tests.agent_harness import Harness, agent_settings, build_harness
-from tests.extractions import STORE_NAME, SUBTOTAL_ISSUE, inconsistent_answer
-from tests.factories import receipt
+from tests.extractions import STORE_NAME, inconsistent_answer
+from tests.factories import cad, receipt, receipt_draft
 from tests.fakes.reader import ScriptedReader
 from tests.images import png_bytes
 from tests.storage import in_unit
@@ -112,6 +114,15 @@ def _corrected() -> dict[str, Any]:
     }
 
 
+FORCED = {"force": True, "reason": "checked the paper"}
+
+
+def _short_import() -> ReceiptDraft:
+    """A ``receipts import`` draft whose milk line is 6.85: it does not add up."""
+    eggs, milk = receipt_draft().items
+    return receipt_draft(items=(eggs, replace(milk, line_total=cad(685))))
+
+
 def _line(raw_text: str, quantity: str, total: int, **overrides: object) -> dict[str, Any]:
     return {
         "kind": "item",
@@ -184,16 +195,22 @@ def test_a_review_shows_the_full_reading_and_its_photo(parked: Parked) -> None:
 
 
 def test_an_inconsistent_answer_is_a_problem_listing_each_issue(parked: Parked) -> None:
+    """Accepted as read, the answer is judged on the issues the review was opened with (the
+    sourdough's 2 x 4.99 against 9.89 among them), not on a draft rebuilt to hide them."""
     response = parked.client.post(f"{parked.url}/resolve", json={"accept": True})
 
     assert response.status_code == 422, response.text
     assert response.headers["content-type"].startswith(PROBLEM_JSON)
     problem = response.json()
     assert problem["type"] == "/problems/inconsistent-receipt"
+    line_math, short_sum = _issues(parked)
     assert problem["errors"] == [
-        {"loc": ["body"], "msg": SUBTOTAL_ISSUE, "type": "items_vs_subtotal"}
+        {"loc": ["body", "lines", 2], "msg": line_math["message"], "type": "line_math"},
+        {"loc": ["body"], "msg": short_sum["message"], "type": "items_vs_subtotal"},
     ]
     assert parked.receipt_state() == ("needs_review", "needs_review")
+    with parked.harness.uow_factory(read_only=True) as uow:
+        assert uow.jobs.latest(JobKind.RESOLVE_REVIEW, parked.receipt_id) is None
 
 
 @pytest.mark.parametrize(
@@ -208,8 +225,34 @@ def test_an_inconsistent_answer_is_a_problem_listing_each_issue(parked: Parked) 
             {"draft": {**_corrected(), "lines": [_line("X", "1", 100, applies_to=0)]}},
             "",
         ),
+        *(
+            ({"draft": {**_corrected(), "currency": currency}}, "The request is invalid.")
+            for currency in ("cad", "CA", "CADX", "", "C4D")
+        ),
+        (
+            {"draft": {key: value for key, value in _corrected().items() if key != "currency"}},
+            "The request is invalid.",
+        ),
+        (
+            {"draft": {**_corrected(), "purchased_on": "2099-01-01"}, **FORCED},
+            "the purchase date 2099-01-01 is after today",
+        ),
     ],
-    ids=["force-without-reason", "blank-reason", "no-answer", "both", "float-cents", "self-link"],
+    ids=[
+        "force-without-reason",
+        "blank-reason",
+        "no-answer",
+        "both",
+        "float-cents",
+        "self-link",
+        "currency-lowercase",
+        "currency-short",
+        "currency-long",
+        "currency-empty",
+        "currency-digit",
+        "currency-missing",
+        "future-date",
+    ],
 )
 def test_an_invalid_answer_is_a_422_problem_and_queues_nothing(
     parked: Parked, body: dict[str, Any], detail: str
@@ -220,10 +263,15 @@ def test_an_invalid_answer_is_a_422_problem_and_queues_nothing(
     assert response.headers["content-type"].startswith(PROBLEM_JSON)
     assert response.json()["detail"].startswith(detail)
     assert parked.receipt_state() == ("needs_review", "needs_review")
+    with parked.harness.uow_factory(read_only=True) as uow:
+        assert uow.jobs.latest(JobKind.RESOLVE_REVIEW, parked.receipt_id) is None
 
 
 def test_a_corrected_reading_is_queued_once_and_saved_by_the_worker(parked: Parked) -> None:
-    response = parked.client.post(f"{parked.url}/resolve", json={"draft": _corrected()})
+    receipt_url = f"/api/receipts/{parked.receipt_id}"
+    assert parked.client.get(receipt_url).json()["review_id"] == parked.review_id
+
+    response = parked.client.post(f"{parked.url}/resolve", json=FORCED | {"draft": _corrected()})
 
     assert response.status_code == 202, response.text
     assert response.json() == {
@@ -233,13 +281,14 @@ def test_a_corrected_reading_is_queued_once_and_saved_by_the_worker(parked: Park
     }
     assert parked.receipt_state() == ("processing", "queued")
     assert parked.client.get("/api/reviews").json() == []
-    again = parked.client.post(f"{parked.url}/resolve", json={"draft": _corrected()})
+    again = parked.client.post(f"{parked.url}/resolve", json=FORCED | {"draft": _corrected()})
     assert again.status_code == 409, again.text
     assert again.headers["content-type"].startswith(PROBLEM_JSON)
 
     assert parked.run_worker() is True
 
     assert parked.receipt_state() == ("completed", "done")
+    assert parked.client.get(receipt_url).json()["review_id"] is None
     detail = parked.client.get(parked.url).json()
     assert (detail["status"], detail["receipt_status"], detail["draft"]) == (
         "resolved",
@@ -257,6 +306,44 @@ def test_a_forced_accept_with_a_reason_is_queued(parked: Parked) -> None:
     assert response.status_code == 202, response.text
     assert parked.run_worker() is True
     assert parked.receipt_state() == ("completed", "done")
+
+
+def test_an_imported_review_is_shown_and_answered_without_a_graph(parked: Parked) -> None:
+    """I-02 / I-04: a review ``receipts import`` opened shows the stored receipt as its draft
+    and its import issues; a corrected answer is saved in the request (202, completed)."""
+    imported = parked.harness.record(_short_import())
+    assert imported.review is not None
+    url = f"/api/reviews/{imported.review.id}"
+    receipt_id = require_id(imported.receipt.id)
+
+    shown = parked.client.get(url).json()
+    response = parked.client.post(f"{url}/resolve", json=FORCED | {"draft": _corrected()})
+
+    assert (shown["receipt_status"], shown["answer_queued"]) == ("needs_review", False)
+    assert [issue["code"] for issue in shown["issues"]] == ["line_math", "items_vs_subtotal"]
+    assert [(line["raw_text"], line["line_total_cents"]) for line in shown["draft"]["lines"]] == [
+        ("KS ORG EGGS 24CT", 899),
+        ("KS 2% MILK 4L", 685),
+    ]
+    assert response.status_code == 202, response.text
+    assert response.json() == {"receipt_id": receipt_id, "status": "completed", "stage": "done"}
+    assert parked.client.get(f"/api/receipts/{receipt_id}").json()["status"] == "completed"
+    assert parked.client.post(f"{url}/resolve", json={"accept": True}).status_code == 409
+
+
+def test_a_stored_future_date_is_shown_but_never_answered(parked: Parked) -> None:
+    """The date is checked on answers only: a review of a receipt stored with a future date
+    opens, and answering with that date is a 422."""
+    imported = parked.harness.record(replace(_short_import(), purchased_on=date(2099, 1, 1)))
+    assert imported.review is not None
+    url = f"/api/reviews/{imported.review.id}"
+
+    shown = parked.client.get(url)
+    answered = parked.client.post(f"{url}/resolve", json={"draft": shown.json()["draft"], **FORCED})
+
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["draft"]["purchased_on"] == "2099-01-01"
+    assert answered.status_code == 422, answered.text
 
 
 @pytest.mark.parametrize(

@@ -70,7 +70,9 @@ def test_ac_a_14_no_receipt_content_at_info_or_above(
     harness = build_harness(reader)
     graph = harness.process_image().graph
     assert graph is not None
-    harness.resolve(require_id(graph.review_id), receipt_draft())
+    harness.resolve(
+        require_id(graph.review_id), receipt_draft(), force=True, reason="checked the paper"
+    )
 
     lines = _lines(capsys.readouterr().out)
 

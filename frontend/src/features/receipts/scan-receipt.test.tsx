@@ -343,19 +343,49 @@ describe("Scan page", () => {
     expect(polls.every((path) => path === "/api/receipts/7")).toBe(true);
   });
 
-  it.each<{ status: ReceiptStatus; title: RegExp; link: RegExp | null }>([
-    { status: "completed", title: /saved/i, link: /view receipt/i },
+  it.each<{
+    status: ReceiptStatus;
+    reviewId: number | null;
+    title: RegExp;
+    link: RegExp | null;
+    href: string;
+  }>([
+    {
+      status: "completed",
+      reviewId: null,
+      title: /saved/i,
+      link: /view receipt/i,
+      href: "/receipts/7",
+    },
     {
       status: "needs_review",
+      reviewId: 12,
       title: /second look/i,
       link: /review receipt/i,
+      href: "/review/12",
     },
-    { status: "failed", title: /couldn['’]t read/i, link: null },
+    {
+      status: "needs_review",
+      reviewId: null,
+      title: /second look/i,
+      link: /review receipt/i,
+      href: "/receipts/7",
+    },
+    {
+      status: "failed",
+      reviewId: null,
+      title: /couldn['’]t read/i,
+      link: null,
+      href: "",
+    },
   ])(
-    "stops polling once the receipt is $status",
-    async ({ status, title, link }) => {
+    "stops polling once the receipt is $status (review $reviewId)",
+    async ({ status, reviewId, title, link, href }) => {
       serveUpload(accepted);
-      const polls = serveProgress(processing, receiptDetail({ status }));
+      const polls = serveProgress(
+        processing,
+        receiptDetail({ status, review_id: reviewId }),
+      );
 
       await pickAndSend(user);
       await advance(RECEIPT_POLL_INTERVAL_MS);
@@ -368,7 +398,7 @@ describe("Scan page", () => {
       if (link) {
         expect(screen.getByRole("link", { name: link })).toHaveAttribute(
           "href",
-          "/receipts/7",
+          href,
         );
       } else {
         expect(within(screen.getByRole("main")).queryByRole("link")).toBeNull();

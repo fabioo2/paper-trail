@@ -182,7 +182,12 @@ def test_ac_a_08_a_second_process_resumes_the_same_thread(process_on: StartProce
     second = process_on(reader)
 
     pending = second.runner.pending_draft(receipt_id)
-    receipt = second.resolve(review_id, receipt_draft(ocr_text=None, image_path=None))
+    receipt = second.resolve(
+        review_id,
+        receipt_draft(ocr_text=None, image_path=None),
+        force=True,
+        reason="checked the paper",
+    )
 
     assert pending is not None
     assert pending.items[2].line_total.amount_cents == 989

@@ -9,7 +9,8 @@ const HOME_CURRENCY = "CAD";
 /**
  * The amount in its own currency, e.g. `-$2.50` in en-CA: the one money formatter of the app.
  * Canadian dollars are a plain "$" whatever the locale; any other currency keeps its marker
- * ("US$", "€").
+ * ("US$", "€"). Every amount has two decimals, whatever the currency's own (the app stores
+ * cents of every currency).
  * Cents are turned into an exact decimal string (never a float divided by 100), which
  * `Intl.NumberFormat` formats without binary rounding.
  */
@@ -25,5 +26,7 @@ export function formatMoney(money: MoneyOut, locale?: string): string {
     currency: money.currency,
     currencyDisplay:
       money.currency === HOME_CURRENCY ? "narrowSymbol" : "symbol",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(decimal);
 }

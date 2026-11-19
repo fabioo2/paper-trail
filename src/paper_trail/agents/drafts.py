@@ -9,6 +9,7 @@ from paper_trail.agents.state import ReceiptState
 from paper_trail.application.payloads import DraftPayload
 from paper_trail.domain.models import ReceiptDraft
 from paper_trail.domain.rules.readings import ReceiptReading, reading_draft
+from paper_trail.ports.clock import local_today
 
 
 def saved_draft(deps: AgentDeps, state: ReceiptState) -> ReceiptDraft:
@@ -33,6 +34,6 @@ def extraction_draft(deps: AgentDeps, state: ReceiptState) -> ReceiptDraft:
     """The latest extraction as a draft (``reading_draft``), its date read relative to today."""
     return reading_draft(
         extraction_reading(state),
-        today=deps.clock.now().date(),
+        today=local_today(deps.clock),
         image_path=state.get("image_path"),
     )

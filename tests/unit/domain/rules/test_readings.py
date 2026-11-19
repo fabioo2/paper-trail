@@ -20,6 +20,7 @@ Pinned (test-cases.md CE-TC-006, 007, 010 to 014, 078):
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from fractions import Fraction
 
 import pytest
 from hypothesis import given
@@ -565,3 +566,65 @@ def test_ce_tc_079_codes_are_keyed_by_the_position_of_their_item_line() -> None:
     )
 
     assert dict(reading_codes(reading)) == {0: "1362394", 3: "036000291452"}
+
+
+# --- review gaps A1/A3: a printed unit price that does not add up stays in the draft ----------
+
+
+def test_a1_01_a_conflicting_printed_unit_price_survives_the_mapping() -> None:
+    """F-CODEX: 2 x 5.00 printed for a line of 8.00. The draft keeps the printed 5.00 (not a
+    rebuilt 4.00), so it fails the same check the reading failed."""
+    codex = _item(800, 800, printed_text="KS SOURDOUGH", quantity="2", unit_price=500)
+    reading = _reading([codex], subtotal=800)
+
+    report = check_reading(reading)
+    draft = reading_draft(reading, today=TODAY, image_path=None)
+
+    assert [(issue.code, issue.position) for issue in report.issues] == [(IssueCode.LINE_MATH, 0)]
+    assert draft.items[0].unit_price == cad(500)
+    assert [(issue.code, issue.position) for issue in check_arithmetic(draft).issues] == [
+        (IssueCode.LINE_MATH, 0)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("item", "unit_price"),
+    [
+        (_item(161, 80, discount=81, quantity="0.365", unit=Unit.KG, unit_price=218), 441),
+        (_item(152, 152, quantity="0.460", unit=Unit.KG, unit_price=331), 330),
+        (_item(999, 999, quantity="2", unit_price=None), 500),
+        (_item(663, 663, quantity="2", unit_price=331), 332),
+        (_item(661, 661, quantity="2", unit_price=331), 331),
+        (
+            replace(
+                _item(2000, 2000, quantity="6", unit_price=333),
+                unit_price_exact=Fraction(1000, 3),
+            ),
+            None,
+        ),
+    ],
+    ids=["matches-paid", "weighed", "no-unit-price", "one-cent-over", "one-cent-under", "deal"],
+)
+def test_a3_a_unit_price_that_adds_up_maps_to_a_draft_that_adds_up(
+    item: ReadItem, unit_price: int | None
+) -> None:
+    """Valid readings keep today's mapping (regular / quantity, None when no cent price
+    multiplies back): carrying the printed price only where it fails never makes a valid
+    reading's draft fail."""
+    reading = _reading([item])
+
+    draft = reading_draft(reading, today=TODAY, image_path=None)
+
+    assert check_reading(reading).ok
+    assert draft.items[0].unit_price == (None if unit_price is None else cad(unit_price))
+    assert check_arithmetic(draft).ok
+
+
+def test_a3_two_cents_off_is_carried_as_printed_and_fails_both_checks() -> None:
+    reading = _reading([_item(664, 664, quantity="2", unit_price=331)])
+
+    draft = reading_draft(reading, today=TODAY, image_path=None)
+
+    assert [issue.code for issue in check_reading(reading).issues] == [IssueCode.LINE_MATH]
+    assert draft.items[0].unit_price == cad(331)
+    assert [issue.code for issue in check_arithmetic(draft).issues] == [IssueCode.LINE_MATH]

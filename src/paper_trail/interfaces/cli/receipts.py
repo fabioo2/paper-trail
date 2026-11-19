@@ -52,7 +52,9 @@ def show_receipt(container: Container, receipt_id: int) -> None:
     products = container.get_products(
         item.product_id for item in receipt.items if item.product_id is not None
     )
-    detail = ReceiptDetailOut.from_receipt(receipt, report, products)
+    detail = ReceiptDetailOut.from_receipt(
+        receipt, report, products, container.find_open_review(receipt)
+    )
     typer.echo(detail.model_dump_json(indent=2))
 
 

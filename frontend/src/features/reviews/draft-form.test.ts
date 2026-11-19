@@ -6,6 +6,7 @@ import {
   type DraftFields,
   fieldsOf,
   formatAge,
+  latestPurchaseDate,
   parseCents,
   reasonText,
 } from "@/features/reviews/draft-form";
@@ -17,7 +18,7 @@ import {
 } from "@/test/fixtures/reviews";
 
 function draftFrom(fields: DraftFields) {
-  const result = draftOf(fields, "CAD");
+  const result = draftOf(fields);
   if (!("draft" in result)) throw new Error(JSON.stringify(result.errors));
   return result.draft;
 }
@@ -126,6 +127,26 @@ describe("the review form", () => {
     expect(fields.items.map((row) => row.paid)).toEqual(["8.99"]);
   });
 
+  it.each([
+    ["2.0", 329],
+    [" 02 ", 329],
+    ["3", null],
+  ])(
+    "keeps the read unit price while the quantity is the same number (%j)",
+    (quantity, unitPrice) => {
+      const fields = fieldsOf(reviewDraft());
+      const [eggs, milk] = fields.items;
+      if (!eggs || !milk) throw new Error("two items expected");
+
+      const draft = draftFrom({
+        ...fields,
+        items: [eggs, { ...milk, quantity }],
+      });
+
+      expect(draft.lines[2]?.unit_price_cents).toBe(unitPrice);
+    },
+  );
+
   it("drops the read unit price of an item whose price changed", () => {
     const fields = fieldsOf(reviewDraft());
     const [eggs, milk] = fields.items;
@@ -158,10 +179,11 @@ describe("the review form", () => {
     const [row] = fields.items;
     if (!row) throw new Error("an empty item expected");
 
-    const result = draftOf(
-      { ...fields, tax: "1.2.3", items: [{ ...row, quantity: "0" }] },
-      "CAD",
-    );
+    const result = draftOf({
+      ...fields,
+      tax: "1.2.3",
+      items: [{ ...row, quantity: "0" }],
+    });
 
     expect(result).toEqual({
       errors: {
@@ -180,6 +202,7 @@ describe("the review form", () => {
     expect({ ...fields, items: fields.items.length }).toEqual({
       storeName: "",
       purchasedOn: "",
+      currency: "CAD",
       subtotal: "",
       tax: "",
       total: "",
@@ -187,6 +210,31 @@ describe("the review form", () => {
       adjustments: [],
       paymentLast4: null,
     });
+  });
+});
+
+describe("draftOf currency", () => {
+  it.each(["", "CA", "CADX", "C4D", "€"])(
+    "%j is a field error and no draft",
+    (currency) => {
+      expect(draftOf({ ...fieldsOf(reviewDraft()), currency })).toEqual({
+        errors: { currency: "Use a 3-letter code like CAD" },
+      });
+    },
+  );
+
+  it.each([
+    ["cad", "CAD"],
+    [" usd ", "USD"],
+  ])("%j is sent as %j with every amount unchanged", (typed, sent) => {
+    const draft = draftFrom({ ...fieldsOf(reviewDraft()), currency: typed });
+
+    expect(draft).toEqual({ ...reviewDraft(), currency: sent });
+  });
+
+  it("takes the reading's currency, and CAD without a reading", () => {
+    expect(fieldsOf(reviewDraft({ currency: "USD" })).currency).toBe("USD");
+    expect(fieldsOf(null).currency).toBe("CAD");
   });
 });
 
@@ -212,5 +260,15 @@ describe("formatAge", () => {
     ["2026-10-27T12:00:00Z", "7 days ago"],
   ])("%s is %s", (instant, text) => {
     expect(formatAge(instant, now, "en")).toBe(text);
+  });
+});
+
+describe("latestPurchaseDate", () => {
+  it.each([
+    [new Date(2026, 10, 6, 12, 0), "2026-11-07"],
+    [new Date(2026, 10, 30, 23, 59), "2026-12-01"],
+    [new Date(2026, 11, 31, 0, 1), "2027-01-01"],
+  ])("on %s it is %s", (now, latest) => {
+    expect(latestPurchaseDate(now)).toBe(latest);
   });
 });

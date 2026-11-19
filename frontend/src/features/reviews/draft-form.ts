@@ -37,6 +37,8 @@ export interface AdjustmentRow {
 export interface DraftFields {
   storeName: string;
   purchasedOn: string;
+  /** Three letters; every amount of the receipt is in it. */
+  currency: string;
   subtotal: string;
   tax: string;
   total: string;
@@ -46,7 +48,11 @@ export interface DraftFields {
   paymentLast4: string | null;
 }
 
+/** The currency of a receipt typed in from nothing. */
+export const DEFAULT_CURRENCY = "CAD";
+
 const CENTS_PER_UNIT = 100;
+const CURRENCY = /^[A-Z]{3}$/;
 const MONEY = /^-?\d+(\.\d{1,2})?$/;
 const QUANTITY = /^\d+(\.\d+)?$/;
 
@@ -79,6 +85,15 @@ export function isQuantity(text: string): boolean {
   return QUANTITY.test(text.trim()) && Number(text) > 0;
 }
 
+/** Whether two typed quantities are the same number (`2` and `2.0`), compared digit by digit. */
+function sameQuantity(typed: string, read: string): boolean {
+  const digits = (text: string) => {
+    const [units = "", fraction = ""] = text.trim().split(".");
+    return `${units.replace(/^0+(?=\d)/, "")}.${fraction.replace(/0+$/, "")}`;
+  };
+  return isQuantity(typed) && digits(typed) === digits(read);
+}
+
 let nextKey = 0;
 function newKey(): number {
   nextKey += 1;
@@ -108,6 +123,7 @@ export function fieldsOf(draft: ReviewDraftBody | null): DraftFields {
     return {
       storeName: "",
       purchasedOn: "",
+      currency: DEFAULT_CURRENCY,
       subtotal: "",
       tax: "",
       total: "",
@@ -157,6 +173,7 @@ export function fieldsOf(draft: ReviewDraftBody | null): DraftFields {
   return {
     storeName: draft.store_name,
     purchasedOn: draft.purchased_on ?? "",
+    currency: draft.currency,
     subtotal: centsText(draft.subtotal_cents),
     tax: centsText(draft.tax_cents),
     total: centsText(draft.total_cents),
@@ -183,12 +200,15 @@ const AMOUNT_HINT = "Use an amount like 8.99";
  * The corrected reading the API takes, or the fields that are not valid. Each item is an
  * ITEM line of its regular price (paid + discount), followed by a DISCOUNT line linked to it
  * when it has one; then the adjustments, at receipt level as read (the API adds no links).
+ * The currency is trimmed and upper-cased; every amount is sent in it, cents unchanged.
  */
 export function draftOf(
   fields: DraftFields,
-  currency: string,
 ): { draft: ReviewDraftBody } | { errors: FieldErrors } {
   const errors: FieldErrors = {};
+  const currency = fields.currency.trim().toUpperCase();
+  if (!CURRENCY.test(currency))
+    errors.currency = "Use a 3-letter code like CAD";
   const amount = (key: string, text: string, required = false) => {
     const cents = parseCents(text);
     if (cents === undefined) errors[key] = AMOUNT_HINT;
@@ -208,7 +228,8 @@ export function draftOf(
       errors[`items.${row.key}.description`] = "Required";
     const regular = paid + discount;
     const unchanged =
-      row.quantity === row.readQuantity && regular === row.readRegularCents;
+      sameQuantity(row.quantity, row.readQuantity) &&
+      regular === row.readRegularCents;
     const description = row.description.trim();
     const rawText = row.rawText === "" ? description : row.rawText;
     const position = lines.length;
@@ -266,20 +287,42 @@ export function draftOf(
   };
 }
 
+/**
+ * The latest purchase date the editor offers (YYYY-MM-DD): tomorrow in the browser's time
+ * zone. The server refuses a date after its own today; a day of slack keeps a phone whose
+ * clock or zone runs ahead of the app's from being blocked near midnight.
+ */
+export function latestPurchaseDate(now: Date): string {
+  const tomorrow = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+  );
+  const month = String(tomorrow.getMonth() + 1).padStart(2, "0");
+  const day = String(tomorrow.getDate()).padStart(2, "0");
+  return `${String(tomorrow.getFullYear())}-${month}-${day}`;
+}
+
 /** Whether the review is about the purchase date (missing, unreadable or implausible). */
 export function hasDateIssue(issues: ReviewIssueOut[]): boolean {
   return issues.some((issue) => issue.code === "missing_date");
+}
+
+/** What issues of these codes come down to when they are all about one field; else null. */
+export function issuesText(codes: readonly string[]): string | null {
+  if (codes.length > 0 && codes.every((code) => code === "missing_date"))
+    return "Check the date";
+  if (codes.length > 0 && codes.every((code) => code === "missing_store"))
+    return "Store name missing";
+  return null;
 }
 
 /** Why a review waits, in a few plain words. */
 export function reasonText(
   review: Pick<ReviewOut, "reason" | "issues">,
 ): string {
-  const codes = new Set(review.issues.map((issue) => issue.code));
-  if (codes.size > 0 && [...codes].every((code) => code === "missing_date"))
-    return "Check the date";
-  if (codes.size > 0 && [...codes].every((code) => code === "missing_store"))
-    return "Store name missing";
+  const text = issuesText(review.issues.map((issue) => issue.code));
+  if (text !== null) return text;
   switch (review.reason) {
     case "extraction_failed":
       return "Couldn't read the receipt";

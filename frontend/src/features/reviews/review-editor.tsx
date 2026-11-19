@@ -30,11 +30,11 @@ import {
   type FieldErrors,
   fieldsOf,
   hasDateIssue,
+  issuesText,
   type ItemRow,
+  latestPurchaseDate,
   reasonText,
 } from "@/features/reviews/draft-form";
-
-const DEFAULT_CURRENCY = "CAD";
 
 /** One review: the photo, why it waits, and its reading to correct or accept. */
 export function ReviewEditor({ reviewId }: { reviewId: number }) {
@@ -107,11 +107,20 @@ function ReviewForm({ review }: { review: ReviewOut }) {
   const navigate = useNavigate();
   const busy = resolve.isPending;
   const edited = JSON.stringify(fields) !== JSON.stringify(initial);
-  const currency = review.draft?.currency ?? DEFAULT_CURRENCY;
   const dateIssue = hasDateIssue(review.issues);
+  const flagged =
+    review.reason === "validation_failed" || review.issues.length > 0;
   const problem =
     resolve.error instanceof ApiError ? resolve.error.problem : undefined;
   const inconsistent = problem?.type === INCONSISTENT_RECEIPT;
+  const refusal = inconsistent
+    ? {
+        heading:
+          issuesText((problem.errors ?? []).map((error) => error.type)) ??
+          "The receipt still doesn't add up",
+        messages: (problem.errors ?? []).map((error) => error.msg),
+      }
+    : null;
 
   const send = (body: ResolveReviewIn, message: string) => {
     resolve.mutate(body, {
@@ -121,21 +130,40 @@ function ReviewForm({ review }: { review: ReviewOut }) {
       },
     });
   };
-  const sendDraft = (forced: Pick<ResolveReviewIn, "force" | "reason">) => {
-    const result = draftOf(fields, currency);
-    if ("errors" in result) {
-      setErrors(result.errors);
-      return;
-    }
-    setErrors({});
+  const sendDraft = (
+    forced: Pick<ResolveReviewIn, "force" | "reason">,
+    reasonErrors: FieldErrors = {},
+  ) => {
+    const result = draftOf(fields);
+    const fieldErrors = {
+      ...("errors" in result ? result.errors : {}),
+      ...reasonErrors,
+    };
+    setErrors(fieldErrors);
+    if ("errors" in result || Object.keys(fieldErrors).length > 0) return;
     send({ accept: false, draft: result.draft, ...forced }, "Receipt saved");
+  };
+  /** A review with issues is only answered with a reason: every answer to it is forced. */
+  const forcedAnswer = (): {
+    forced: Pick<ResolveReviewIn, "force" | "reason">;
+    errors: FieldErrors;
+  } => {
+    if (!flagged) return { forced: { force: false }, errors: {} };
+    const why = reason.trim();
+    return why === ""
+      ? { forced: { force: false }, errors: { reason: "Say why you keep it" } }
+      : { forced: { force: true, reason: why }, errors: {} };
   };
   const save = (event: SyntheticEvent) => {
     event.preventDefault();
-    sendDraft({ force: false });
+    const { forced, errors: reasonErrors } = forcedAnswer();
+    sendDraft(forced, reasonErrors);
   };
   const accept = () => {
-    send({ accept: true, force: false }, "Reading accepted");
+    const { forced, errors: reasonErrors } = forcedAnswer();
+    setErrors(reasonErrors);
+    if (Object.keys(reasonErrors).length > 0) return;
+    send({ accept: true, ...forced }, "Reading accepted");
   };
   const saveAnyway = () => {
     const forced = { force: true, reason: reason.trim() };
@@ -143,7 +171,10 @@ function ReviewForm({ review }: { review: ReviewOut }) {
     else send({ accept: true, ...forced }, "Receipt saved");
   };
   const set =
-    (key: "storeName" | "purchasedOn" | "subtotal" | "tax" | "total") =>
+    (
+      key:
+        "storeName" | "purchasedOn" | "currency" | "subtotal" | "tax" | "total",
+    ) =>
     (event: { target: { value: string } }) => {
       setFields((current) => ({ ...current, [key]: event.target.value }));
     };
@@ -172,6 +203,7 @@ function ReviewForm({ review }: { review: ReviewOut }) {
           type="date"
           // eslint-disable-next-line jsx-a11y/no-autofocus -- a date issue is what this screen is for
           autoFocus={dateIssue}
+          max={latestPurchaseDate(new Date())}
           value={fields.purchasedOn}
           onChange={set("purchasedOn")}
           className={cn("h-11", dateIssue && "border-warning")}
@@ -200,7 +232,10 @@ function ReviewForm({ review }: { review: ReviewOut }) {
         className="flex flex-col gap-2 rounded-xl border border-warning bg-warning/10 p-4"
       >
         <h2 id="issues-heading" className="font-medium">
-          {reasonText(review)}
+          {flagged
+            ? (issuesText(review.issues.map((issue) => issue.code)) ??
+              "The receipt doesn't add up")
+            : reasonText(review)}
         </h2>
         {review.issues.length > 0 ? (
           <ul className="list-disc pl-5 text-sm">
@@ -210,6 +245,20 @@ function ReviewForm({ review }: { review: ReviewOut }) {
           </ul>
         ) : null}
         {dateIssue ? dateField : null}
+        {flagged ? (
+          <Field label="Why keep it anyway?" error={errors.reason}>
+            {(props) => (
+              <Input
+                {...props}
+                placeholder="Checked against the paper receipt"
+                value={reason}
+                onChange={(event) => {
+                  setReason(event.target.value);
+                }}
+              />
+            )}
+          </Field>
+        ) : null}
       </section>
 
       {review.image_url === null ? null : (
@@ -238,6 +287,24 @@ function ReviewForm({ review }: { review: ReviewOut }) {
               {...props}
               value={fields.storeName}
               onChange={set("storeName")}
+            />
+          )}
+        </Field>
+        <Field label="Currency" error={errors.currency}>
+          {(props) => (
+            <Input
+              {...props}
+              maxLength={3}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              value={fields.currency}
+              onChange={(event) => {
+                set("currency")({
+                  target: { value: event.target.value.toUpperCase() },
+                });
+              }}
+              className="w-24"
             />
           )}
         </Field>
@@ -342,18 +409,18 @@ function ReviewForm({ review }: { review: ReviewOut }) {
             Some fields need fixing before the receipt can be saved.
           </p>
         ) : null}
-        {inconsistent ? (
+        {refusal !== null ? (
           <section
             role="alert"
             aria-labelledby="refused-heading"
             className="flex flex-col gap-2 rounded-xl border border-destructive p-4"
           >
             <h2 id="refused-heading" className="font-medium">
-              The receipt still doesn't add up
+              {refusal.heading}
             </h2>
             <ul className="list-disc pl-5 text-sm">
-              {(problem.errors ?? []).map((error, index) => (
-                <li key={index}>{error.msg}</li>
+              {refusal.messages.map((message, index) => (
+                <li key={index}>{message}</li>
               ))}
             </ul>
             <Field label="Why keep it anyway?">
@@ -377,7 +444,8 @@ function ReviewForm({ review }: { review: ReviewOut }) {
               Save anyway
             </Button>
           </section>
-        ) : resolve.error ? (
+        ) : null}
+        {resolve.error && !inconsistent ? (
           <p role="alert" className="text-sm text-destructive">
             {resolve.error.message}
           </p>
