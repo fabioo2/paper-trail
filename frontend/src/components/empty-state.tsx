@@ -21,7 +21,7 @@ export function EmptyState({
       <div className="flex size-14 items-center justify-center rounded-full bg-accent text-accent-foreground">
         <Icon aria-hidden="true" className="size-7" />
       </div>
-      <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+      <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
       <p className="text-sm text-muted-foreground">{description}</p>
       {children}
     </section>

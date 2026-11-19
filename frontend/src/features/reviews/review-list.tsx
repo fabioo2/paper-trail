@@ -73,7 +73,7 @@ export function ReviewList() {
       aria-labelledby="reviews-heading"
       className="flex flex-col gap-3 px-4 py-4"
     >
-      <h1 id="reviews-heading" className="text-xl font-semibold tracking-tight">
+      <h1 id="reviews-heading" className="text-lg font-semibold tracking-tight">
         To review
       </h1>
       {products}
@@ -95,7 +95,7 @@ function ProductsToCheckRow({ count }: { count: number | null }) {
   return (
     <Link
       to="/products/check"
-      className="flex min-h-16 items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex min-h-14 items-center justify-between gap-3 rounded-xl border bg-card px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <div className="min-w-0">
         <p className="font-medium">
@@ -122,7 +122,7 @@ function ReviewRow({ review }: { review: ReviewSummaryOut }) {
     <Link
       to="/review/$reviewId"
       params={{ reviewId: String(review.id) }}
-      className="flex min-h-16 items-center justify-between gap-3 px-4 py-3 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex min-h-14 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <div className="min-w-0">
         <p className="truncate font-medium">
@@ -163,7 +163,7 @@ function ReviewListSkeleton() {
         {Array.from({ length: SKELETON_ROWS }, (_, index) => (
           <div
             key={index}
-            className="flex min-h-16 items-center justify-between gap-3 px-4 py-3"
+            className="flex min-h-14 items-center justify-between gap-3 px-4 py-2"
           >
             <div className="flex flex-col gap-2">
               <Skeleton className="h-4 w-36" />

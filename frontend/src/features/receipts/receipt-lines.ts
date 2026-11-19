@@ -6,17 +6,25 @@ import type { MoneyOut } from "@/features/receipts/money";
 export interface ReceiptRow {
   key: number;
   kind: LineItemOut["kind"];
-  /** The product's name when the line is matched, else the line's own description. */
+  /**
+   * The product's name when the line is matched, else the line's own description; a saving
+   * over several items ("MULTIPLE" on the receipt) reads "Multi-buy saving".
+   */
   name: string;
   /** The printed text (without its item code) when it reads differently from `name`. */
   printed: string | null;
   category: Category | null;
   productId: number | null;
   /**
-   * How many were bought, as a decimal: the summed quantities of collapsed lines (only whole
-   * quantities collapse), or a weighed line's own quantity, e.g. "1.36".
+   * How many were bought, as a decimal: the summed quantities of collapsed lines (weighed lines
+   * never collapse), or a weighed line's own quantity, e.g. "1.36".
    */
   quantity: string;
+  /** Sold by kg or lb (or, on lines read before units were kept, a fractional quantity). */
+  weighed: boolean;
+  /** A weighed line's price per unit (kg or lb) as printed; null for any other line. */
+  pricePerUnit: MoneyOut | null;
+  unit: LineItemOut["unit"];
   /** What was paid, after the discounts that apply to these lines. */
   paid: MoneyOut;
   /** What those discounts took off (> 0), or null without one. */
@@ -31,6 +39,7 @@ interface Group {
 }
 
 const ITEM_CODE = /^\d{3,}\s+/;
+const MULTIPLE = /\bmultiple\b/i;
 
 /**
  * The receipt's lines as rows to read: a discount that names its item is folded into that
@@ -86,7 +95,13 @@ export function receiptRows(items: readonly LineItemOut[]): ReceiptRow[] {
 
 /** An item bought by the piece, which may collapse with others like it. */
 function isCountable(line: LineItemOut): boolean {
-  return line.kind === "item" && Number.isInteger(Number(line.quantity));
+  return line.kind === "item" && !isWeighed(line);
+}
+
+function isWeighed(line: LineItemOut): boolean {
+  if (line.kind !== "item") return false;
+  if (line.unit === null) return !Number.isInteger(Number(line.quantity));
+  return line.unit === "kg" || line.unit === "lb";
 }
 
 function isSameUnmatchedItem(a: LineItemOut, b: LineItemOut): boolean {
@@ -108,7 +123,11 @@ function comparable(text: string): string {
 }
 
 function toRow({ first, lines, discount }: Group): ReceiptRow {
-  const name = first.product_name ?? (first.description || printedText(first));
+  const name =
+    first.kind === "discount" &&
+    (MULTIPLE.test(first.raw_text) || MULTIPLE.test(first.description))
+      ? "Multi-buy saving"
+      : (first.product_name ?? (first.description || printedText(first)));
   const printed = printedText(first);
   const total = lines.reduce(
     (sum, line) => sum + line.line_total.amount_cents,
@@ -124,6 +143,9 @@ function toRow({ first, lines, discount }: Group): ReceiptRow {
     quantity: isCountable(first)
       ? String(lines.reduce((sum, line) => sum + Number(line.quantity), 0))
       : first.quantity,
+    weighed: isWeighed(first),
+    pricePerUnit: isWeighed(first) ? first.unit_price : null,
+    unit: first.unit,
     paid: { ...first.line_total, amount_cents: total + discount },
     saved:
       discount === 0 ? null : { ...first.line_total, amount_cents: -discount },

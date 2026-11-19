@@ -100,6 +100,11 @@ describe("ranges", () => {
       [at("2026-11-15"), at("2026-01-10"), at("2025-12-01")],
       "All",
     ],
+    [
+      "six months would leave one date",
+      [at("2026-11-15"), at("2026-11-15"), at("2026-01-10")],
+      "All",
+    ],
   ])("defaults to the right range when %s", (_, history, range) => {
     expect(defaultRange(history)).toBe(range);
   });

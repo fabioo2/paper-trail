@@ -106,6 +106,7 @@ class LineItemOut(BaseModel):
     raw_text: str
     description: str
     quantity: str  # the exact decimal, e.g. "0.452"
+    unit: LineUnit | None
     unit_price: MoneyOut | None
     line_total: MoneyOut
     product_id: int | None
@@ -124,6 +125,7 @@ class LineItemOut(BaseModel):
             raw_text=item.raw_text,
             description=item.description,
             quantity=decimal_text(item.quantity),
+            unit=line_unit(item.unit),
             unit_price=MoneyOut.from_optional(item.unit_price),
             line_total=MoneyOut.from_domain(item.line_total),
             product_id=item.product_id,

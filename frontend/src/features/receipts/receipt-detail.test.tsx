@@ -70,7 +70,7 @@ describe("Receipt detail page", () => {
     expect(requests.map((url) => url.pathname)).toEqual(["/api/receipts/7"]);
   });
 
-  it("S1-AC-26: header shows the tidy store name, full date, line count and total, and no badge once completed", async () => {
+  it("S1-AC-26: header shows the tidy store name, full date, item count and total, and no badge once completed", async () => {
     serveDetail(receiptDetail());
 
     renderApp("/receipts/7");
@@ -83,12 +83,12 @@ describe("Receipt detail page", () => {
       /^Costco$/,
     );
     const text = textOf(main);
-    expect(text).toContain(`${formatFullDate("2026-11-01")} · 2 lines`);
+    expect(text).toContain(`${formatFullDate("2026-11-01")} · 2 items`);
     expect(text).toContain(`Total${formatMoney(cad(1155))}`);
     expect(text).not.toMatch(/completed|you saved/i);
   });
 
-  it("reads each line as a stacked row: name, printed text or category, and what was paid", async () => {
+  it("reads each line as a stacked row: name, one detail line (weight, category or else printed text), and what was paid", async () => {
     serveDetail(
       receiptDetail({
         items: [
@@ -105,8 +105,20 @@ describe("Receipt detail page", () => {
             raw_text: "1281 BANANAS",
             description: "Bananas",
             quantity: "1.36",
+            unit: "kg",
             unit_price: cad(150),
             line_total: cad(204),
+            category: "produce",
+          }),
+          lineItem({
+            id: 15,
+            position: 5,
+            raw_text: "2210 POTATOES",
+            description: "Potatoes",
+            quantity: "2",
+            unit: "kg",
+            unit_price: cad(220),
+            line_total: cad(440),
             category: "produce",
           }),
           lineItem({
@@ -119,22 +131,34 @@ describe("Receipt detail page", () => {
             line_total: cad(-500),
             category: null,
           }),
+          lineItem({
+            id: 14,
+            position: 4,
+            kind: "discount",
+            raw_text: "MULTIPLE",
+            description: "Multiple",
+            unit_price: null,
+            line_total: cad(-600),
+            category: null,
+          }),
         ],
       }),
     );
 
     renderApp("/receipts/7");
     const main = await page();
-    await within(main).findByText("Produce");
+    await within(main).findAllByText("Dairy & eggs");
 
     const rows = within(within(main).getByRole("list", { name: "Items" }))
       .getAllByRole("listitem")
       .map(textOf);
     expect(rows).toEqual([
-      `Kirkland Organic Eggs 24 ctKS ORG EGGS 24CT${formatMoney(cad(899))}`,
-      `Kirkland Organic Eggs 24 ctKS EGGS 24CT${formatMoney(cad(899))}`,
-      `Bananas ×1.36Produce${formatMoney(cad(204))}`,
+      `Kirkland Organic Eggs 24 ctDairy & eggs${formatMoney(cad(899))}`,
+      `Kirkland Organic Eggs 24 ctDairy & eggs${formatMoney(cad(899))}`,
+      `Bananas1.36 kg @ ${formatMoney(cad(150))}/kg · Produce${formatMoney(cad(204))}`,
+      `Potatoes2 kg @ ${formatMoney(cad(220))}/kg · Produce${formatMoney(cad(440))}`,
       `Instant savingsTPD/1362394${formatMoney(cad(-500))}`,
+      `Multi-buy savingMULTIPLE${formatMoney(cad(-600))}`,
     ]);
     expect(within(main).queryByRole("table")).toBeNull();
     expect(
@@ -148,7 +172,7 @@ describe("Receipt detail page", () => {
       description: "Choc Pistach",
       product_id: 42,
       product_name: "Chocolate Pistachio",
-      product_category: "snacks_candy",
+      product_category: "pantry",
     } as const;
     serveDetail(
       receiptDetail({
@@ -176,6 +200,7 @@ describe("Receipt detail page", () => {
 
     renderApp("/receipts/7");
     const main = await page();
+    await within(main).findByText("Pantry");
 
     const [row, ...others] = within(
       within(main).getByRole("list", { name: "Items" }),
@@ -183,23 +208,26 @@ describe("Receipt detail page", () => {
     if (!row) throw new Error("expected one row");
     expect(others).toEqual([]);
     expect(textOf(row)).toBe(
-      `Chocolate Pistachio ×2CHOC PISTACH${formatMoney(cad(2598))}saved ${formatMoney(cad(800))}`,
+      `Chocolate Pistachio ×2Pantry${formatMoney(cad(2598))}saved ${formatMoney(cad(800))}`,
     );
     expect(within(row).getByRole("link")).toHaveAttribute(
       "href",
       "/products/42",
     );
     expect(textOf(main)).toContain(`You saved${formatMoney(cad(800))}`);
-    expect(textOf(main)).toContain("· 4 lines");
+    expect(textOf(main)).toContain("· 2 items");
   });
 
-  it("S1-AC-26: shows the totals block (subtotal, tax, total)", async () => {
+  it("S1-AC-26: shows the totals block (subtotal, tax, total) in the card under the items", async () => {
     serveDetail(receiptDetail());
 
     renderApp("/receipts/7");
     const main = await page();
 
-    const text = textOf(main);
+    const items = within(main).getByRole("list", { name: "Items" });
+    const totals = items.nextElementSibling;
+    expect(totals?.tagName).toBe("DL");
+    const text = textOf(totals as HTMLElement);
     expect(text).toMatch(
       new RegExp(`Subtotal\\s*${escapeRegExp(formatMoney(cad(1103)))}`),
     );

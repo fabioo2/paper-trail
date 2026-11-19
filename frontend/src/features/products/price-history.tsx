@@ -6,6 +6,7 @@ import {
   type ChartPoint,
   chartLayout,
   defaultRange,
+  drawsLine,
   inRange,
   rangeFrom,
   RANGES,
@@ -44,8 +45,8 @@ function storeStyle(index: number): StoreStyle {
 }
 
 /**
- * Prices per unit at each store over the chosen range: a chart over time (two dated
- * purchases or more), a table of lowest, average and last per store, and which store is
+ * Prices per unit at each store over the chosen range: a chart over time (purchases on two
+ * dates or more), a table of lowest, average and last per store, and which store is
  * cheaper (two stores or more).
  */
 export function PriceHistory({
@@ -71,7 +72,7 @@ export function PriceHistory({
   const overall = storeComparison(purchases, product);
   if (overall === null) return null;
 
-  const charted = points.length >= 2;
+  const charted = drawsLine(points);
   const active = charted ? range : "All";
   const newest = purchases[0]?.purchased_on ?? null;
   const from = newest === null ? null : rangeFrom(newest, active);
@@ -145,10 +146,10 @@ function PriceChart({
   currency: string;
   per: string;
 }) {
-  if (points.length < 2) {
+  if (!drawsLine(points)) {
     return (
       <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-        Fewer than two purchases in this range.
+        Fewer than two purchase dates in this range.
       </p>
     );
   }

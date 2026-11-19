@@ -417,6 +417,16 @@
             "title": "Raw Text",
             "type": "string"
           },
+          "unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineUnit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "unit_price": {
             "anyOf": [
               {
@@ -435,6 +445,7 @@
           "raw_text",
           "description",
           "quantity",
+          "unit",
           "unit_price",
           "line_total",
           "product_id",

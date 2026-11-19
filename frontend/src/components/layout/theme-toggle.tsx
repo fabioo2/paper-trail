@@ -15,13 +15,15 @@ export function ThemeToggle() {
   const { preference, setPreference } = useTheme();
   const next = nextPreference(preference);
   const Icon = ICONS[preference];
+  const label = `Theme: ${preference}. Switch to ${next}`;
 
   return (
     <Button
       variant="ghost"
       size="icon"
       className="size-11"
-      aria-label={`Theme: ${preference}. Switch to ${next}`}
+      aria-label={label}
+      title={label}
       onClick={() => {
         setPreference(next);
       }}

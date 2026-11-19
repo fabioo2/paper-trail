@@ -24,22 +24,33 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
-/** The products list's filter chip: one category, one store, or the products to check. */
+/**
+ * The products list's filter chip (one category, one store, or the products to check) and what
+ * the header search typed.
+ */
 export interface ProductsSearch {
   /** Open the list on the products whose details were guessed. */
   needsALook?: boolean;
   category?: string;
   /** A store as displayed (`displayStoreName`). */
   store?: string;
+  q?: string;
 }
 
-function productsSearch(search: Record<string, unknown>): ProductsSearch {
+function productsChip(search: Record<string, unknown>): ProductsSearch {
   if (search.needsALook === true) return { needsALook: true };
   if (typeof search.category === "string") {
     return { category: search.category };
   }
   if (typeof search.store === "string") return { store: search.store };
   return {};
+}
+
+function productsSearch(search: Record<string, unknown>): ProductsSearch {
+  const chip = productsChip(search);
+  return typeof search.q === "string" && search.q !== ""
+    ? { ...chip, q: search.q }
+    : chip;
 }
 
 export interface ResultsSearch {

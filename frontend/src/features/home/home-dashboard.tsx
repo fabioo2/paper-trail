@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { CloudOff, LoaderCircle, ScanLine } from "lucide-react";
+import { ChevronRight, CloudOff, LoaderCircle, ScanLine } from "lucide-react";
 import { type ReactNode, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -175,7 +175,7 @@ function MonthCard({
       title={`${formatMonthName(`${summary.month}-01`)} so far`}
       action={<CardLink to="/receipts">All receipts</CardLink>}
     >
-      <p className="text-3xl font-semibold tracking-tight tabular-nums">
+      <p className="text-2xl font-semibold tracking-tight tabular-nums">
         {summary.spent.length > 0
           ? sums(summary.spent)
           : formatMoney({ amount_cents: 0, currency: "CAD" })}
@@ -218,7 +218,7 @@ function WeekBars({
         const future = week.start > todayIso;
         return (
           <li key={week.start} className="flex flex-col gap-1">
-            <div aria-hidden="true" className="flex h-16 items-end">
+            <div aria-hidden="true" className="flex h-12 items-end">
               <div
                 data-testid="week-bar"
                 className={cn(
@@ -293,29 +293,44 @@ function NeedsYouCard({ summary }: { summary: MonthSummaryOut }) {
   }
   return (
     <HomeCard title="Needs you" className="border-warning bg-warning/10">
-      <ul className="flex flex-col gap-2 text-sm">
+      <ul className="-my-1 flex flex-col text-sm">
         {reviews > 0 ? (
           <li>
-            <Link
-              to="/review"
-              className="font-medium underline-offset-4 hover:underline"
-            >
+            <NeedsYouLink to="/review">
               {plural(reviews, "receipt", "receipts")} to review
-            </Link>
+            </NeedsYouLink>
           </li>
         ) : null}
         {products > 0 ? (
           <li>
-            <Link
-              to="/products/check"
-              className="font-medium underline-offset-4 hover:underline"
-            >
+            <NeedsYouLink to="/products/check">
               {plural(products, "product", "products")} to check
-            </Link>
+            </NeedsYouLink>
           </li>
         ) : null}
       </ul>
     </HomeCard>
+  );
+}
+
+function NeedsYouLink({
+  to,
+  children,
+}: {
+  to: "/review" | "/products/check";
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      to={to}
+      className="flex min-h-11 items-center justify-between gap-3 font-medium underline-offset-4 hover:underline"
+    >
+      {children}
+      <ChevronRight
+        aria-hidden="true"
+        className="size-5 shrink-0 text-muted-foreground"
+      />
+    </Link>
   );
 }
 
@@ -331,7 +346,7 @@ function RecentCard({ summary }: { summary: MonthSummaryOut }) {
             <Link
               to="/receipts/$receiptId"
               params={{ receiptId: String(receipt.id) }}
-              className="flex min-h-14 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+              className="flex min-h-12 items-center justify-between gap-3 px-4 py-2 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
             >
               <span className="min-w-0">
                 <span className="block truncate font-medium">

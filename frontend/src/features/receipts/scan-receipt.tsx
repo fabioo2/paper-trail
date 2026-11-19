@@ -207,7 +207,7 @@ function SendPhoto({ photo, onSent, onDiscard }: SendPhotoProps) {
 
   return (
     <section className="mx-auto flex max-w-sm flex-col items-center gap-4 px-4 py-6">
-      <h1 className="text-xl font-semibold tracking-tight">Send this photo?</h1>
+      <h1 className="text-lg font-semibold tracking-tight">Send this photo?</h1>
       <img
         src={photo.url}
         alt="The receipt you picked"

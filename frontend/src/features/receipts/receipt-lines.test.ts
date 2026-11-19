@@ -64,6 +64,9 @@ function row(position: number, overrides: Partial<ReceiptRow>): ReceiptRow {
     category: null,
     productId: null,
     quantity: "1",
+    weighed: false,
+    pricePerUnit: null,
+    unit: "each",
     paid: cad(0),
     saved: null,
     ...overrides,
@@ -126,6 +129,24 @@ describe("receiptRows", () => {
       ],
     ],
     [
+      "a saving over several items reads as a multi-buy saving",
+      [
+        line(0, -600, {
+          kind: "discount",
+          raw_text: "MULTIPLE",
+          description: "Multiple",
+        }),
+      ],
+      [
+        row(0, {
+          kind: "discount",
+          name: "Multi-buy saving",
+          printed: "MULTIPLE",
+          paid: cad(-600),
+        }),
+      ],
+    ],
+    [
       "a discount that names a line that is not an item stays a row",
       [line(0, 25, { kind: "fee", description: "Fee" }), discount(1, -25, 0)],
       [
@@ -181,20 +202,62 @@ describe("receiptRows", () => {
       ],
     ],
     [
-      "whole quantities add up; a weighed line keeps its quantity and never collapses",
+      "whole quantities add up; a kg or lb line, even a whole one, keeps its quantity and never collapses",
       [
         line(0, 658, { quantity: "2" }),
         line(1, 658, { quantity: "2.000", ...SAME }),
-        line(2, 204, { quantity: "1.36", ...BANANAS }),
+        line(2, 204, { quantity: "1.36", unit: "kg", ...BANANAS }),
         line(3, 150, { quantity: "1", ...BANANAS }),
-        line(4, 99, { quantity: "0.66", ...BANANAS }),
+        line(4, 300, { quantity: "2", unit: "kg", ...BANANAS }),
         line(5, 150, { quantity: "1", ...BANANAS }),
+        line(6, 300, { quantity: "2", unit: "lb", ...BANANAS }),
       ],
       [
         row(0, { quantity: "4", paid: cad(1316) }),
-        row(2, { ...BANANAS_ROW, quantity: "1.36", paid: cad(204) }),
+        row(2, {
+          ...BANANAS_ROW,
+          quantity: "1.36",
+          weighed: true,
+          unit: "kg",
+          pricePerUnit: cad(204),
+          paid: cad(204),
+        }),
         row(3, { ...BANANAS_ROW, quantity: "2", paid: cad(300) }),
-        row(4, { ...BANANAS_ROW, quantity: "0.66", paid: cad(99) }),
+        row(4, {
+          ...BANANAS_ROW,
+          quantity: "2",
+          weighed: true,
+          unit: "kg",
+          pricePerUnit: cad(300),
+          paid: cad(300),
+        }),
+        row(6, {
+          ...BANANAS_ROW,
+          quantity: "2",
+          weighed: true,
+          unit: "lb",
+          pricePerUnit: cad(300),
+          paid: cad(300),
+        }),
+      ],
+    ],
+    [
+      "a line read before units were kept is weighed when its quantity is fractional",
+      [
+        line(0, 99, { quantity: "0.66", unit: null }),
+        line(1, 150, { quantity: "1", unit: null }),
+        line(2, 150, { quantity: "1", unit: null, ...SAME }),
+      ],
+      [
+        row(0, {
+          quantity: "0.66",
+          weighed: true,
+          unit: null,
+          pricePerUnit: cad(99),
+          paid: cad(99),
+        }),
+        row(1, { quantity: "1", unit: null, paid: cad(150) }),
+        row(2, { name: "Item 0", unit: null, paid: cad(150) }),
       ],
     ],
   ])("%s", (_, items, expected) => {
