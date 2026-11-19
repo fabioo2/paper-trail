@@ -28,6 +28,7 @@ from paper_trail.domain.trace import TraceKind
 from paper_trail.ports.agents import GraphOutcome, NothingToResumeError, OutdatedCheckpointError
 
 REVIEW_NODE = "review"
+SUPERVISOR_NODE = "supervisor"
 _START = "__start__"
 
 
@@ -103,16 +104,42 @@ class LangGraphReceiptRunner:
         graph = build_receipt_graph(self._deps, self._checkpointer)
         return _paused_for_review(self._snapshot(graph, receipt_id))
 
+    def answer_taken(self, receipt_id: int) -> bool:
+        graph = build_receipt_graph(self._deps, self._checkpointer)
+        return bool(_state(self._snapshot(graph, receipt_id)).get("approved"))
+
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:
+        state = self._pending_state(receipt_id)
+        return None if state is None else extraction_draft(self._deps, state)
+
+    def reach_review(self, receipt_id: int) -> bool:
+        graph = build_receipt_graph(self._deps, self._checkpointer)
+        snapshot = self._snapshot(graph, receipt_id)
+        if not snapshot.values:
+            msg = f"nothing to resume: the agents' run of receipt {receipt_id} does not exist"
+            raise NothingToResumeError(msg)
+        if _paused_for_review(snapshot):
+            return True
+        if not _stopped_before_review(snapshot):
+            return False
+        self._run(
+            receipt_id,
+            None,
+            interrupt_after=SUPERVISOR_NODE,
+            resumed_from=_last_completed(graph, snapshot),
+        )
+        return _paused_for_review(self._snapshot(graph, receipt_id))
+
+    def _pending_state(self, receipt_id: int) -> ReceiptState | None:
         snapshot = self._snapshot(build_receipt_graph(self._deps, self._checkpointer), receipt_id)
         state = _state(snapshot)
         if (
-            not _paused_for_review(snapshot)
+            not (_paused_for_review(snapshot) or _stopped_before_review(snapshot))
             or state.get("extraction") is None
             or state.get("state_version") != STATE_VERSION
         ):
             return None
-        return extraction_draft(self._deps, state)
+        return state
 
     def _run(
         self,
@@ -190,6 +217,13 @@ def _outdated(receipt_id: int) -> str:
 
 def _paused_for_review(snapshot: StateSnapshot) -> bool:
     return REVIEW_NODE in snapshot.next
+
+
+def _stopped_before_review(snapshot: StateSnapshot) -> bool:
+    """The run stopped before its supervisor's step was checkpointed, no answer taken: when
+    the supervisor opened a review (a crash between ``open_review`` and the checkpoint), that
+    review is waiting on the reading the state holds."""
+    return snapshot.next == (SUPERVISOR_NODE,) and not _state(snapshot).get("approved")
 
 
 def _last_completed(graph: ReceiptGraph, snapshot: StateSnapshot) -> str | None:

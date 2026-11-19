@@ -173,10 +173,15 @@ class ReceiptDetailOut(ReceiptSummaryOut):
     failure_reason: FailureReason | None  # why it FAILED; null unless FAILED
     items: list[LineItemOut]
     arithmetic: ArithmeticReportOut
+    review_id: int | None  # the open review a NEEDS_REVIEW receipt waits for
 
     @classmethod
     def from_receipt(
-        cls, receipt: Receipt, report: ArithmeticReport, products: Mapping[int, Product]
+        cls,
+        receipt: Receipt,
+        report: ArithmeticReport,
+        products: Mapping[int, Product],
+        review_id: int | None,
     ) -> "ReceiptDetailOut":
         """``products`` holds the products the lines link to, by id."""
         discounts = [
@@ -204,6 +209,7 @@ class ReceiptDetailOut(ReceiptSummaryOut):
                 for item in receipt.items
             ],
             arithmetic=ArithmeticReportOut.from_domain(report),
+            review_id=review_id,
         )
 
 

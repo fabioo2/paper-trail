@@ -29,6 +29,18 @@ describe("formatMoney", () => {
     );
   });
 
+  it.each([
+    ["JPY", "JP¥12.34"],
+    ["KWD", "KWD 12.34"],
+  ])("shows %s cents with exactly two decimals", (currency, expected) => {
+    expect(
+      formatMoney({ amount_cents: 1234, currency }, "en-CA").replace(
+        /\s/g,
+        " ",
+      ),
+    ).toBe(expected);
+  });
+
   it("shows Canadian dollars as a bare $ where the locale would say CA$", () => {
     expect(formatMoney({ amount_cents: 609, currency: "CAD" }, "en-US")).toBe(
       "$6.09",

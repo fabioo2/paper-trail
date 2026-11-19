@@ -139,7 +139,12 @@ def _resolve() -> Scene:
     review_id = require_id(graph.review_id)
     during.checked = False
     draft = receipt_draft(store_name="Costco", ocr_text=None, image_path=None)
-    return Scene(harness, during, graph.receipt_id, lambda: harness.resolve(review_id, draft))
+    return Scene(
+        harness,
+        during,
+        graph.receipt_id,
+        lambda: harness.resolve(review_id, draft, force=True, reason="checked the paper"),
+    )
 
 
 SCENES = {"resume": _resume, "reprocess": _reprocess, "resolve": _resolve}
@@ -219,7 +224,9 @@ def test_a_review_answer_from_the_web_app_is_refused_while_the_cli_holds_the_rec
         ReceiptHold(uow_factory, holder=CLI_HOLDER, renew_every_s=10.0)(scene.receipt_id),
         pytest.raises(ConflictError, match="is being processed"),
     ):
-        AnswerReview(uow_factory, scene.harness.resolve)(review_id, draft)
+        AnswerReview(uow_factory, scene.harness.resolve)(
+            review_id, draft, force=True, reason="checked the paper"
+        )
 
     assert [job.kind for job in scene.jobs()] == [JobKind.PROCESS_RECEIPT]
     assert _state(scene) == (

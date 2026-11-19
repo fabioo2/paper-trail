@@ -177,6 +177,8 @@ def review_resolution() -> Observed:
         resolved = harness.resolve(
             require_id(parked.graph.review_id),
             receipt_draft(store_name="Costco", ocr_text=None, image_path=None),
+            force=True,
+            reason="checked the paper",
         )
     observed = _observe((harness,), parked.receipt_id, (parked, resolved), logs)
     assert observed.receipt.status is ReceiptStatus.COMPLETED

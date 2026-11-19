@@ -1,10 +1,12 @@
 """Recording receipts, resolving their reviews, and reading them back (PLAN 3.6, PLAN 5)."""
 
-from collections.abc import Mapping, Sequence
+import contextlib
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 import structlog
+from pydantic import ValidationError
 
 from paper_trail.application.holds import ReceiptHold
 from paper_trail.application.matching import (
@@ -31,7 +33,11 @@ from paper_trail.domain.enums import (
     ReviewReason,
     ReviewStatus,
 )
-from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
+from paper_trail.domain.errors import (
+    ConflictError,
+    DomainValidationError,
+    NotFoundError,
+)
 from paper_trail.domain.models import (
     Correction,
     JsonValue,
@@ -50,6 +56,7 @@ from paper_trail.domain.rules.arithmetic import (
     Tolerances,
     check_arithmetic,
 )
+from paper_trail.domain.rules.completeness import check_completeness
 from paper_trail.domain.rules.discounts import (
     DiscountAttribution,
     attribute_discounts,
@@ -59,7 +66,7 @@ from paper_trail.domain.rules.discounts import (
 from paper_trail.domain.rules.masking import mask_pans
 from paper_trail.domain.rules.normalization import normalize_alias, normalize_store_name
 from paper_trail.ports.agents import NothingToResumeError, ReceiptGraphRunner
-from paper_trail.ports.clock import Clock
+from paper_trail.ports.clock import Clock, local_today
 from paper_trail.ports.images import ImageStore
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
@@ -162,32 +169,44 @@ class RecordReceipt:
         ``assess``. NotFoundError for an unknown receipt.
         """
         assessment = self.assess(draft, attribute=attribute)
+        with self._uow_factory() as uow:
+            receipt = self.replace_in(uow, receipt_id, assessment, force=force, matching=matching)
+            uow.commit()
+        return self._recorded(receipt, assessment, None)
+
+    def replace_in(
+        self,
+        uow: UnitOfWork,
+        receipt_id: int,
+        assessment: ReceiptAssessment,
+        *,
+        force: bool,
+        matching: bool,
+    ) -> Receipt:
+        """``replace`` of an assessed draft inside the caller's unit of work, uncommitted."""
         if (assessment.arithmetic.ok or force) and matching:
             status, stage = ReceiptStatus.PROCESSING, ProcessingStage.MATCHING
         elif assessment.arithmetic.ok or force:
             status, stage = ReceiptStatus.COMPLETED, ProcessingStage.DONE
         else:
             status, stage = ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
-        now = self._clock.now()
-        with self._uow_factory() as uow:
-            current = uow.receipts.get(receipt_id)
-            if current is None:
-                msg = f"receipt {receipt_id} does not exist"
-                raise NotFoundError(msg)
-            contents = self._receipt(uow, assessment, status, stage, now)
-            receipt = uow.receipts.replace_contents(
-                replace(
-                    contents,
-                    id=receipt_id,
-                    created_at=current.created_at,
-                    image_sha256=current.image_sha256,
-                    ocr_text=_first_known(contents.ocr_text, current.ocr_text),
-                    image_path=_first_known(contents.image_path, current.image_path),
-                )
+        current = uow.receipts.get(receipt_id)
+        if current is None:
+            msg = f"receipt {receipt_id} does not exist"
+            raise NotFoundError(msg)
+        contents = self._receipt(uow, assessment, status, stage, self._clock.now())
+        receipt = uow.receipts.replace_contents(
+            replace(
+                contents,
+                id=receipt_id,
+                created_at=current.created_at,
+                image_sha256=current.image_sha256,
+                ocr_text=_first_known(contents.ocr_text, current.ocr_text),
+                image_path=_first_known(contents.image_path, current.image_path),
             )
-            _record_prices(uow, receipt, assessment.arithmetic)
-            uow.commit()
-        return self._recorded(receipt, assessment, None)
+        )
+        _record_prices(uow, receipt, assessment.arithmetic)
+        return receipt
 
     def record_matches(self, receipt_id: int, choices: Sequence[MatchChoice]) -> MatchesRecorded:
         """Link a saved receipt's lines to their products (the ``save_matches`` tool), all in
@@ -270,27 +289,35 @@ class InconsistentDraftError(DomainValidationError):
 @dataclass(frozen=True, slots=True)
 class ReviewAnswer:
     """A person's answer to an open review, checked: the corrected draft with card numbers
-    masked (None accepts the extraction the graph holds) and what recording it would do."""
+    masked (None accepts the reading the review holds), what recording it would do, and what
+    it was judged on (``report``): a draft's own checks, else the issues the review was
+    opened with."""
 
     review: ReviewItem
     draft: ReceiptDraft | None
     assessment: ReceiptAssessment
+    report: ArithmeticReport
+    flagged: bool  # the review was opened with issues: every answer to it is forced
 
     @property
     def overridden(self) -> bool:
-        """It does not add up and is kept anyway (``force``)."""
-        return not self.assessment.arithmetic.ok
+        """It is kept with a reason (``force``): the review was opened with issues, or the
+        answer does not add up."""
+        return self.flagged or not self.report.ok
 
 
 class ResolveReview:
     """A person's answer to a review: it resumes the receipt's parked graph thread (S3-AC-07).
 
-    The answer is a corrected draft, or (``draft=None``) the extraction the graph holds, which
-    the graph then saves itself, exactly as it would have without a review. It must add up
-    unless ``force`` is set with a reason, which is remembered as a correction.
+    The answer is a corrected draft, which must add up, or (``draft=None``) the extraction the
+    graph holds, which the graph then saves itself, exactly as it would have without a review.
+    Any answer to a review opened with issues needs ``force`` with a reason, as does one that
+    does not add up; the reason is remembered as a correction.
     The graph then saves the draft as PROCESSING/MATCHING, ``save_matches`` completes it, and only
     after that is the review RESOLVED. Answered here (the CLI), the receipt is held for the run
-    (``hold``); the worker answers through ``apply``, holding the answer's job itself.
+    (``hold``); the worker answers through ``apply``, holding the answer's job itself. A review
+    ``receipts import`` opened has no thread: its answer replaces the stored receipt's contents
+    directly, as a clean import of it would (``save_directly``).
     """
 
     def __init__(
@@ -319,11 +346,23 @@ class ResolveReview:
     ) -> Receipt:
         """Resolve the review with the answer. Without ``attribute`` a person's draft keeps the
         discount links it was given (none added), as the web app's editor shows them.
-        ConflictError while the receipt has a job waiting or running."""
-        with self._hold(self._open_review(review_id).receipt_id):
-            return self._resolve(review_id, draft, force=force, reason=reason, attribute=attribute)
+        ConflictError while the receipt has a job waiting or running. Any failure while the
+        graph runs (not a refused answer) gives the review back as a failed queued answer does
+        (``give_back``)."""
+        payload = ReviewAnswerPayload(
+            review_id=review_id,
+            draft=None,
+            force=force,
+            reason=mask_pans(reason.strip()).text if force and reason is not None else None,
+        )
+        with self._hold(
+            self._open_review(review_id).receipt_id, payload=payload.model_dump(mode="json")
+        ):
+            return self._resolve(
+                review_id, draft, force=force, reason=reason, attribute=attribute, give_back=True
+            )
 
-    def _resolve(
+    def _resolve(  # noqa: PLR0913 - the answer, and whether a failed run is given back here
         self,
         review_id: int,
         draft: ReceiptDraft | None,
@@ -331,37 +370,106 @@ class ResolveReview:
         force: bool,
         reason: str | None,
         attribute: bool,
+        give_back: bool = False,
     ) -> Receipt:
+        review = self._open_review(review_id)
+        if review.thread_id is None:
+            answer = self.check(review_id, draft, force=force, reason=reason, attribute=attribute)
+            return self.save_directly(answer, reason)
+
+        @contextlib.contextmanager
+        def given_back_on_failure() -> Iterator[None]:
+            try:
+                yield
+            except BaseException:  # an interrupted CLI (Ctrl-C) gives the review back too
+                if give_back:
+                    self.give_back(review_id, forced_reason=reason if force else None)
+                raise
+
+        with given_back_on_failure():
+            self._reach_review(review_id, review.receipt_id)
         answer = self.check(review_id, draft, force=force, reason=reason, attribute=attribute)
-        # Accepted as it is, the graph saves its own extraction (its codes and the source of
-        # each category kept); a person's draft is masked before it enters the graph.
-        self._runner.resume(
-            answer.review.receipt_id,
-            None if answer.draft is None else answer.assessment.draft,
-            attribute_discounts=attribute,
-        )
-        return self._close(answer.review, reason if answer.overridden else None)
+        with given_back_on_failure():
+            # Accepted as it is, the graph saves its own extraction (its codes and the source
+            # of each category kept); a person's draft is masked before it enters the graph.
+            self._runner.resume(
+                answer.review.receipt_id,
+                None if answer.draft is None else answer.assessment.draft,
+                attribute_discounts=attribute,
+            )
+            return self._close(answer.review, reason if answer.overridden else None)
 
     def apply(
         self, review_id: int, draft: ReceiptDraft | None, *, force: bool, reason: str | None
     ) -> Receipt:
         """The worker's side of an answer queued by ``AnswerReview`` (its discount links kept).
 
-        While the thread waits for the review, the answer resolves it as a call does. When an
-        earlier attempt already gave it (a worker that died after resuming), it is not given
-        again: an unfinished run is continued from its last checkpoint, a finished one left as
-        it is, and the review is closed. A receipt without a thread is a NothingToResumeError.
+        While the graph has not taken an answer, the answer resolves the review as a call does
+        (a run that stopped just before the review is first continued to it). When an earlier
+        attempt already gave it (a worker that died after resuming), it is not given again: an
+        unfinished run is continued from its last checkpoint, a finished one left as it is, and
+        the review is closed. A receipt without a thread is a NothingToResumeError, unless its
+        review was opened by ``receipts import``.
         """
         review = self._open_review(review_id)
         receipt_id = review.receipt_id
-        if self._runner.waiting_for_review(receipt_id):
+        if review.thread_id is None or not self._runner.answer_taken(receipt_id):
             return self._resolve(review_id, draft, force=force, reason=reason, attribute=False)
-        try:
+        with contextlib.suppress(NothingToResumeError):
             self._runner.resume(receipt_id)
-        except NothingToResumeError:
-            if not self._runner.has_thread(receipt_id):
-                raise
         return self._close(review, reason if force else None)
+
+    def save_directly(self, answer: "ReviewAnswer", reason: str | None) -> Receipt:
+        """Record a checked answer to a review with no thread (``receipts import`` opened it)
+        as the receipt's contents, COMPLETED, and close the review, in one unit of work: the
+        corrected draft, or accepted as read, the stored contents again. A line the answer
+        keeps (same position, kind and printed text) keeps its product; prices are recorded
+        as a clean import records them. ConflictError, changing nothing, when the review is
+        no longer OPEN or its receipt no longer NEEDS_REVIEW."""
+        review_id, receipt_id = require_id(answer.review.id), answer.review.receipt_id
+        with self._uow_factory() as uow:
+            review = uow.reviews.get(review_id)
+            current = uow.receipts.get(receipt_id)
+            if review is None or review.status is not ReviewStatus.OPEN:
+                msg = f"review {review_id} is no longer open"
+                raise ConflictError(msg)
+            if current is None or current.status is not ReceiptStatus.NEEDS_REVIEW:
+                msg = f"receipt {receipt_id} is not waiting for this review"
+                raise ConflictError(msg)
+            assessment = answer.assessment
+            kept = replace(
+                assessment,
+                draft=replace(
+                    assessment.draft, items=_products_kept(assessment.draft.items, current)
+                ),
+            )
+            receipt = self._record_receipt.replace_in(
+                uow, receipt_id, kept, force=True, matching=False
+            )
+            self._remember(uow, receipt_id, reason if answer.overridden else None)
+            uow.reviews.resolve(review_id)
+            uow.commit()
+        log.info(
+            "review.resolved",
+            review_id=review_id,
+            receipt_id=receipt_id,
+            forced=answer.overridden,
+        )
+        return receipt
+
+    def _reach_review(self, review_id: int, receipt_id: int) -> None:
+        """A run that stopped after its supervisor opened the review, before that step's
+        checkpoint (a crash), is continued up to the review: the supervisor routes the same
+        way and finds the review it opened, so no answer is given to a thread that is not
+        waiting for it. Only for the receipt's OPEN review (``review_id``), and never past
+        the supervisor (``ReceiptGraphRunner.reach_review``): no Claude read starts in an
+        answer. NothingToResumeError when the receipt has no thread."""
+        if self._runner.answer_taken(receipt_id) or self._runner.waiting_for_review(receipt_id):
+            return
+        with self._uow_factory(read_only=True) as uow:
+            current = uow.reviews.find_open(receipt_id)
+        if current is not None and current.id == review_id:
+            self._runner.reach_review(receipt_id)
 
     def give_back(
         self,
@@ -371,33 +479,50 @@ class ResolveReview:
         failure: FailureReason = FailureReason.UNKNOWN,
     ) -> None:
         """After a queued answer failed, decided by the graph's checkpoint alone. While the
-        thread still waits for the review (the answer was not taken), or there is no thread,
+        graph has not taken the answer (it waits for the review, or stopped just before it),
+        or there is no thread,
         the receipt waits for a person again (NEEDS_REVIEW). Once the graph took the answer and
-        the run failed after it, the review is closed and the receipt FAILED with ``failure``:
-        like any failed run, ``process --resume`` or a retry continues it. Either way only while
-        the review is still OPEN and the receipt not COMPLETED, read in the write unit of work
-        that changes them."""
+        the run failed after it, the review is closed (``close_taken``). Either way only while
+        the review is still OPEN, and a COMPLETED receipt is never demoted, read in the write
+        unit of work that changes them."""
         receipt_id = GetReview(self._uow_factory)(review_id).receipt_id
-        taken = self._runner.has_thread(receipt_id) and not self._runner.waiting_for_review(
-            receipt_id
-        )
+        taken = self._runner.answer_taken(receipt_id)
         with self._uow_factory() as uow:
-            if not _still_open(uow, review_id, receipt_id):
-                return
             if taken:
-                self._remember(uow, receipt_id, forced_reason)
-                uow.reviews.resolve(review_id)
-                uow.receipts.update_status(
-                    receipt_id,
-                    ReceiptStatus.FAILED,
-                    ProcessingStage.FAILED,
-                    failure_reason=failure,
-                )
-            else:
+                self.close_taken(uow, review_id, forced_reason=forced_reason, failure=failure)
+            elif _still_open(uow, review_id, receipt_id):
                 uow.receipts.update_status(
                     receipt_id, ReceiptStatus.NEEDS_REVIEW, ProcessingStage.NEEDS_REVIEW
                 )
             uow.commit()
+
+    def answer_taken(self, receipt_id: int) -> bool:
+        """Whether the receipt's graph thread already took an answer to its review."""
+        return self._runner.answer_taken(receipt_id)
+
+    def close_taken(
+        self,
+        uow: UnitOfWork,
+        review_id: int,
+        *,
+        forced_reason: str | None,
+        failure: FailureReason,
+    ) -> None:
+        """In ``uow``, uncommitted: a review whose answer the graph took is RESOLVED
+        (``forced_reason`` remembered) and, unless its run finished (COMPLETED), its receipt
+        FAILED with ``failure``, for ``process --resume`` or a retry to finish; nothing once
+        the review is no longer OPEN."""
+        review = uow.reviews.get(review_id)
+        if review is None or review.status is not ReviewStatus.OPEN:
+            return
+        receipt_id = review.receipt_id
+        self._remember(uow, receipt_id, forced_reason)
+        uow.reviews.resolve(review_id)
+        receipt = uow.receipts.get(receipt_id)
+        if receipt is not None and receipt.status is not ReceiptStatus.COMPLETED:
+            uow.receipts.update_status(
+                receipt_id, ReceiptStatus.FAILED, ProcessingStage.FAILED, failure_reason=failure
+            )
 
     def _close(self, review: ReviewItem, forced_reason: str | None) -> Receipt:
         """RESOLVED, remembering ``forced_reason`` as a correction."""
@@ -431,25 +556,44 @@ class ResolveReview:
         attribute: bool = True,
     ) -> ReviewAnswer:
         """The answer, if it can resolve the review: NotFoundError for an unknown review,
-        ConflictError for one no longer open, DomainValidationError for a review with no run to
-        resume, ``force`` without a reason or nothing to accept, InconsistentDraftError for a
-        draft that does not add up without ``force``."""
+        ConflictError for one no longer open, DomainValidationError for ``force`` without a
+        reason, nothing to accept, or a purchase date after today (forced or not). Without
+        ``force``: any answer to a review opened with issues (``_flagged``) is refused, an
+        InconsistentDraftError with the draft's own issues or the review's, and so is any
+        draft that does not add up or lacks its store or date (over a year old too, for a
+        reading the agents made)."""
         review = self._open_review(review_id)
-        if review.thread_id is None:
-            msg = f"review {review_id} was not opened by the agents: there is no run to resume"
-            raise DomainValidationError(msg)
         if force and not (reason and reason.strip()):
             msg = "forcing a draft that does not add up needs a reason"
             raise DomainValidationError(msg)
-        masked = None if draft is None else _masked(draft)[0]
-        checked = masked if masked is not None else self._runner.pending_draft(review.receipt_id)
-        if checked is None:
-            msg = "there is no extraction to accept: answer with a corrected draft"
+        today = local_today(self._clock)
+        if draft is not None and draft.purchased_on is not None and draft.purchased_on > today:
+            msg = f"the purchase date {draft.purchased_on.isoformat()} is after today"
             raise DomainValidationError(msg)
-        assessment = self._record_receipt.assess(checked, attribute=attribute or masked is None)
-        if not assessment.arithmetic.ok and not force:
-            raise InconsistentDraftError(assessment.arithmetic)
-        return ReviewAnswer(review, masked, assessment)
+        opened = _opened_with(review)
+        if draft is not None:
+            masked = _masked(draft)[0]
+            assessment = self._record_receipt.assess(masked, attribute=attribute)
+            own = _answer_report(assessment, today, aged=review.thread_id is not None)
+            report = opened if own.ok and opened is not None else own
+        else:
+            masked = None
+            pending = _pending_draft(self._uow_factory, self._runner, review)
+            if pending is None:
+                msg = "there is no extraction to accept: answer with a corrected draft"
+                raise DomainValidationError(msg)
+            assessment = self._record_receipt.assess(
+                pending, attribute=review.thread_id is not None
+            )
+            own = _answer_report(assessment, today, aged=review.thread_id is not None)
+            report = opened or own
+        flagged = _flagged(review)
+        if (flagged or not report.ok) and not force:
+            if report.ok:
+                msg = f"review {review_id} was opened with issues: keep an answer with a reason"
+                raise DomainValidationError(msg)
+            raise InconsistentDraftError(report)
+        return ReviewAnswer(review, masked, assessment, report, flagged=flagged)
 
     def _open_review(self, review_id: int) -> ReviewItem:
         review = GetReview(self._uow_factory)(review_id)
@@ -476,7 +620,9 @@ class AnswerReview:
     review left OPEN beside a COMPLETED receipt (its run finished, closing it did not) is
     closed instead, and the answer refused with a ConflictError. So is an answer to a review
     whose receipt is not NEEDS_REVIEW (a FAILED one is retried instead: its graph may already
-    have taken an earlier answer, which a new one would silently replace)."""
+    have taken an earlier answer, which a new one would silently replace). A review with no
+    thread (``receipts import`` opened it) is saved in the request instead, in one unit of work
+    (``ResolveReview.save_directly``): the receipt comes back COMPLETED."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory, resolve_review: ResolveReview) -> None:
         self._uow_factory = uow_factory
@@ -493,7 +639,10 @@ class AnswerReview:
         answer = self._resolve_review.check(
             review_id, draft, force=force, reason=reason, attribute=False
         )
+        if answer.review.thread_id is None:
+            return self._resolve_review.save_directly(answer, reason)
         receipt_id = answer.review.receipt_id
+        taken = self._resolve_review.answer_taken(receipt_id)
         payload = ReviewAnswerPayload(
             review_id=review_id,
             draft=None if answer.draft is None else DraftPayload.from_draft(answer.draft),
@@ -518,6 +667,9 @@ class AnswerReview:
                 msg = f"receipt {receipt_id} is being processed: try again once it has finished"
                 raise ConflictError(msg)
             saved = receipt.status is ReceiptStatus.COMPLETED
+            if not saved and taken:
+                msg = f"review {review_id}: this review's answer is already being saved"
+                raise ConflictError(msg)
             if not saved and receipt.status is not ReceiptStatus.NEEDS_REVIEW:
                 msg = (
                     f"receipt {receipt_id} is {receipt.status.value}, not waiting for this"
@@ -546,8 +698,9 @@ class AnswerReview:
 
 @dataclass(frozen=True, slots=True)
 class PendingReview:
-    """A review with its receipt and the extraction its graph holds (None when there is none
-    to accept: the review is no longer open, the reading never parsed, or no thread waits)."""
+    """A review with its receipt and the extraction its graph holds, or for a review
+    ``receipts import`` opened the receipt as stored (None when there is none to accept: the
+    review is no longer open, the reading never parsed, or no thread waits)."""
 
     review: ReviewItem
     receipt: Receipt
@@ -575,7 +728,10 @@ class ListPendingReviews:
             ]
         return tuple(
             PendingReview(
-                review, receipt, self._runner.pending_draft(review.receipt_id), answer_queued=False
+                review,
+                receipt,
+                _pending_draft(self._uow_factory, self._runner, review),
+                answer_queued=False,
             )
             for review, receipt in waiting
         )
@@ -597,7 +753,7 @@ class GetPendingReview:
             msg = f"review {review_id} does not exist"
             raise NotFoundError(msg)
         draft = (
-            self._runner.pending_draft(review.receipt_id)
+            _pending_draft(self._uow_factory, self._runner, review)
             if review.status is ReviewStatus.OPEN
             else None
         )
@@ -649,6 +805,21 @@ class GetReceipt:
             msg = f"receipt {receipt_id} does not exist"
             raise NotFoundError(msg)
         return receipt, check_arithmetic(receipt, self._tolerances)
+
+
+class FindOpenReview:
+    """The id of the OPEN review a NEEDS_REVIEW receipt waits for; None for a receipt in any
+    other status, or with no open review."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def __call__(self, receipt: Receipt) -> int | None:
+        if receipt.status is not ReceiptStatus.NEEDS_REVIEW:
+            return None
+        with self._uow_factory(read_only=True) as uow:
+            review = uow.reviews.find_open(require_id(receipt.id))
+        return None if review is None else review.id
 
 
 class GetReceiptImage:
@@ -819,3 +990,75 @@ def _messages(report: ArithmeticReport) -> list[str]:
 def review_details(report: ArithmeticReport) -> Mapping[str, JsonValue]:
     """A review item's ``details``: the arithmetic issues (the shape the API and CLI show)."""
     return {"issues": [IssuePayload.of(issue).model_dump(mode="json") for issue in report.issues]}
+
+
+def _pending_draft(
+    uow_factory: UnitOfWorkFactory, runner: ReceiptGraphRunner, review: ReviewItem
+) -> ReceiptDraft | None:
+    """What accepting ``review`` as read would save: the extraction its thread holds, or,
+    for a review with no thread, the receipt's stored contents."""
+    if review.thread_id is not None:
+        return runner.pending_draft(review.receipt_id)
+    with uow_factory(read_only=True) as uow:
+        receipt = uow.receipts.get(review.receipt_id)
+    if receipt is None or receipt.total is None:
+        return None
+    return ReceiptDraft(
+        store_name=receipt.store_name,
+        purchased_on=receipt.purchased_on,
+        currency=receipt.currency,
+        subtotal=receipt.subtotal,
+        tax=receipt.tax,
+        total=receipt.total,
+        items=tuple(replace(item, id=None) for item in receipt.items),
+        payment_last4=receipt.payment_last4,
+        ocr_text=receipt.ocr_text,
+        image_path=receipt.image_path,
+    )
+
+
+def _opened_with(review: ReviewItem) -> ArithmeticReport | None:
+    """The issues ``review`` was opened with; None when it records none, or in a shape this
+    version cannot read (the answer is then judged on its own checks)."""
+    issues = review.details.get("issues")
+    if not isinstance(issues, list) or not issues:
+        return None
+    try:
+        return ArithmeticReport(
+            tuple(IssuePayload.model_validate(issue).to_issue() for issue in issues)
+        )
+    except ValidationError:
+        return None
+
+
+def _answer_report(assessment: ReceiptAssessment, today: date, *, aged: bool) -> ArithmeticReport:
+    """What a person's answer is judged on: its arithmetic, its store name and its date (not
+    after ``today``; with ``aged``, not over a year before it, as for a scanned receipt)."""
+    draft = assessment.draft
+    date_text = None if draft.purchased_on is None else draft.purchased_on.isoformat()
+    completeness = check_completeness(
+        draft.store_name, date_text, draft.purchased_on, today, aged=aged
+    )
+    return ArithmeticReport((*assessment.arithmetic.issues, *completeness))
+
+
+def _flagged(review: ReviewItem) -> bool:
+    """The review was opened with issues (its details list some, readable or not)."""
+    issues = review.details.get("issues")
+    return review.reason is ReviewReason.VALIDATION_FAILED or (
+        isinstance(issues, list) and bool(issues)
+    )
+
+
+def _products_kept(items: Sequence[LineItem], stored: Receipt) -> tuple[LineItem, ...]:
+    """``items`` with the product (and how it was found) of the stored line each keeps: same
+    position, kind and printed text."""
+    by_position = {line.position: line for line in stored.items}
+    return tuple(
+        replace(item, product_id=line.product_id, match_source=line.match_source)
+        if (line := by_position.get(item.position)) is not None
+        and item.product_id is None
+        and (line.kind, line.raw_text) == (item.kind, item.raw_text)
+        else item
+        for item in items
+    )

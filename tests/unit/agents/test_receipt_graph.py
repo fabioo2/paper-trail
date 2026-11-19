@@ -460,7 +460,9 @@ def test_ce_tc_030_a_person_resolves_the_review_with_corrected_values() -> None:
     )
     draft = replace(pending, items=(*pending.items[:2], sourdough))
 
-    resolved = harness.resolve(require_id(parked.review_id), draft)
+    resolved = harness.resolve(
+        require_id(parked.review_id), draft, force=True, reason="checked the paper"
+    )
 
     assert (resolved.status, resolved.stage) == (ReceiptStatus.COMPLETED, ProcessingStage.DONE)
     assert [line.line_total.amount_cents for line in resolved.items] == [899, 658, 998]

@@ -100,17 +100,33 @@ class ProcessReceiptJobs:
         """One transaction per job: ``fail_abandoned`` is the compare-and-set that gives this
         worker the right to recover it (another sweeper already did: nothing happens), and
         the job's receipt, while still PROCESSING, is FAILED as stopped unexpectedly in the
-        same transaction, whatever the job's kind. A ``resolve_review`` job's review stays as
-        it is: a retry resumes the graph, whose checkpoint says whether the answer was taken
-        (``ProcessReceiptFile.process_stored``). Any failure rolls both back, leaving the job
-        to the next sweep."""
+        same transaction, whatever the job's kind. When the receipt's graph already took an
+        answer to its OPEN review (a worker answering it, or the CLI's hold of ``review
+        resolve``, died after giving it), the review is closed and the receipt failed instead,
+        whatever its status (``ResolveReview.close_taken``), so no second answer is taken and
+        then ignored; an answer not taken leaves the review as it is, for a retry. Any failure
+        rolls both back, leaving the job to the next sweep."""
+        taken = self._resolve_review.answer_taken(lost.receipt_id)
         with self._uow_factory() as uow:
             try:
                 uow.jobs.fail_abandoned(require_id(lost.id), STOPPED_UNEXPECTEDLY)
             except ConflictError:
                 return  # another worker recovered it
             receipt = uow.receipts.get(lost.receipt_id)
-            if receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
+            review = uow.reviews.find_open(lost.receipt_id) if taken else None
+            if review is not None:
+                answer = (
+                    None
+                    if lost.payload is None
+                    else ReviewAnswerPayload.model_validate(lost.payload)
+                )
+                self._resolve_review.close_taken(
+                    uow,
+                    require_id(review.id),
+                    forced_reason=answer.reason if answer is not None and answer.force else None,
+                    failure=FailureReason.STOPPED_UNEXPECTEDLY,
+                )
+            elif receipt is not None and receipt.status is ReceiptStatus.PROCESSING:
                 uow.receipts.update_status(
                     lost.receipt_id,
                     ReceiptStatus.FAILED,

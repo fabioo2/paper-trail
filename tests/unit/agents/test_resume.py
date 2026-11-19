@@ -289,7 +289,12 @@ def test_ce_tc_028_an_old_threads_review_is_answered_by_a_persons_draft() -> Non
     later = second(first)
     assert later.runner.pending_draft(parked.receipt_id) is None
 
-    resolved = later.resolve(require_id(parked.review_id), receipt_draft(store_name=STORE_NAME))
+    resolved = later.resolve(
+        require_id(parked.review_id),
+        receipt_draft(store_name=STORE_NAME),
+        force=True,
+        reason="checked the paper",
+    )
 
     assert resolved.status is ReceiptStatus.COMPLETED
     assert later.match_sources(parked.receipt_id) == [MatchSource.NEW] * 2
@@ -347,7 +352,9 @@ def test_reprocess_after_a_review_resolved_with_a_persons_draft_reads_again() ->
     harness = _first(inconsistent_answer(), answer(), max_attempts=1)
     parked = graph(harness.process_image("photo"))
     review_id = require_id(parked.review_id)
-    harness.resolve(review_id, receipt_draft(store_name=STORE_NAME))
+    harness.resolve(
+        review_id, receipt_draft(store_name=STORE_NAME), force=True, reason="checked the paper"
+    )
 
     again = graph(harness.process_image("photo", reprocess=True))
 

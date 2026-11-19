@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from paper_trail.application.receipts import InconsistentDraftError
+from paper_trail.application.receipts import GetPendingReview, InconsistentDraftError
 from paper_trail.config import Settings
 from paper_trail.domain.errors import ConflictError, DomainValidationError, NotFoundError
 from paper_trail.domain.models import JsonValue, ReviewItem, require_id
@@ -39,10 +39,10 @@ def list_reviews(settings: Settings, run: str | None) -> None:
 def show_review(settings: Settings, run: str | None, review_id: int) -> None:
     with open_run(settings, run) as agents:
         try:
-            review = agents.get_review(review_id)
+            shown = GetPendingReview(agents.container.uow_factory, agents.runner)(review_id)
         except NotFoundError as error:
             fail(EXIT_UNAVAILABLE, str(error))
-        pending = agents.runner.pending_draft(review.receipt_id)
+        review, pending = shown.review, shown.draft
     typer.echo(f"review #{review.id} · receipt {review.receipt_id} · {review.status.value}")
     typer.echo(f"reason: {review.reason.value}")
     for message in _issue_messages(review):

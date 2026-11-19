@@ -85,6 +85,7 @@ export function receiptDetail(
       }),
     ],
     arithmetic: { ok: true, issues: [] },
+    review_id: null,
     ...overrides,
   };
 }

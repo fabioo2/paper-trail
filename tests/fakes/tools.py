@@ -63,15 +63,17 @@ class SimulatedCrashError(RuntimeError):
 
 
 class CrashAfterToolGateway(_Decorator):
-    """Lets the first call of one tool complete, then raises ``SimulatedCrashError``.
+    """Lets the first call of one tool complete, then raises ``SimulatedCrashError`` (or
+    ``error``: a BaseException stands for a worker process that died, leaving its job RUNNING).
 
     The tool's write is committed but the node never returns, so LangGraph writes no checkpoint
     for it: on resume the node runs again from its start (slice A review note 4).
     """
 
-    def __init__(self, inner: ToolGateway, tool: str) -> None:
+    def __init__(self, inner: ToolGateway, tool: str, error: BaseException | None = None) -> None:
         super().__init__(inner)
         self._tool = tool
+        self._error = error
         self.crashed = False
 
     def call(
@@ -81,7 +83,7 @@ class CrashAfterToolGateway(_Decorator):
         if name == self._tool and not self.crashed:
             self.crashed = True
             msg = f"simulated crash after {name}"
-            raise SimulatedCrashError(msg)
+            raise self._error or SimulatedCrashError(msg)
         return result
 
 

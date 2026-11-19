@@ -441,3 +441,13 @@ def adjusted_answer(**overrides: Any) -> dict[str, Any]:
     )
     value.update(overrides)
     return value
+
+
+def codex_answer() -> dict[str, Any]:
+    """F-CODEX (review gaps A1): 2 x 5.00 printed for a sourdough line of 8.00, which adds up
+    otherwise; the reading's only issue is LINE_MATH (2 x 5.00 = 10.00)."""
+    return receipt_answer(
+        [item("KS SOURDOUGH", "8.00", quantity="2", unit_price="5.00")],
+        subtotal="8.00",
+        total="8.00",
+    )

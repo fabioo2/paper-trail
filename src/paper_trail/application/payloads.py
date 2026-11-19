@@ -192,6 +192,11 @@ class IssuePayload(BaseModel):
             position=issue.position,
         )
 
+    def to_issue(self) -> ArithmeticIssue:
+        return ArithmeticIssue(
+            self.code, self.message, _money(self.expected), _money(self.actual), self.position
+        )
+
 
 class DraftLinePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)

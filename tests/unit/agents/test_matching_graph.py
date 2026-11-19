@@ -681,7 +681,9 @@ def test_review_note_2_a_line_a_person_linked_in_the_review_is_not_matched_again
     second = parked.receipt_id
     draft = receipt_draft(store_name=STORE_NAME, product_names={0: "Person's Eggs"})
 
-    harness.resolve(require_id(parked.graph.review_id), draft)
+    harness.resolve(
+        require_id(parked.graph.review_id), draft, force=True, reason="checked the paper"
+    )
 
     eggs, milk = harness.receipt(second).items
     linked = harness.product(require_id(eggs.product_id))

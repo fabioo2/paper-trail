@@ -89,13 +89,14 @@ def retry_receipt(container: ContainerDep, receipt_id: int) -> ReceiptUploadOut:
     responses=problem_responses(HTTPStatus.NOT_FOUND),
 )
 def get_receipt(container: ContainerDep, receipt_id: int) -> ReceiptDetailOut:
-    """One receipt with its lines (and the products they link to) and an arithmetic report
-    computed from the current data."""
+    """One receipt with its lines (and the products they link to), an arithmetic report
+    computed from the current data, and the open review it waits for (``review_id``)."""
     receipt, report = container.get_receipt(receipt_id)
     products = container.get_products(
         item.product_id for item in receipt.items if item.product_id is not None
     )
-    return ReceiptDetailOut.from_receipt(receipt, report, products)
+    review_id = container.find_open_review(receipt)
+    return ReceiptDetailOut.from_receipt(receipt, report, products, review_id)
 
 
 @router.get(

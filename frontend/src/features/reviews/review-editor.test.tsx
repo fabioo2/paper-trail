@@ -16,6 +16,7 @@ import {
 } from "@/test/fixtures/reviews";
 import { receiptDetail } from "@/test/fixtures/receipts";
 import { server } from "@/test/msw/server";
+import { latestPurchaseDate } from "@/features/reviews/draft-form";
 import { renderApp } from "@/test/render";
 
 const PROBLEM_HEADERS = { "content-type": "application/problem+json" };
@@ -70,6 +71,12 @@ function serveReview(stored: ReviewOut = review()): Requests {
     }),
   );
   return requests;
+}
+
+const FORCED = { force: true, reason: "checked" };
+
+async function why(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.type(screen.getByLabelText("Why keep it anyway?"), "checked");
 }
 
 async function form(): Promise<HTMLElement> {
@@ -142,6 +149,7 @@ describe("Review editor", () => {
       expect(date).toHaveFocus();
     });
     expect(date).toHaveValue("");
+    expect(date).toHaveAttribute("max", latestPurchaseDate(new Date()));
     expect(
       within(
         screen.getByRole("region", { name: "Check the date" }),
@@ -159,6 +167,7 @@ describe("Review editor", () => {
     await user.clear(within(item(1)).getByLabelText("Discount"));
     await user.clear(within(item(1)).getByLabelText("Paid"));
     await user.type(within(item(1)).getByLabelText("Paid"), "9.17");
+    await why(user);
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText("Receipt saved")).toBeInTheDocument();
@@ -166,7 +175,7 @@ describe("Review editor", () => {
     expect(requests.answers).toEqual([
       {
         accept: false,
-        force: false,
+        ...FORCED,
         draft: {
           ...draft,
           lines: [
@@ -188,12 +197,15 @@ describe("Review editor", () => {
     });
   });
 
-  it("Accept as read accepts the reading, and is off once something changed", async () => {
+  it("asks why up front on a review with issues: Accept sends nothing without a reason, then sends it forced", async () => {
     const requests = serveReview();
     const user = userEvent.setup();
-    renderApp("/review/7");
+    const { router } = renderApp("/review/7");
     await form();
 
+    expect(
+      screen.getByRole("heading", { name: "The receipt doesn't add up" }),
+    ).toBeInTheDocument();
     await user.type(screen.getByLabelText("Store"), "!");
     expect(
       screen.getByRole("button", { name: "Accept as read" }),
@@ -201,12 +213,53 @@ describe("Review editor", () => {
     await user.type(screen.getByLabelText("Store"), "{Backspace}");
     await user.click(screen.getByRole("button", { name: "Accept as read" }));
 
-    expect(await screen.findByText("Reading accepted")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Why keep it anyway?"),
+    ).toHaveAccessibleDescription("Say why you keep it");
+    expect(requests.answers).toEqual([]);
+    await user.type(screen.getByLabelText("Why keep it anyway?"), " torn ");
+    await user.click(screen.getByRole("button", { name: "Accept as read" }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/review");
+    });
+    expect(requests.answers).toEqual([
+      { accept: true, force: true, reason: "torn" },
+    ]);
+  });
+
+  it("names a date issue in the heading", async () => {
+    serveReview(review({ issues: [dateIssue] }));
+
+    renderApp("/review/7");
+    await form();
+
+    expect(
+      screen.getByRole("heading", { name: "Check the date" }),
+    ).toBeInTheDocument();
+  });
+
+  it("accepts a reading of a review without issues without asking", async () => {
+    const requests = serveReview(
+      review({ reason: "low_confidence", issues: [] }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp("/review/7");
+    await form();
+
+    expect(screen.queryByLabelText("Why keep it anyway?")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Accept as read" }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/review");
+    });
     expect(requests.answers).toEqual([{ accept: true, force: false }]);
   });
 
-  it("offers Save anyway with a reason when the reading still does not add up", async () => {
-    const requests = serveReview();
+  it("offers Save anyway with a reason when a saved reading without issues does not add up", async () => {
+    const requests = serveReview(
+      review({ reason: "low_confidence", issues: [] }),
+    );
     server.use(
       http.post(
         "/api/reviews/:reviewId/resolve",
@@ -224,27 +277,32 @@ describe("Review editor", () => {
     const { router } = renderApp("/review/7");
     await form();
 
-    await user.click(screen.getByRole("button", { name: "Accept as read" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     const refused = await screen.findByRole("alert");
+    expect(
+      within(refused).getByRole("heading", {
+        name: "The receipt still doesn't add up",
+      }),
+    ).toBeInTheDocument();
     expect(
       within(refused).getByText(
         "items add up to 15.57 but the subtotal is 15.75",
       ),
     ).toBeInTheDocument();
-    const anyway = within(refused).getByRole("button", { name: "Save anyway" });
-    expect(anyway).toBeDisabled();
     await user.type(
       within(refused).getByLabelText("Why keep it anyway?"),
-      " torn ",
+      "torn",
     );
-    await user.click(anyway);
+    await user.click(
+      within(refused).getByRole("button", { name: "Save anyway" }),
+    );
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/review");
     });
     expect(requests.answers).toEqual([
-      { accept: true, force: false },
+      { accept: false, force: false, draft: reviewDraft() },
       { accept: true, force: true, reason: "torn" },
     ]);
   });
@@ -274,6 +332,8 @@ describe("Review editor", () => {
     renderApp("/review/7");
     await form();
 
+    await user.type(screen.getByLabelText("Store"), " Windsor");
+    await why(user);
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -287,6 +347,177 @@ describe("Review editor", () => {
       "review 7 was already answered: its receipt is being saved",
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByLabelText("Store")).toHaveValue(
+      "COSTCO WHOLESALE #1234 Windsor",
+    );
+  });
+
+  it("shows the reading's currency, and a changed currency is an edit sent with every amount", async () => {
+    const requests = serveReview(
+      review({ draft: reviewDraft({ currency: "USD" }) }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp("/review/7");
+    await form();
+
+    expect(screen.getByLabelText("Currency")).toHaveValue("USD");
+    await user.clear(screen.getByLabelText("Currency"));
+    await user.type(screen.getByLabelText("Currency"), "cad");
+    expect(
+      screen.getByRole("button", { name: "Accept as read" }),
+    ).toBeDisabled();
+    await why(user);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/review");
+    });
+    expect(requests.answers).toEqual([
+      { accept: false, ...FORCED, draft: reviewDraft({ currency: "CAD" }) },
+    ]);
+  });
+
+  it("an incomplete currency is a field error and sends nothing", async () => {
+    const requests = serveReview();
+    const user = userEvent.setup();
+    renderApp("/review/7");
+    await form();
+
+    await user.clear(screen.getByLabelText("Currency"));
+    await user.type(screen.getByLabelText("Currency"), "us");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(screen.getByLabelText("Currency")).toHaveAccessibleDescription(
+      "Use a 3-letter code like CAD",
+    );
+    expect(requests.answers).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a validation problem",
+      () =>
+        HttpResponse.json(
+          {
+            ...inconsistent,
+            type: "/problems/validation",
+            title: "Unprocessable Entity",
+            detail: "The request is invalid.",
+            errors: [
+              {
+                loc: ["body", "draft", "currency"],
+                msg: "String should match pattern",
+                type: "string_pattern_mismatch",
+              },
+            ],
+          },
+          { status: 422, headers: PROBLEM_HEADERS },
+        ),
+      "The request is invalid.",
+    ],
+    [
+      "a server error",
+      () =>
+        HttpResponse.json(
+          {
+            ...inconsistent,
+            type: "/problems/internal",
+            title: "Internal Server Error",
+            status: 500,
+            detail: "Something went wrong on our side.",
+            errors: null,
+          },
+          { status: 500, headers: PROBLEM_HEADERS },
+        ),
+      "Something went wrong on our side.",
+    ],
+  ])(
+    "keeps every edit after %s and sends the same answer again on Save",
+    async (_, reply, message) => {
+      const requests = serveReview(
+        review({ draft: reviewDraft({ currency: "USD" }) }),
+      );
+      server.use(
+        http.post(
+          "/api/reviews/:reviewId/resolve",
+          async ({ request }) => {
+            requests.answers.push(await request.json());
+            return reply();
+          },
+          { once: true },
+        ),
+      );
+      const user = userEvent.setup();
+      const { router } = renderApp("/review/7");
+      await form();
+
+      await user.clear(screen.getByLabelText("Currency"));
+      await user.type(screen.getByLabelText("Currency"), "EUR");
+      await user.type(screen.getByLabelText("Store"), "!");
+      await why(user);
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      expect(screen.getByLabelText("Currency")).toHaveValue("EUR");
+      expect(screen.getByLabelText("Store")).toHaveValue(
+        "COSTCO WHOLESALE #1234!",
+      );
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(router.state.location.pathname).toBe("/review");
+      });
+      const sent = {
+        accept: false,
+        ...FORCED,
+        draft: reviewDraft({
+          currency: "EUR",
+          store_name: "COSTCO WHOLESALE #1234!",
+        }),
+      };
+      expect(requests.answers).toEqual([sent, sent]);
+    },
+  );
+
+  it("sends one answer for a double tap", async () => {
+    const requests = serveReview();
+    const user = userEvent.setup();
+    const { router } = renderApp("/review/7");
+    await form();
+
+    await why(user);
+    await user.dblClick(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/review");
+    });
+    expect(requests.answers).toEqual([
+      { accept: false, ...FORCED, draft: reviewDraft() },
+    ]);
+  });
+
+  it("drops unsaved edits when a person leaves and comes back, sending nothing", async () => {
+    const requests = serveReview();
+    const user = userEvent.setup();
+    const { router } = renderApp("/review/7");
+    await form();
+
+    await user.type(screen.getByLabelText("Store"), " edited");
+    await user.clear(screen.getByLabelText("Currency"));
+    await user.type(screen.getByLabelText("Currency"), "USD");
+    await router.navigate({ to: "/review" });
+    await screen.findByRole("link", { name: /costco/i });
+    await router.navigate({
+      to: "/review/$reviewId",
+      params: { reviewId: "7" },
+    });
+    await form();
+
+    expect(screen.getByLabelText("Store")).toHaveValue(
+      "COSTCO WHOLESALE #1234",
+    );
+    expect(screen.getByLabelText("Currency")).toHaveValue("CAD");
+    expect(requests.answers).toEqual([]);
   });
 
   it("names the fields to fix and sends nothing", async () => {
@@ -317,6 +548,10 @@ describe("Review editor", () => {
     await form();
 
     expect(screen.queryByRole("button", { name: "Accept as read" })).toBeNull();
+    expect(screen.getByLabelText("Currency")).toHaveValue("CAD");
+    await user.clear(screen.getByLabelText("Currency"));
+    await user.type(screen.getByLabelText("Currency"), "usd");
+    expect(screen.getByLabelText("Currency")).toHaveValue("USD");
     await user.type(screen.getByLabelText("Store"), "Farm Boy");
     await user.type(within(item(1)).getByLabelText("Description"), "Kiwi");
     await user.type(within(item(1)).getByLabelText("Paid"), "2");
@@ -337,7 +572,7 @@ describe("Review editor", () => {
         draft: {
           store_name: "Farm Boy",
           purchased_on: null,
-          currency: "CAD",
+          currency: "USD",
           subtotal_cents: null,
           tax_cents: null,
           total_cents: 350,
@@ -421,7 +656,8 @@ describe("Review editor", () => {
       await user.click(await screen.findByRole("link", { name: /costco/i }));
       await form();
       requests.open = [];
-      await user.click(screen.getByRole("button", { name: "Accept as read" }));
+      await why(user);
+      await user.click(screen.getByRole("button", { name: "Save" }));
 
       expect(await screen.findByText("Nothing to review")).toBeInTheDocument();
       expect(router.state.location.pathname).toBe("/review");

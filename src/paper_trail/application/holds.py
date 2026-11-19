@@ -10,14 +10,14 @@ the worker then fails it and its receipt as stopped unexpectedly, for a person t
 """
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import timedelta
 
 import structlog
 
 from paper_trail.domain.errors import ConflictError
-from paper_trail.domain.models import Job, require_id
+from paper_trail.domain.models import Job, JsonValue, require_id
 from paper_trail.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 log = structlog.get_logger(__name__)
@@ -41,19 +41,24 @@ class ReceiptHold:
         self._lease = lease
 
     @contextmanager
-    def __call__(self, receipt_id: int) -> Iterator[None]:
+    def __call__(
+        self, receipt_id: int, *, payload: Mapping[str, JsonValue] | None = None
+    ) -> Iterator[None]:
         """Hold the receipt for the block (ConflictError, before it runs, while a job of it
-        waits or runs)."""
+        waits or runs); ``payload`` is kept on the hold's job (``review resolve``'s forced
+        reason, for the sweep to remember should the CLI die)."""
         with self._uow_factory() as uow:
-            job = self.take(uow, receipt_id)
+            job = self.take(uow, receipt_id, payload=payload)
             uow.commit()
         with self.keep(job):
             yield
 
-    def take(self, uow: UnitOfWork, receipt_id: int) -> Job:
+    def take(
+        self, uow: UnitOfWork, receipt_id: int, *, payload: Mapping[str, JsonValue] | None = None
+    ) -> Job:
         """The hold's job, in ``uow``: the caller commits it with the writes that start its
         run. ConflictError while a job of the receipt waits or runs."""
-        return uow.jobs.hold(receipt_id, self._holder, self._lease)
+        return uow.jobs.hold(receipt_id, self._holder, self._lease, payload=payload)
 
     @contextmanager
     def keep(self, job: Job) -> Iterator[None]:

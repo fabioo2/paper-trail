@@ -45,6 +45,7 @@ from paper_trail.application.products import (
 )
 from paper_trail.application.receipts import (
     AnswerReview,
+    FindOpenReview,
     GetPendingReview,
     GetReceipt,
     GetReceiptImage,
@@ -73,6 +74,7 @@ class Container:
     check_readiness: CheckReadiness
     record_receipt: RecordReceipt
     get_receipt: GetReceipt
+    find_open_review: FindOpenReview
     get_receipt_image: GetReceiptImage
     list_receipts: ListReceipts
     upload_receipt: UploadReceipt
@@ -129,6 +131,7 @@ def build_container(settings: Settings) -> Container:
         check_readiness=CheckReadiness([DatabaseHealthProbe(engine)]),
         record_receipt=RecordReceipt(uow_factory, clock, tolerances),
         get_receipt=GetReceipt(uow_factory, tolerances),
+        find_open_review=FindOpenReview(uow_factory),
         get_receipt_image=GetReceiptImage(uow_factory, image_store(settings)),
         list_receipts=ListReceipts(uow_factory),
         upload_receipt=UploadReceipt(image_store(settings), uow_factory, clock),

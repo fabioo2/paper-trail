@@ -76,7 +76,22 @@ class ReceiptGraphRunner(Protocol):
         """Whether the receipt's thread is paused for a person's answer."""
         ...
 
+    def answer_taken(self, receipt_id: int) -> bool:
+        """Whether the receipt's thread took a person's answer to its review (its review step
+        completed); False without a thread, while it waits for the answer, or before it
+        reached the review."""
+        ...
+
+    def reach_review(self, receipt_id: int) -> bool:
+        """Bring a thread whose run stopped just before its supervisor's checkpoint (a crash
+        after it opened the review) to the review: the supervisor runs again, and the run
+        pauses after it whatever it decides, so no Claude read starts here. True when the
+        thread then waits for a review. NothingToResumeError when the receipt has no thread."""
+        ...
+
     def pending_draft(self, receipt_id: int) -> ReceiptDraft | None:
-        """The extraction a thread paused for review holds, as a draft; None if there is none,
-        or if the thread was saved by an older version (only a person's draft answers it)."""
+        """The extraction a thread paused for review holds, as a draft (also when its run
+        stopped just before the supervisor's checkpoint, where a review it opened waits on
+        it); None if there is none, or if the thread was saved by an older version (only a
+        person's draft answers it)."""
         ...

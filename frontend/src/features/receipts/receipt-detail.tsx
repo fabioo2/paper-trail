@@ -3,6 +3,7 @@ import { ArrowLeft, CircleX, SearchX, TriangleAlert } from "lucide-react";
 
 import { ApiError } from "@/api/client";
 import { EmptyState } from "@/components/empty-state";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type CategoryOut, useCategories } from "@/features/products/api";
 import { CategoryDot } from "@/features/products/category-dot";
@@ -102,6 +103,17 @@ function ReceiptView({ receipt }: { receipt: ReceiptDetailOut }) {
           </div>
           <RetryButton receiptId={receipt.id} />
         </section>
+      ) : null}
+
+      {receipt.status === "needs_review" && receipt.review_id !== null ? (
+        <Button asChild size="lg" className="h-12 w-full">
+          <Link
+            to="/review/$reviewId"
+            params={{ reviewId: String(receipt.review_id) }}
+          >
+            Review
+          </Link>
+        </Button>
       ) : null}
 
       <div className="flex gap-3">

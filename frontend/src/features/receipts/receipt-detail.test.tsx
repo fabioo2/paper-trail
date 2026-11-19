@@ -286,6 +286,26 @@ describe("Receipt detail page", () => {
     expect(keyWarnings).toEqual([]);
   });
 
+  it.each<[string, Partial<ReceiptDetailOut>, string | null]>([
+    ["needs_review", { status: "needs_review", review_id: 7 }, "/review/7"],
+    ["needs_review without a review", { status: "needs_review" }, null],
+    ["completed", { status: "completed" }, null],
+    ["processing", { status: "processing" }, null],
+    ["failed", { status: "failed", failure_reason: "unknown" }, null],
+  ])(
+    "a %s receipt links to its review only while it waits for one",
+    async (_, overrides, href) => {
+      serveDetail(receiptDetail(overrides));
+
+      renderApp("/receipts/7");
+      const main = await page();
+
+      const link = within(main).queryByRole("link", { name: "Review" });
+      if (href === null) expect(link).toBeNull();
+      else expect(link).toHaveAttribute("href", href);
+    },
+  );
+
   it("S1-AC-26: shows no issues callout when the arithmetic is ok", async () => {
     serveDetail(receiptDetail());
 
