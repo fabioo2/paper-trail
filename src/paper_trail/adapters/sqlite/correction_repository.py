@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from sqlalchemy import Connection, insert, select
+from sqlalchemy import Connection, case, insert, select, update
 
 from paper_trail.adapters.sqlite.mappers import correction_from_row, correction_values
 from paper_trail.adapters.sqlite.schema import corrections
@@ -40,3 +40,18 @@ class SqliteCorrectionRepository:
             .one_or_none()
         )
         return None if row is None else correction_from_row(row)
+
+    def rename_product(self, product_id: int, into_id: int) -> int:
+        named, into = str(product_id), str(into_id)
+        old, new = corrections.c.old_value, corrections.c.new_value
+        result = self._connection.execute(
+            update(corrections)
+            .where(
+                corrections.c.kind == CorrectionKind.PRODUCT_LINK, (old == named) | (new == named)
+            )
+            .values(
+                old_value=case((old == named, into), else_=old),
+                new_value=case((new == named, into), else_=new),
+            )
+        )
+        return result.rowcount

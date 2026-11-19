@@ -746,6 +746,22 @@
         "title": "ProductConfirmIn",
         "type": "object"
       },
+      "ProductMergeIn": {
+        "additionalProperties": false,
+        "description": "The product the merged one is the same as: it is kept, the merged one is deleted.",
+        "properties": {
+          "into_id": {
+            "minimum": 1.0,
+            "title": "Into Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "into_id"
+        ],
+        "title": "ProductMergeIn",
+        "type": "object"
+      },
       "ProductOut": {
         "description": "``field_sources`` maps each stamped field (``canonical_name``, ``brand``, ``size``,\n``category``, ``tags``) to where it came from; ``llm`` is a guess to show as suggested.\n``confirmed``: a person or a product database named it.",
         "properties": {
@@ -2418,6 +2434,229 @@
           }
         },
         "summary": "Confirm a product",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/api/products/{product_id}/merge": {
+      "post": {
+        "description": "The product is the same as ``into_id``: its purchases, prices, codes, aliases and\ncorrections move to that one, which takes each of its better-sourced fields, and it is\ndeleted. Returns the kept product. Only a backup undoes it. Merging a product into itself\nis a 422 problem, an unknown id a 404 problem; while a receipt is being read, a 409\nproblem (nothing written).",
+        "operationId": "mergeProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductMergeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Merge a product into the same one",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/api/products/{product_id}/merge-candidates": {
+      "get": {
+        "description": "Bought products that may be the same as this one: those sharing one of its codes first,\nthen those sharing a word of its name, best match first (at most 10); never the product\nitself. An unknown id is a 404 problem.",
+        "operationId": "listMergeCandidates",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProductSummaryOut"
+                  },
+                  "title": "Response Listmergecandidates",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "List products that may be the same one",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/api/products/{product_id}/merge-preview": {
+      "get": {
+        "description": "The product ``into_id`` as merging this one into it would leave it (its name, brand,\nsize, category and tags, each the better-sourced of the two); nothing is written. Merging\na product into itself is a 422 problem, an unknown id a 404 problem.",
+        "operationId": "previewMerge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "into_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Into Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Preview merging a product into the same one",
         "tags": [
           "products"
         ]

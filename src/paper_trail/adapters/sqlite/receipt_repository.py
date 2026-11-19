@@ -267,6 +267,14 @@ class SqliteReceiptRepository:
             for row in rows
         )
 
+    def move_lines(self, product_id: int, into_id: int) -> int:
+        result = self._connection.execute(
+            update(line_items)
+            .where(line_items.c.product_id == product_id)
+            .values(product_id=into_id)
+        )
+        return result.rowcount
+
     def _update(self, receipt_id: int, values: dict[str, object]) -> tuple[datetime, datetime]:
         """Apply ``values`` and stamp updated_at; returns (created_at, updated_at)."""
         updated_at = self._clock.now()

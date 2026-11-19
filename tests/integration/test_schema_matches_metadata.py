@@ -38,6 +38,7 @@ from paper_trail.domain.enums import (
 
 NOT_IN_METADATA = {
     "alembic_version",
+    "sqlite_sequence",  # AUTOINCREMENT's counters (products, migration 0011)
     "line_items_fts",
     "products_fts",
     # LangGraph's SqliteSaver tables (Stage 3) live in the same file but are not ours.

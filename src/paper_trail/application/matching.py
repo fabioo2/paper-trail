@@ -9,7 +9,7 @@ changes nothing.
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -192,8 +192,10 @@ class _Coded:
 
 
 def plan_matches(uow: UnitOfWork, receipt_id: int, choices: Sequence[MatchChoice]) -> MatchPlan:
-    """NotFoundError for an unknown receipt, position or product; DomainValidationError for a
-    ``code`` that is not the identity of the stored line's code at the receipt's store.
+    """NotFoundError for an unknown receipt or position; DomainValidationError for a ``code``
+    that is not the identity of the stored line's code at the receipt's store. A choice naming a
+    product that no longer exists is decided again (``_redecided``; NotFoundError when nothing
+    names a product for its line).
 
     The choices for one code are resolved together against ``product_codes`` as it is now,
     inside the writing unit of work, so every line with that code ends on one product, whatever
@@ -209,20 +211,22 @@ def plan_matches(uow: UnitOfWork, receipt_id: int, choices: Sequence[MatchChoice
         raise NotFoundError(msg)
     lines = {item.position: item for item in receipt.items}
     groups: dict[CodeIdentity, list[_Coded]] = {}
-    for choice in choices:
-        line = lines.get(choice.position)
+    current: list[MatchChoice] = []
+    for decided in choices:
+        line = lines.get(decided.position)
         if line is None:
-            msg = f"receipt {receipt_id} has no line at position {choice.position}"
+            msg = f"receipt {receipt_id} has no line at position {decided.position}"
             raise NotFoundError(msg)
+        choice = decided
         if choice.product_id is not None and uow.products.get(choice.product_id) is None:
-            msg = f"product {choice.product_id} does not exist"
-            raise NotFoundError(msg)
+            choice = _redecided(uow, choice, line, receipt.store_key)
+        current.append(choice)
         if choice.code is not None:
             code = _checked_code(choice, choice.code, line, receipt.store_key)
             groups.setdefault(choice.code, []).append(_Coded(choice, line, code))
     to_create: dict[NewProductKey, _NewProduct] = {}
     links: dict[int, _Link] = {}
-    for choice in choices:
+    for choice in current:
         if choice.position in links:
             continue
         if choice.code is not None:
@@ -240,6 +244,24 @@ def plan_matches(uow: UnitOfWork, receipt_id: int, choices: Sequence[MatchChoice
         else:
             links[choice.position] = _Link(choice.source, choice.product_id, remember_alias=True)
     return MatchPlan(receipt, lines, to_create, links)
+
+
+def _redecided(uow: UnitOfWork, choice: MatchChoice, line: LineItem, store_key: str) -> MatchChoice:
+    """A decision whose product no longer exists (it was merged into another while the run was
+    paused), decided again as matching decides without a model: a coded line by its code's
+    product (CATALOG), else a person's correction for it (MEMORY); any other line by a person's
+    correction, then the store's alias (``find_product``). NotFoundError naming the product
+    when none of them names one."""
+    if choice.code is not None:
+        stored = stored_code(uow, _checked_code(choice, choice.code, line, store_key), choice.code)
+        if stored is not None:
+            return replace(choice, source=MatchSource.CATALOG, product_id=stored.product_id)
+    found = find_product(uow, line.raw_text, store_key)
+    if found is None or (choice.code is not None and found[1] is not MatchSource.MEMORY):
+        msg = f"product {choice.product_id} does not exist"
+        raise NotFoundError(msg)
+    product, source = found
+    return replace(choice, source=source, product_id=require_id(product.id))
 
 
 def _checked_code(

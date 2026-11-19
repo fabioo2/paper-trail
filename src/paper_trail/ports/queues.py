@@ -81,6 +81,11 @@ class JobQueue(Protocol):
         """PENDING jobs, those scheduled for later included."""
         ...
 
+    def active_receipts(self) -> tuple[int, ...]:
+        """The receipts, by id, with a PENDING (scheduled for later included) or RUNNING job of
+        any kind."""
+        ...
+
     def get(self, job_id: int) -> Job | None: ...
 
 

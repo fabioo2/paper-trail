@@ -111,6 +111,11 @@ class ReceiptRepository(Protocol):
         ``purchased_on`` (undated receipts last), then receipt id, then position."""
         ...
 
+    def move_lines(self, product_id: int, into_id: int) -> int:
+        """Link every line of ``product_id`` to ``into_id`` instead (all else, ``updated_at``
+        included, is kept); how many lines moved."""
+        ...
+
 
 class ProductRepository(Protocol):
     def add(self, product: Product) -> Product: ...
@@ -165,6 +170,16 @@ class ProductRepository(Protocol):
         """The product's aliases, ordered by id."""
         ...
 
+    def move_aliases(self, product_id: int, into_id: int) -> int:
+        """Give every alias of ``product_id`` to ``into_id``, source and ``created_at`` kept;
+        how many moved."""
+        ...
+
+    def delete(self, product_id: int) -> None:
+        """Delete the product (its search entry goes with it). NotFoundError for an unknown
+        id."""
+        ...
+
 
 class PriceRepository(Protocol):
     def add_many(self, observations: Sequence[PriceObservation]) -> tuple[PriceObservation, ...]:
@@ -189,6 +204,11 @@ class PriceRepository(Protocol):
         it; None, and nothing written, when the line has no observation."""
         ...
 
+    def move_product(self, product_id: int, into_id: int) -> int:
+        """Give every observation of ``product_id`` to ``into_id``, all else kept; how many
+        moved."""
+        ...
+
 
 class CorrectionRepository(Protocol):
     def add(self, correction: Correction) -> Correction: ...
@@ -198,6 +218,11 @@ class CorrectionRepository(Protocol):
     ) -> Correction | None:
         """The newest correction (created_at, then id) for exactly this kind, subject and store
         (``None`` matches only corrections recorded without a store)."""
+        ...
+
+    def rename_product(self, product_id: int, into_id: int) -> int:
+        """Make every PRODUCT_LINK correction that names ``product_id`` (as its ``old_value``
+        or ``new_value``) name ``into_id``; other corrections are untouched. How many changed."""
         ...
 
 
@@ -232,4 +257,9 @@ class ProductCodeRepository(Protocol):
 
     def remove(self, scheme: CodeScheme, store_key: str, code: str) -> bool:
         """Delete the code (its product is kept); False when there was none."""
+        ...
+
+    def move_product(self, product_id: int, into_id: int) -> int:
+        """Give every code of ``product_id`` to ``into_id``, scheme, store, code, source and
+        times kept; how many moved."""
         ...

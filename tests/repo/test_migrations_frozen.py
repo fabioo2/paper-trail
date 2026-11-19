@@ -75,3 +75,9 @@ def test_h3_03_line_units_is_revision_0010_after_0009() -> None:
     """Hardening H3-03: migrations/versions/0010_line_units_failure_reasons.py is revision
     "0010", revising "0009"."""
     assert _revision_ids("0010_line_units_failure_reasons.py") == ("0010", "0009")
+
+
+def test_products_autoincrement_is_revision_0011_after_0010() -> None:
+    """Cleanup D: migrations/versions/0011_products_autoincrement.py is revision "0011", revising
+    "0010"."""
+    assert _revision_ids("0011_products_autoincrement.py") == ("0011", "0010")

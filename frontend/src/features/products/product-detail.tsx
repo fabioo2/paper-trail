@@ -22,6 +22,7 @@ import { GuessDot } from "@/features/products/field-source";
 import { PriceHistory } from "@/features/products/price-history";
 import { paidPerUnit, unitSuffix } from "@/features/products/prices";
 import { ProductEditor } from "@/features/products/product-editor";
+import { ProductMerge } from "@/features/products/product-merge";
 import { formatDate } from "@/features/receipts/dates";
 import { formatMoney } from "@/features/receipts/money";
 import { displayStoreName } from "@/features/receipts/store-name";
@@ -60,7 +61,7 @@ export function ProductNotFound() {
 }
 
 function ProductView({ product }: { product: ProductOut }) {
-  const [editing, setEditing] = useState(false);
+  const [open, setOpen] = useState<"edit" | "merge" | null>(null);
   const saving =
     useIsMutating({ mutationKey: productKeys.detail(product.id) }) > 0;
   const categories = useCategories();
@@ -99,16 +100,38 @@ function ProductView({ product }: { product: ProductOut }) {
           <Button
             type="button"
             variant="outline"
-            aria-expanded={editing}
-            disabled={saving}
+            aria-expanded={open === "edit"}
+            disabled={saving || open === "merge"}
             onClick={() => {
-              setEditing((value) => !value);
+              setOpen((value) => (value === "edit" ? null : "edit"));
             }}
           >
-            {editing ? "Cancel" : "Edit"}
+            {open === "edit" ? "Cancel" : "Edit"}
           </Button>
         </header>
-        {editing ? <ProductEditor product={product} /> : null}
+        <div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-expanded={open === "merge"}
+            disabled={saving || open === "edit"}
+            onClick={() => {
+              setOpen((value) => (value === "merge" ? null : "merge"));
+            }}
+          >
+            {open === "merge" ? "Cancel" : "Same product as…"}
+          </Button>
+        </div>
+        {open === "edit" ? <ProductEditor product={product} /> : null}
+        {open === "merge" ? (
+          <ProductMerge
+            product={product}
+            onClose={() => {
+              setOpen(null);
+            }}
+          />
+        ) : null}
       </section>
       <ProductPurchases product={product} />
     </article>

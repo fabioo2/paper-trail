@@ -35,10 +35,11 @@ _PRODUCTS = text(
 )
 
 
-def fts_query(user_text: str) -> str | None:
-    """The FTS5 query for ``user_text``: every word as a quoted prefix term; None if no words."""
+def fts_query(user_text: str, *, joined_by: str = " ") -> str | None:
+    """The FTS5 query for ``user_text``: every word as a quoted prefix term (all of them must
+    match; ``joined_by=" OR "``: any); None if no words."""
     tokens = _TOKEN.findall(unicodedata.normalize("NFKC", user_text))
-    return " ".join(f'"{token}"*' for token in tokens) or None
+    return joined_by.join(f'"{token}"*' for token in tokens) or None
 
 
 class SqliteTextSearchIndex:
@@ -59,6 +60,12 @@ class SqliteTextSearchIndex:
 
     def product_ids(self, query: str) -> tuple[int, ...]:
         match = fts_query(query)
+        if match is None:
+            return ()
+        return tuple(self._connection.execute(_PRODUCTS, {"query": match}).scalars())
+
+    def similar_product_ids(self, text: str) -> tuple[int, ...]:
+        match = fts_query(text, joined_by=" OR ")
         if match is None:
             return ()
         return tuple(self._connection.execute(_PRODUCTS, {"query": match}).scalars())

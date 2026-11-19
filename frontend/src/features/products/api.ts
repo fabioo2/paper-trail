@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, apiClient, unwrap } from "@/api/client";
 import type { components } from "@/api/schema";
+import { summaryKeys } from "@/features/home/api";
+import { receiptKeys } from "@/features/receipts/api";
 import { searchKeys } from "@/features/search/api";
 
 type Schemas = components["schemas"];
@@ -22,6 +24,12 @@ export const productKeys = {
   toCheck: () => [...productKeys.all, "to-check"] as const,
   detail: (id: number) => [...productKeys.all, "detail", id] as const,
   purchases: (id: number) => [...productKeys.all, "purchases", id] as const,
+  mergeCandidates: (id: number) =>
+    [...productKeys.all, "merge-candidates", id] as const,
+  mergePreview: (id: number, intoId?: number) =>
+    intoId === undefined
+      ? ([...productKeys.all, "merge-preview", id] as const)
+      : ([...productKeys.all, "merge-preview", id, intoId] as const),
 };
 
 /** Every product bought at least once, by name (`listProducts`). */
@@ -122,6 +130,68 @@ export function useConfirmProduct(id: number) {
       ]),
     onError: (error) =>
       error instanceof ApiError && error.status === 409
+        ? queryClient.invalidateQueries({ queryKey: productKeys.all })
+        : undefined,
+  });
+}
+
+/** Bought products that may be the same as this one, best first (`listMergeCandidates`). */
+export function useMergeCandidates(id: number) {
+  return useQuery({
+    queryKey: productKeys.mergeCandidates(id),
+    queryFn: () =>
+      unwrap(
+        apiClient.GET("/api/products/{product_id}/merge-candidates", {
+          params: { path: { product_id: id } },
+        }),
+      ),
+  });
+}
+
+/** The product `intoId` as merging this one into it would leave it (`previewMerge`). */
+export function useMergePreview(id: number, intoId: number) {
+  return useQuery({
+    queryKey: productKeys.mergePreview(id, intoId),
+    queryFn: () =>
+      unwrap(
+        apiClient.GET("/api/products/{product_id}/merge-preview", {
+          params: { path: { product_id: id }, query: { into_id: intoId } },
+        }),
+      ),
+  });
+}
+
+/** Merge the product into the same one, `into_id`, which is kept (`mergeProduct`). Every view
+ * that showed the merged product is refreshed; its own queries are dropped, not refetched, since
+ * it no longer exists. A 404 refreshes the products: one of the two is gone. */
+export function useMergeProduct(id: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: productKeys.detail(id),
+    mutationFn: (into_id: number) =>
+      unwrap(
+        apiClient.POST("/api/products/{product_id}/merge", {
+          params: { path: { product_id: id } },
+          body: { into_id },
+        }),
+      ),
+    onSuccess: () => {
+      for (const queryKey of [
+        productKeys.detail(id),
+        productKeys.purchases(id),
+        productKeys.mergeCandidates(id),
+      ]) {
+        queryClient.removeQueries({ queryKey, exact: true });
+      }
+      queryClient.removeQueries({ queryKey: productKeys.mergePreview(id) });
+      return Promise.all(
+        [productKeys.all, searchKeys.all, summaryKeys.all, receiptKeys.all].map(
+          (queryKey) => queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
+    },
+    onError: (error) =>
+      error instanceof ApiError && error.status === 404
         ? queryClient.invalidateQueries({ queryKey: productKeys.all })
         : undefined,
   });

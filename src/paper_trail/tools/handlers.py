@@ -2,7 +2,8 @@
 
 Specialists only read (``check_arithmetic``, ``product_lookup``, ``catalog_lookup``); every
 write is a supervisor tool (``save_receipt``, ``open_review``, ``save_matches``,
-``describe_from_catalog``). Domain errors such as NotFoundError propagate unchanged.
+``describe_from_catalog``). Domain errors such as NotFoundError propagate unchanged, except
+that ``describe_from_catalog`` skips a product that no longer exists.
 """
 
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from paper_trail.application.matching import find_product
 from paper_trail.application.payloads import CatalogEntryPayload, IssuePayload
 from paper_trail.application.receipts import RecordReceipt
 from paper_trail.domain.enums import ProcessingStage, ReceiptStatus
+from paper_trail.domain.errors import NotFoundError
 from paper_trail.domain.models import require_id
 from paper_trail.domain.rules.arithmetic import Tolerances, check_arithmetic
 from paper_trail.domain.rules.item_codes import parse_code_field, parse_item_code
@@ -175,13 +177,18 @@ def catalog_lookup(services: ToolServices, request: CatalogLookupInput) -> Catal
 def describe_from_catalog(
     services: ToolServices, request: DescribeFromCatalogInput
 ) -> DescribeFromCatalogOutput:
-    """Write the fields a source gave a product (``describe_product``); never embeds."""
-    product = describe_product(
-        services.uow_factory,
-        request.product_id,
-        fields=request.fields,
-        sources=request.sources,
-        alias=request.alias,
-        store_key=request.store_key,
-    )
+    """Write the fields a source gave a product (``describe_product``); never embeds. A product
+    that no longer exists (merged into another, so a resumed run's description of it is stale)
+    is skipped: nothing is written and no product is answered."""
+    try:
+        product = describe_product(
+            services.uow_factory,
+            request.product_id,
+            fields=request.fields,
+            sources=request.sources,
+            alias=request.alias,
+            store_key=request.store_key,
+        )
+    except NotFoundError:
+        return DescribeFromCatalogOutput(product=None)
     return DescribeFromCatalogOutput(product=ProductOut.of(product))

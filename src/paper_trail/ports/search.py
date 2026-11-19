@@ -29,3 +29,8 @@ class TextSearchIndex(Protocol):
         """Every product matching every word of ``query`` as a prefix (in ``search``'s terms),
         best first; no limit, so a caller can narrow them before taking the first few."""
         ...
+
+    def similar_product_ids(self, text: str) -> tuple[int, ...]:
+        """Every product matching any word of ``text`` as a prefix, those matching more (and
+        better) first; no limit."""
+        ...

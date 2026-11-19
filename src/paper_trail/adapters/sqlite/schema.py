@@ -69,6 +69,7 @@ products = Table(
     Column("tags", JsonText, nullable=False, server_default="[]"),
     Column("created_at", UtcDateTime, nullable=False),
     Column("field_sources", JsonText, nullable=False, server_default="{}"),
+    sqlite_autoincrement=True,
 )
 
 product_codes = Table(

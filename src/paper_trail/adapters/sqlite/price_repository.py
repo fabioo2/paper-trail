@@ -54,6 +54,14 @@ class SqlitePriceRepository:
         )
         return None if row is None else price_from_row(row)
 
+    def move_product(self, product_id: int, into_id: int) -> int:
+        result = self._connection.execute(
+            update(price_observations)
+            .where(price_observations.c.product_id == product_id)
+            .values(product_id=into_id)
+        )
+        return result.rowcount
+
     def for_line_item(self, line_item_id: int) -> PriceObservation | None:
         row = (
             self._connection.execute(
