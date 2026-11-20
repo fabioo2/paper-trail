@@ -6,11 +6,12 @@ JSON integers, never floats or strings, so no amount is ever rounded on the way 
 
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, StrictInt
 
 from paper_trail.application.payloads import CurrencyCode, Last4, Quantity
-from paper_trail.domain.enums import Category, LineKind
+from paper_trail.domain.enums import Category, LineKind, Unit
 from paper_trail.domain.models import LineItem, ReceiptDraft
 from paper_trail.domain.money import DEFAULT_CURRENCY, Money
 
@@ -27,6 +28,7 @@ class LineImport(BaseModel):
     product: str | None = None  # the product this line is, linked or created on import
     category: Category | None = None
     applies_to: StrictInt | None = None
+    unit: Literal["each", "kg", "lb"] | None = None  # LINE_UNITS; None: unknown
 
     def to_line_item(self, position: int, currency: str) -> LineItem:
         return LineItem(
@@ -41,6 +43,7 @@ class LineImport(BaseModel):
             line_total=Money(self.line_total_cents, currency),
             category=self.category,
             applies_to_position=self.applies_to,
+            unit=None if self.unit is None else Unit(self.unit),
         )
 
 

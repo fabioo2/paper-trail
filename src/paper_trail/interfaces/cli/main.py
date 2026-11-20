@@ -278,7 +278,7 @@ def receipts_import(
             exists=True,
             dir_okay=False,
             readable=True,
-            help="A receipt as JSON (see README).",
+            help="A receipt as JSON (see docs/cli.md).",
         ),
     ],
     dry_run: Annotated[

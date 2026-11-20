@@ -56,7 +56,8 @@ def test_make_pt_and_graph_run_the_cli_service(makefile: Makefile) -> None:
 def test_the_compose_run_macro_is_not_a_user_variable(makefile: Makefile) -> None:
     """`make process RUN=x` would break every recipe; the run name is RUN_NAME."""
     assert makefile.variables["RUN"] == "$(DC) run --rm"
-    assert "RUN=" not in read_text("README.md").replace("RUN_NAME=", "")
+    for document in ("README.md", "docs/cli.md", "docs/how-it-works.md", "docs/operations.md"):
+        assert "RUN=" not in read_text(document).replace("RUN_NAME=", ""), document
 
 
 def test_the_cli_service(compose: dict[str, Any]) -> None:

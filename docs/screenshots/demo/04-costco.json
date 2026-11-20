@@ -1,0 +1,56 @@
+{
+  "store_name": "Costco",
+  "purchased_on": "2026-10-24",
+  "currency": "CAD",
+  "subtotal_cents": 4781,
+  "tax_cents": 0,
+  "total_cents": 4781,
+  "items": [
+    {
+      "raw_text": "1001 2% MILK 4L",
+      "description": "2% Milk 4 L",
+      "quantity": "2",
+      "line_total_cents": 1318,
+      "product": "2% Milk 4 L",
+      "category": "dairy_eggs",
+      "unit_price_cents": 659
+    },
+    {
+      "raw_text": "1002 LARGE EGGS 24CT",
+      "description": "Large Eggs 24 ct",
+      "quantity": "1",
+      "line_total_cents": 929,
+      "product": "Large Eggs 24 ct",
+      "category": "dairy_eggs",
+      "unit_price_cents": 929
+    },
+    {
+      "raw_text": "1004 GROUND COFFEE 900G",
+      "description": "Ground Coffee 900 g",
+      "quantity": "1",
+      "line_total_cents": 1699,
+      "product": "Ground Coffee 900 g",
+      "category": "pantry",
+      "unit_price_cents": 1699
+    },
+    {
+      "raw_text": "BANANAS",
+      "description": "Bananas",
+      "quantity": "1.55",
+      "unit_price_cents": 152,
+      "line_total_cents": 236,
+      "product": "Bananas",
+      "category": "produce",
+      "unit": "kg"
+    },
+    {
+      "raw_text": "1006 BABY SPINACH 1KG",
+      "description": "Baby Spinach 1 kg",
+      "quantity": "1",
+      "line_total_cents": 599,
+      "product": "Baby Spinach 1 kg",
+      "category": "produce",
+      "unit_price_cents": 599
+    }
+  ]
+}
