@@ -1,0 +1,56 @@
+{
+  "store_name": "Metro",
+  "purchased_on": "2026-09-26",
+  "currency": "CAD",
+  "subtotal_cents": 2567,
+  "tax_cents": 0,
+  "total_cents": 2567,
+  "items": [
+    {
+      "raw_text": "2% MILK 4L",
+      "description": "2% Milk 4 L",
+      "quantity": "1",
+      "line_total_cents": 699,
+      "product": "2% Milk 4 L",
+      "category": "dairy_eggs",
+      "unit_price_cents": 699
+    },
+    {
+      "raw_text": "GREEK YOGURT 750G",
+      "description": "Greek Yogurt 750 g",
+      "quantity": "1",
+      "line_total_cents": 649,
+      "product": "Greek Yogurt 750 g",
+      "category": "dairy_eggs",
+      "unit_price_cents": 649
+    },
+    {
+      "raw_text": "SOURDOUGH LOAF",
+      "description": "Sourdough Loaf",
+      "quantity": "1",
+      "line_total_cents": 499,
+      "product": "Sourdough Loaf",
+      "category": "bakery",
+      "unit_price_cents": 499
+    },
+    {
+      "raw_text": "BANANAS",
+      "description": "Bananas",
+      "quantity": "0.98",
+      "unit_price_cents": 174,
+      "line_total_cents": 171,
+      "product": "Bananas",
+      "category": "produce",
+      "unit": "kg"
+    },
+    {
+      "raw_text": "BABY SPINACH 312G",
+      "description": "Baby Spinach 312 g",
+      "quantity": "1",
+      "line_total_cents": 549,
+      "product": "Baby Spinach 312 g",
+      "category": "produce",
+      "unit_price_cents": 549
+    }
+  ]
+}

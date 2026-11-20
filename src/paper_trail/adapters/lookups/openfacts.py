@@ -1,5 +1,6 @@
 """Open Food Facts, Open Beauty Facts and Open Products Facts: one v2 product endpoint, no key
-(``https://<host>/api/v2/product/<code>.json``). Their data is under the ODbL (README).
+(``https://<host>/api/v2/product/<code>.json``). Their data is under the ODbL
+(docs/how-it-works.md).
 
 A product the database knows has ``status`` 1 and a ``product``; one without a name gives
 nothing to name with, so it is a miss like ``status`` 0 or a 404. A 429 is a rate limit; any

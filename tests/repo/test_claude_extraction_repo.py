@@ -301,9 +301,8 @@ def test_ce_tc_069_env_example_documents_the_key_empty_and_the_budget() -> None:
 
 # --- CE-TC-070: the README says what the plan requires ------------------------------------------
 
-README_REQUIRES = (
-    "ANTHROPIC_API_KEY",
-    "PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD",
+README_REQUIRES = ("ANTHROPIC_API_KEY", "PAPER_TRAIL_CLAUDE__MONTHLY_BUDGET_USD")
+UPGRADE_NOTE_REQUIRES = (
     # The upgrade note lists the settings that went (they are ignored if still set, CQ7).
     "PAPER_TRAIL_OCR__",
     "PAPER_TRAIL_OLLAMA__",
@@ -314,7 +313,7 @@ README_REQUIRES = (
     "GRAPH__MIN_CONFIDENCE",
     "PROMPTS__VISION_VERSION",
 )
-README_PHRASES = ("back up the database", "resolve open reviews", "failed runs")
+UPGRADE_NOTE_PHRASES = ("back up the database", "resolve open reviews", "failed runs")
 # Case-sensitive: the removed variables' names (OLLAMA, OCR) are listed on purpose.
 README_FORBIDS = ("GPU", "Ollama", "Tesseract", "AI stays local")
 # R1, V4: what the photo sent to Anthropic can show, said in one paragraph.
@@ -331,9 +330,19 @@ def test_ce_tc_070_readme_names_the_settings(readme: str, needle: str) -> None:
     assert needle in readme
 
 
-@pytest.mark.parametrize("phrase", README_PHRASES)
-def test_ce_tc_070_readme_has_the_upgrade_notes(readme: str, phrase: str) -> None:
-    assert phrase in readme.lower()
+@pytest.fixture(scope="module")
+def upgrade_notes() -> str:
+    return read_text("docs/operations.md")
+
+
+@pytest.mark.parametrize("needle", UPGRADE_NOTE_REQUIRES)
+def test_ce_tc_070_upgrade_notes_name_the_removed_settings(upgrade_notes: str, needle: str) -> None:
+    assert needle in upgrade_notes
+
+
+@pytest.mark.parametrize("phrase", UPGRADE_NOTE_PHRASES)
+def test_ce_tc_070_upgrade_notes_say_what_to_do_first(upgrade_notes: str, phrase: str) -> None:
+    assert phrase in upgrade_notes.lower()
 
 
 @pytest.mark.parametrize("word", README_FORBIDS)

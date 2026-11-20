@@ -1,0 +1,47 @@
+{
+  "store_name": "No Frills",
+  "purchased_on": "2026-11-14",
+  "currency": "CAD",
+  "subtotal_cents": 1731,
+  "tax_cents": 0,
+  "total_cents": 1831,
+  "items": [
+    {
+      "raw_text": "2% MILK 4L",
+      "description": "2% Milk 4 L",
+      "quantity": "1",
+      "line_total_cents": 649,
+      "product": "2% Milk 4 L",
+      "category": "dairy_eggs",
+      "unit_price_cents": 649
+    },
+    {
+      "raw_text": "LARGE EGGS 12CT",
+      "description": "Large Eggs 12 ct",
+      "quantity": "1",
+      "line_total_cents": 469,
+      "product": "Large Eggs 12 ct",
+      "category": "dairy_eggs",
+      "unit_price_cents": 469
+    },
+    {
+      "raw_text": "BANANAS",
+      "description": "Bananas",
+      "quantity": "1.08",
+      "unit_price_cents": 152,
+      "line_total_cents": 164,
+      "product": "Bananas",
+      "category": "produce",
+      "unit": "kg"
+    },
+    {
+      "raw_text": "SOURDOUGH LOAF",
+      "description": "Sourdough Loaf",
+      "quantity": "1",
+      "line_total_cents": 449,
+      "product": "Sourdough Loaf",
+      "category": "bakery",
+      "unit_price_cents": 449
+    }
+  ]
+}

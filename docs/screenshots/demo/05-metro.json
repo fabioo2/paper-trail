@@ -1,0 +1,63 @@
+{
+  "store_name": "Metro",
+  "purchased_on": "2026-11-07",
+  "currency": "CAD",
+  "subtotal_cents": 3407,
+  "tax_cents": 52,
+  "total_cents": 3459,
+  "items": [
+    {
+      "raw_text": "2% MILK 4L",
+      "description": "2% Milk 4 L",
+      "quantity": "1",
+      "line_total_cents": 719,
+      "product": "2% Milk 4 L",
+      "category": "dairy_eggs",
+      "unit_price_cents": 719
+    },
+    {
+      "raw_text": "GREEK YOGURT 750G",
+      "description": "Greek Yogurt 750 g",
+      "quantity": "1",
+      "line_total_cents": 699,
+      "product": "Greek Yogurt 750 g",
+      "category": "dairy_eggs",
+      "unit_price_cents": 699
+    },
+    {
+      "raw_text": "SALE GREEK YOGURT",
+      "description": "Instant savings",
+      "kind": "discount",
+      "line_total_cents": -150,
+      "applies_to": 1
+    },
+    {
+      "raw_text": "SOURDOUGH LOAF",
+      "description": "Sourdough Loaf",
+      "quantity": "1",
+      "line_total_cents": 499,
+      "product": "Sourdough Loaf",
+      "category": "bakery",
+      "unit_price_cents": 499
+    },
+    {
+      "raw_text": "CHICKEN THIGHS",
+      "description": "Chicken Thighs",
+      "quantity": "0.94",
+      "unit_price_cents": 1320,
+      "line_total_cents": 1241,
+      "product": "Chicken Thighs",
+      "category": "meat_seafood",
+      "unit": "kg"
+    },
+    {
+      "raw_text": "DISH SOAP 740ML",
+      "description": "Dish Soap 740 mL",
+      "quantity": "1",
+      "line_total_cents": 399,
+      "product": "Dish Soap 740 mL",
+      "category": "household",
+      "unit_price_cents": 399
+    }
+  ]
+}

@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from paper_trail.domain.enums import Category, LineKind
+from paper_trail.domain.enums import Category, LineKind, Unit
 from paper_trail.domain.money import Money
 from paper_trail.interfaces.cli.schemas import ReceiptImport
 from tests.support import REPO_ROOT
@@ -187,3 +187,33 @@ def test_tc_97_applies_to_must_be_a_json_integer(value: object) -> None:
         ReceiptImport.model_validate(_simple_with_link(applies_to=value))
 
     assert "items.4.applies_to" in _error_locations(caught.value)
+
+
+# --- a line's unit (each, kg or lb, as LineItem keeps it) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [
+        ({"unit": "kg"}, Unit.KG),
+        ({"unit": "lb"}, Unit.LB),
+        ({"unit": "each"}, Unit.EACH),
+        ({"unit": None}, None),
+        ({}, None),
+        ({"unit": "g"}, ValidationError),
+        ({"unit": "KG"}, ValidationError),
+        ({"unit": "litre"}, ValidationError),
+    ],
+    ids=["kg", "lb", "each", "null", "absent", "g", "uppercase", "unknown"],
+)
+def test_a_lines_unit_is_each_kg_or_lb(unit: dict[str, object], expected: object) -> None:
+    data = _minimal(items=[{"raw_text": "BANANAS", "line_total_cents": 899, **unit}])
+
+    if expected is ValidationError:
+        with pytest.raises(ValidationError) as caught:
+            ReceiptImport.model_validate(data)
+        assert _error_locations(caught.value) == ["items.0.unit"]
+        assert "'each', 'kg' or 'lb'" in str(caught.value)
+    else:
+        (item,) = ReceiptImport.model_validate(data).to_draft().items
+        assert item.unit == expected

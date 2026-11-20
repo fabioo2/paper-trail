@@ -416,14 +416,23 @@ def test_s0_ac_38_index_html_loads_nothing_external() -> None:
 # --- S0-AC-36 ---------------------------------------------------------------------------------
 
 
-DOCS_WITH_LINKS = ("README.md", "CONTRIBUTING.md")
+DOCS_WITH_LINKS = (
+    "README.md",
+    "CONTRIBUTING.md",
+    "docs/README.md",
+    "docs/using-the-app.md",
+    "docs/how-it-works.md",
+    "docs/cli.md",
+    "docs/operations.md",
+    "docs/privacy.md",
+)
 MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 
 @pytest.mark.parametrize("document", DOCS_WITH_LINKS)
 def test_s0_ac_36_relative_links_resolve(document: str) -> None:
-    """S0-AC-36: every repository path the README and CONTRIBUTING link to (the ADRs, the
-    plans, the deployment overlay, the config template) exists."""
+    """S0-AC-36: every repository path the README, CONTRIBUTING and the guides in docs/ link to
+    (the ADRs, the plans, the config template) exists, relative to the linking document."""
     targets = [
         link.split("#", 1)[0]
         for link in MARKDOWN_LINK.findall(read_text(document))
@@ -431,5 +440,6 @@ def test_s0_ac_36_relative_links_resolve(document: str) -> None:
     ]
 
     assert targets, f"{document} links to repository files"
-    missing = [target for target in targets if not (REPO_ROOT / target).exists()]
+    folder = (REPO_ROOT / document).parent
+    missing = [target for target in targets if not (folder / target).exists()]
     assert missing == [], f"{document} links to missing paths"
