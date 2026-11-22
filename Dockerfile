@@ -11,7 +11,7 @@
 ARG APP_UID=1000
 ARG APP_GID=1000
 
-FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9 AS uv
 
 # --- frontend -----------------------------------------------------------------------------------
 
