@@ -64,7 +64,7 @@ services:
 
   container-checks:
     profiles: [dev]
-    image: docker:29.9.3-cli
+    image: docker:29.10.0-cli
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Mounted at its host path, so compose files resolve bind paths on the host daemon.
